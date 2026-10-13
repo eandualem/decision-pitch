@@ -149,6 +149,8 @@ export function createPlayers(scene, teams) {
     const reset = from.period !== after.period || from.phase !== after.phase || after.t < from.t;
     const blend = reset ? 1 : THREE.MathUtils.clamp(alpha, 0, 1);
     const step = THREE.MathUtils.clamp(dt, 0, 0.1);
+    // The engine preserves its last velocities and commands at the interval/whistle.
+    const stopped = after.phase === 'half_time' || after.phase === 'full_time';
     for (const actor of actors.values()) actor.group.visible = false;
     for (const player of after.players) {
       const actor = actors.get(player.id);
@@ -160,15 +162,15 @@ export function createPlayers(scene, teams) {
       group.visible = true;
       group.position.set(mix(old.x, player.x, k), 0, -mix(old.y, player.y, k));
       body.rotation.y = angle(old.heading, player.heading, k) + Math.PI / 2;
-      const speed = Math.max(0, mix(old.speed, player.speed, k));
+      const speed = stopped ? 0 : Math.max(0, mix(old.speed, player.speed, k));
       actor.stride += speed * step * 2.7;
       const swing = Math.sin(actor.stride) * Math.min(speed / 6, 1) * 0.7;
       const celebrating = now < actor.celebrateUntil;
-      const kicking = player.action === 'kick' && Math.hypot(player.x - after.ball.x, player.y - after.ball.y) < 2.5;
+      const kicking = !stopped && player.action === 'kick' && Math.hypot(player.x - after.ball.x, player.y - after.ball.y) < 2.5;
       if (kicking && !actor.kicking) actor.kickAt = now;
       actor.kicking = kicking;
       const kickAge = now - actor.kickAt;
-      const kick = kickAge >= 0 && kickAge < 0.4 ? Math.sin(kickAge / 0.4 * Math.PI) * 1.3 : 0;
+      const kick = !stopped && kickAge >= 0 && kickAge < 0.4 ? Math.sin(kickAge / 0.4 * Math.PI) * 1.3 : 0;
       limbs[0].rotation.x = swing;
       limbs[1].rotation.x = -swing - kick;
       limbs[2].rotation.x = -swing * 0.7;
