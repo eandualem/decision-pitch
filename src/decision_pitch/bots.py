@@ -7,7 +7,7 @@ import math
 
 from decision_pitch import pitch
 from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import ROLLING, Player
+from decision_pitch.physics import ROLLING, TOP_SPEED, Player
 
 SHOOTING_RANGE = 24.0  # m from goal
 FREE_KICK_RANGE = 30.0  # m from goal within which a direct free kick is shot
@@ -17,6 +17,9 @@ WALL_DISTANCE = 9.5  # m from the ball, just beyond the 9.15 the laws require
 PRESSURE = 4.0  # m: an opponent this close makes the player pass
 DRIBBLE_SPEED = 6.0
 JOG = 5.0
+ROUND_WIDE = 2.0  # m to the side that a challenger from behind passes the carrier at
+ROUND_LEAD = 1.0  # s of the carrier's run it aims ahead by, once out wide
+ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the ball
 
 
 def play(match: Match) -> None:
@@ -50,9 +53,28 @@ def command(m: Match, p: Player) -> Command:
             return MoveTo(m.ball.x, m.ball.y)
         return MoveTo(*_goal_line_spot(m, p))
     if p.id == _nearest(m, p.team, outfield=True).id:
-        # meet the ball where it is going
-        return MoveTo(m.ball.x + m.ball.vx * 0.3, m.ball.y + m.ball.vy * 0.3)
+        return MoveTo(*_press_spot(m, p))
     return MoveTo(*_home(m, p), JOG)
+
+
+def _press_spot(m: Match, p: Player) -> tuple[float, float]:
+    """Where `p` runs to win the ball: where it is going. From behind an opponent carrying
+    it, `p` first comes out wide and draws level, since running into a carrier from behind
+    is a foul."""
+    b = m.ball
+    c = m.player(m.owner) if m.owner is not None else None
+    if c is None or c.team == p.team:
+        return b.x + b.vx * 0.3, b.y + b.vy * 0.3
+    fx, fy = math.cos(c.heading), math.sin(c.heading)
+    dx, dy = p.x - c.x, p.y - c.y
+    if dx * fx + dy * fy >= ROUND_UNTIL * math.hypot(dx, dy):
+        # into the ball's path, where it can be reached before the carrier's body
+        lead = min(ROUND_LEAD, math.hypot(b.x - p.x, b.y - p.y) / TOP_SPEED)
+        return b.x + b.vx * lead, b.y + b.vy * lead
+    across = fx * dy - fy * dx  # how far p is to the carrier's left
+    side = 1.0 if across >= 0 else -1.0
+    lead = ROUND_LEAD * min(1.0, abs(across) / ROUND_WIDE)  # run on once out wide
+    return c.x - fy * side * ROUND_WIDE + c.vx * lead, c.y + fx * side * ROUND_WIDE + c.vy * lead
 
 
 def _on_the_ball(m: Match, p: Player) -> Command:

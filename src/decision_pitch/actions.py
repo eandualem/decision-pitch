@@ -18,6 +18,7 @@ from decision_pitch.bots import (
     _goal_line_spot,
     _home,
     _pass_or_clear,
+    _press_spot,
     _space,
     _take_restart,
     _taker,
@@ -90,7 +91,7 @@ def command(m: Match, p: Player, action: str) -> Command:
     # press, and dribble without the ball
     if m.owner == p.id:
         return Hold()
-    return MoveTo(m.ball.x + m.ball.vx * 0.3, m.ball.y + m.ball.vy * 0.3)
+    return MoveTo(*_press_spot(m, p))
 
 
 def _far_post(m: Match, p: Player) -> float:

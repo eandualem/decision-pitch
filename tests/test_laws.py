@@ -89,6 +89,20 @@ def test_a_slow_contact_is_not_a_foul():
     assert m.drain_events() == [] and m.phase == "play"
 
 
+def test_a_presser_behind_the_carrier_runs_round_it_and_wins_the_ball_fairly():
+    m = in_play()
+    carrier = on_the_ball(m, 10, -20.0, 0.0)
+    carrier.vx = 2.0
+    challenge(m, 15, -24.0, 0.2, 6.0, 0.0)
+    for _ in range(round(4 / STEP)):
+        m.command(10, MoveTo(pitch.HALF_LENGTH, 0.0, 2.0))
+        m.command(15, MoveTo(*bots._press_spot(m, m.player(15))))
+        m.step()
+        if m.owner != 10:
+            break
+    assert m.drain_events() == [] and m.owner == 15
+
+
 def test_a_free_kick_waits_before_it_can_be_taken():
     m = in_play()
     on_the_ball(m, 10, 0.0, 0.0)
