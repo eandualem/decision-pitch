@@ -5,7 +5,7 @@ import pytest
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
 from decision_pitch.match import DRIBBLE, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import STEP
+from decision_pitch.physics import STEP, TOP_SPEED
 
 
 def in_play():
@@ -87,6 +87,26 @@ def test_a_slow_contact_is_not_a_foul():
     challenge(m, 15, -0.7, 0.0, 1.0, 0.0)
     m.step()
     assert m.drain_events() == [] and m.phase == "play"
+
+
+@pytest.mark.parametrize("speed, running", [(2.0, 6.0), (0.0, 0.0)])
+def test_a_presser_behind_the_carrier_runs_round_it_and_wins_the_ball_fairly(speed, running):
+    m = in_play()
+    carrier = on_the_ball(m, 10, -20.0, 0.0)
+    carrier.vx = speed
+    challenge(m, 15, -24.0, 0.2, running, 0.0)
+    for _ in range(round(4 / STEP)):
+        m.command(10, MoveTo(pitch.HALF_LENGTH, 0.0, speed) if speed else Hold())
+        m.command(15, MoveTo(*bots._press_spot(m, m.player(15))))
+        m.step()
+        if m.owner != 10:
+            break
+    assert m.drain_events() == [] and m.owner == 15
+
+
+def test_a_presser_meets_a_ball_coming_at_it_as_fast_as_it_runs():
+    # 4 m apart, closing at twice its speed
+    assert bots._intercept(-4.0, 0.0, TOP_SPEED, 0.0, TOP_SPEED) == pytest.approx(4 / (2 * TOP_SPEED))
 
 
 def test_a_free_kick_waits_before_it_can_be_taken():
