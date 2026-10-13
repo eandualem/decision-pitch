@@ -143,6 +143,28 @@ def test_bots_play_a_whole_match():
     assert m.period == 2
 
 
+def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
+    m = in_play(ball=(0.5, 0.0), velocity=(12.0, 0.0, 0.0))
+    passer, receiver = m.player(7), m.player(8)
+    passer.x, passer.y = 0.0, 0.0
+    receiver.x, receiver.y = 15.0, 3.0
+    m.recovering[passer.id] = 0.25  # as the engine does once it kicks
+    assert bots.command(m, passer) == MoveTo(*bots._home(m, passer), bots.JOG)
+    goes = bots.command(m, receiver)
+    assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
+
+
+def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
+    m = in_play(ball=(0.5, 0.0))
+    carrier, opponent = m.player(7), m.player(18)
+    carrier.x, carrier.y = 0.0, 0.0
+    m.owner = carrier.id
+    opponent.x, opponent.y = 3.0, 2.0  # 3.6 m away: it keeps dribbling
+    assert bots.command(m, carrier) == MoveTo(52.5, 0.0, bots.DRIBBLE_SPEED)
+    opponent.x, opponent.y = 2.0, 1.0
+    assert isinstance(bots.command(m, carrier), KickTo)
+
+
 def test_a_snapshot_lists_every_player_and_the_ball():
     m = Match()
     m.command(1, Hold())

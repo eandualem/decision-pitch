@@ -59,7 +59,15 @@ a test or from the command line without a browser.
   match.
 - **Built-in bot.** Simple rules (keep shape, chase the ball, dribble, pass
   to an open teammate, shoot in range) that play any position, so a full
-  match runs with no model at all.
+  match runs with no model at all. A loose ball is chased by the one player
+  of each team who can reach its path first, judged along the next 3 s of the
+  ball's flight, so a pass is met by its receiver rather than chased by its
+  passer. A player on the ball dribbles until an opponent is within 2.5 m,
+  then passes. Measured over 16 bot matches of two 180 s halves, these two
+  rules raised shots from 3.1 to 6.5 a match and goals from 0.6 to 2.7, with
+  throw-ins unchanged. A check that no opponent could cut a pass out on its
+  way was tried and left out: more passes went out of play and fewer attacks
+  reached a shot.
 - **Fairness.** Both teams run through the same code with the same physics.
   Each player's state is built by one function, mirrored for the team
   attacking the other way, so neither side gets a different view.
@@ -156,8 +164,8 @@ sensible football, the same rules for both teams:
   the built-in bot does (dribble, pass when pressed, shoot in range), instead
   of standing on it.
 - **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
-  built-in bot does: the team's nearest outfield player goes for the ball and
-  the others keep their places, instead of every one of them running at it.
+  built-in bot does: the one player who can reach the ball first goes for it
+  and the others keep their places, instead of every one of them running at it.
 - **At a restart** only the taker goes to the ball. A taker whose action is a
   pass, shot or clearance takes the restart that way; any other action takes
   it as its bot would, so a model that never chooses a kick cannot stall the
