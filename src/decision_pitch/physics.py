@@ -111,7 +111,20 @@ def _step_ball(ball: Ball, dt: float) -> None:
         _hit_segment(ball, a, b)
 
 
-def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, float, float]) -> None:
+def carry(ball: Ball, x: float, y: float) -> None:
+    """Move a ball a player is carrying to (x, y) on the ground, in short substeps that
+    stop at the goal frame, so a ball cannot be carried through a post."""
+    ball.z, ball.vz = BALL_RADIUS, 0.0
+    dx, dy = x - ball.x, y - ball.y
+    substeps = max(1, math.ceil(math.hypot(dx, dy) / MAX_TRAVEL))
+    for _ in range(substeps):
+        ball.x += dx / substeps
+        ball.y += dy / substeps
+        if any([_hit_segment(ball, a, b) for a, b in FRAME]):
+            return
+
+
+def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, float, float]) -> bool:
     ab = [b[i] - a[i] for i in range(3)]
     c = (ball.x, ball.y, ball.z)
     t = sum((c[i] - a[i]) * ab[i] for i in range(3)) / sum(v * v for v in ab)
@@ -120,7 +133,7 @@ def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, floa
     dist = math.sqrt(sum(v * v for v in d))
     reach = BALL_RADIUS + pitch.POST_RADIUS
     if dist >= reach or dist == 0:
-        return
+        return False
     n = [v / dist for v in d]
     ball.x, ball.y, ball.z = (c[i] + n[i] * (reach - dist) for i in range(3))
     vn = ball.vx * n[0] + ball.vy * n[1] + ball.vz * n[2]
@@ -128,6 +141,7 @@ def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, floa
         ball.vx -= (1 + FRAME_BOUNCE) * vn * n[0]
         ball.vy -= (1 + FRAME_BOUNCE) * vn * n[1]
         ball.vz -= (1 + FRAME_BOUNCE) * vn * n[2]
+    return True
 
 
 def step_player(player: Player, tx: float, ty: float, speed: float, dt: float = STEP) -> None:
@@ -161,9 +175,7 @@ def separate(players: list[Player]) -> None:
             dist = math.hypot(dx, dy)
             if dist >= 2 * PLAYER_RADIUS:
                 continue
-            if dist == 0:
-                dx, dy, dist = 1.0, 0.0, 1.0
-            nx, ny = dx / dist, dy / dist
+            nx, ny = (dx / dist, dy / dist) if dist > 0 else (1.0, 0.0)
             push = (2 * PLAYER_RADIUS - dist) / 2
             p.x -= nx * push
             p.y -= ny * push

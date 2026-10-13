@@ -17,6 +17,7 @@ from decision_pitch.physics import (
     TOP_SPEED,
     Ball,
     Player,
+    carry,
     separate,
     step_ball,
     step_player,
@@ -196,20 +197,23 @@ class Match:
         if self.phase in RESTARTS:
             self._keep_distance()
 
+        before = (self.ball.x, self.ball.y, self.ball.z)
         self._take_possession()
         owner = self.player(self.owner) if self.owner else None
         command = self.commands[owner.id] if owner else None
         if owner and isinstance(command, KickTo) and self._may_kick(owner):
             self._kick(owner, command)
         elif owner and self.phase == "play":
-            self.ball.x = owner.x + math.cos(owner.heading) * DRIBBLE
-            self.ball.y = owner.y + math.sin(owner.heading) * DRIBBLE
-            self.ball.z = BALL_RADIUS
-            self.ball.vx, self.ball.vy, self.ball.vz = owner.vx, owner.vy, 0.0
+            self.ball.vx, self.ball.vy = owner.vx, owner.vy
+            carry(
+                self.ball,
+                owner.x + math.cos(owner.heading) * DRIBBLE,
+                owner.y + math.sin(owner.heading) * DRIBBLE,
+            )
         elif self.phase == "play":
             step_ball(self.ball)
         if self.phase == "play":
-            self._check_ball()
+            self._check_ball(before)
 
         if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time"):
             self._end_half()
@@ -280,24 +284,37 @@ class Match:
 
     # -- ball out of play, goals and restarts -----------------------------------------------
 
-    def _check_ball(self) -> None:
-        b = self.ball
-        if abs(b.x) > pitch.HALF_LENGTH + BALL_RADIUS:
-            end = 1 if b.x > 0 else -1
+    def _check_ball(self, before: tuple[float, float, float]) -> None:
+        """Judge the ball where it first wholly crossed a line during this step."""
+        b, (x0, y0, z0) = self.ball, before
+        crossings = []
+        lines = ((x0, b.x, pitch.HALF_LENGTH, "goal"), (y0, b.y, pitch.HALF_WIDTH, "touch"))
+        for start, end, limit, line in lines:
+            limit += BALL_RADIUS
+            if abs(end) > limit:
+                edge = limit if end > 0 else -limit
+                f = (edge - start) / (end - start) if end != start else 0.0
+                crossings.append((min(1.0, max(0.0, f)), line))
+        if not crossings:
+            return
+        f, line = min(crossings)
+        x, y, z = x0 + (b.x - x0) * f, y0 + (b.y - y0) * f, z0 + (b.z - z0) * f
+        if line == "goal":
+            end = 1 if x > 0 else -1
             attackers = 0 if self.attack(0) == end else 1
-            if abs(b.y) < pitch.GOAL_WIDTH / 2 and b.z < pitch.GOAL_HEIGHT:
+            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT:
                 self.score[attackers] += 1
                 self._event("goal", attackers, self._last_player(attackers))
                 self._kickoff(1 - attackers)
             elif self.last_touch == 1 - attackers:
-                corner_y = pitch.HALF_WIDTH if b.y > 0 else -pitch.HALF_WIDTH
+                corner_y = pitch.HALF_WIDTH if y > 0 else -pitch.HALF_WIDTH
                 self._restart("corner", attackers, end * pitch.HALF_LENGTH, corner_y)
             else:
                 x = end * (pitch.HALF_LENGTH - pitch.GOAL_AREA_DEPTH)
                 self._restart("goal_kick", 1 - attackers, x, 0.0)
-        elif abs(b.y) > pitch.HALF_WIDTH + BALL_RADIUS:
-            x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, b.x))
-            y = pitch.HALF_WIDTH if b.y > 0 else -pitch.HALF_WIDTH
+        else:
+            x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, x))
+            y = pitch.HALF_WIDTH if y > 0 else -pitch.HALF_WIDTH
             self._restart("throw_in", 1 - (self.last_touch or 0), x, y)
 
     def _last_player(self, team: int) -> int | None:

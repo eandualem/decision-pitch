@@ -94,3 +94,9 @@ def test_overlapping_players_are_pushed_apart():
     a, b = player(x=0.0), player(x=0.3)
     separate([a, b])
     assert b.x - a.x >= 2 * PLAYER_RADIUS - 1e-9
+
+
+def test_players_on_the_same_spot_are_pushed_apart():
+    a, b = player(), player()
+    separate([a, b])
+    assert math.hypot(b.x - a.x, b.y - a.y) >= 2 * PLAYER_RADIUS - 1e-9

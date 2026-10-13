@@ -151,3 +151,25 @@ def test_a_snapshot_lists_every_player_and_the_ball():
     assert len(snapshot["players"]) == 22
     assert set(snapshot["ball"]) == {"x", "y", "z", "owner"}
     assert snapshot["players"][0]["action"] == "hold"
+
+
+def test_a_ball_is_judged_where_it_first_crossed_a_line():
+    m = in_play(ball=(52.60, 3.35), velocity=(10.0, 25.0, 0.0))
+    m.step()
+    assert m.score == [1, 0]
+
+
+def test_a_ball_over_the_touchline_first_near_a_corner_is_a_throw_in():
+    m = in_play(ball=(52.58, 34.08), velocity=(3.0, 6.0, 0.0), last_touch=0)
+    m.step()
+    assert (m.phase, m.restart_team) == ("throw_in", 1)
+
+
+def test_a_player_cannot_carry_the_ball_through_a_post():
+    y = pitch.GOAL_WIDTH / 2 + pitch.POST_RADIUS  # straight at the post
+    m = in_play(ball=(45.6, y))
+    p = m.players[9]
+    p.x, p.y = 45.0, y
+    m.command(p.id, MoveTo(60.0, y))
+    run(m, 3)
+    assert m.phase == "play" and m.ball.x < pitch.HALF_LENGTH
