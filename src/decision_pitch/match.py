@@ -135,6 +135,7 @@ class Match:
         self.indirect: int | None = None  # who took an indirect free kick no one else has touched
         self.restart_indirect = False  # the free kick about to be taken is indirect
         self.taker: int | None = None  # a penalty's taker
+        self.penalty_live = False  # a penalty kick is on its way: the half waits for it
         self.yellows: dict[int, int] = {}
         self.substitutions = [0, 0]  # made by each team
         self.windows = [0, 0]  # stoppages each team has made substitutions in
@@ -272,7 +273,10 @@ class Match:
         if self.phase == "play":
             self._check_ball(before)
 
-        if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time"):
+        if self.penalty_live and math.hypot(self.ball.vx, self.ball.vy) < 0.5:
+            self.penalty_live = False  # it came to rest untouched
+        waiting = self.phase == "penalty" or self.penalty_live  # a penalty is completed first
+        if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time") and not waiting:
             self._end_half()
 
     def _move(self, p: Player) -> None:
@@ -317,6 +321,7 @@ class Match:
                 self._offside(nearest)
                 return
             self.offside = set()  # someone onside played it
+            self.penalty_live = False
             if nearest.id != self.indirect:
                 self.indirect = None
             self.last_touch = nearest.team
@@ -341,6 +346,7 @@ class Match:
         self.offside = set() if self.phase in NO_OFFSIDE else self._offside_positions(p)
         if self.phase == "free_kick" and self.restart_indirect:
             self.indirect = p.id
+        self.penalty_live = self.phase == "penalty"
         self.ball.vx = speed * math.cos(loft) * math.cos(angle)
         self.ball.vy = speed * math.cos(loft) * math.sin(angle)
         self.ball.vz = speed * math.sin(loft)
@@ -516,7 +522,7 @@ class Match:
         self.ball.place(x, y)
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
-        self.offside, self.indirect = set(), None
+        self.offside, self.indirect, self.penalty_live = set(), None, False
         self.restart_indirect, self.taker = indirect, taker
         self.stoppage += 1
         if kind == "free_kick":
@@ -578,7 +584,7 @@ class Match:
 
     def _line_up_for_penalty(self) -> None:
         """The defending goalkeeper on its goal line; everyone else but the taker outside the
-        penalty area and arc."""
+        penalty area and arc, and behind the penalty mark."""
         goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
         out = -math.copysign(1.0, goal)  # from the goal line towards halfway
         for p in self.players:
@@ -591,6 +597,8 @@ class Match:
                 continue
             if abs(p.x - goal) <= pitch.PENALTY_DEPTH and abs(p.y) <= pitch.PENALTY_HALF_WIDTH:
                 p.x = goal + out * (pitch.PENALTY_DEPTH + 1.0)
+            if (p.x - self.ball.x) * out < 0:
+                p.x = self.ball.x  # level with the mark at the nearest
             self._keep_away(p, RESTART_DISTANCE["penalty"])
 
     def _end_half(self) -> None:

@@ -138,6 +138,31 @@ def test_a_foul_in_the_penalty_area_is_a_penalty_taken_by_the_fouled_player():
         assert math.hypot(p.x - m.ball.x, p.y - m.ball.y) >= 9.15 - 1e-9
 
 
+def test_players_beside_the_penalty_area_wait_behind_the_mark():
+    m = in_play()
+    on_the_ball(m, 10, 45.0, 5.0)
+    challenge(m, 15, 44.3, 5.0, 5.0, 0.0)
+    m.step()
+    beside = m.player(9)
+    beside.x, beside.y = 50.0, 25.0
+    m.command(9, Hold())
+    m.step()
+    assert beside.x <= m.ball.x
+
+
+def test_a_half_waits_for_a_penalty_awarded_at_its_end():
+    m = in_play()
+    m.elapsed = m.half_length - STEP / 2  # this is the half's last step
+    on_the_ball(m, 10, 45.0, 5.0)
+    challenge(m, 15, 44.3, 5.0, 5.0, 0.0)
+    m.command(10, KickTo(pitch.HALF_LENGTH + 2, 2.0, 24.0))
+    m.step()
+    assert m.phase == "penalty"
+    run(m, 5.0)
+    events = kinds(m.drain_events())
+    assert events[-1] == "half_time" and events[-2] in ("goal", "goal_kick", "corner")
+
+
 def test_the_bot_shoots_a_penalty():
     m = in_play()
     on_the_ball(m, 10, 45.0, 5.0)

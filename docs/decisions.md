@@ -252,7 +252,9 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   players line up as a wall 9.15 m away. A foul in the offender's own penalty
   area is a penalty: the fouled player takes it from the penalty mark, the
   defending goalkeeper stays on its goal line and everyone else waits outside
-  the penalty area and arc until the kick.
+  the penalty area and arc, behind the mark, until the kick. A half does not
+  end until a penalty awarded in it has been taken and its ball has been
+  played, gone out or come to rest.
 - **Offside.** When a player kicks the ball, every teammate in the opponents'
   half that is nearer their goal line than both the ball and the second-last
   opponent is in an offside position. If one of them is the next player to
