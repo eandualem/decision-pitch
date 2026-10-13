@@ -1,0 +1,156 @@
+# Decisions
+
+Stack and design choices for Decision Pitch, with the reason for each and the
+alternative it replaced. Newest last. A decision is recorded here before it is
+implemented, and changed here when the implementation teaches us otherwise.
+
+## 1. Stack: a Python match server and a three.js page
+
+**Choice.** One Python package (Python 3.12 or newer, managed with
+[uv](https://docs.astral.sh/uv/)) runs the match, the decision models and the
+managers. A [Starlette](https://www.starlette.io/) server serves the page and
+streams the match to it over one WebSocket bound to `127.0.0.1`. The page is
+plain ES modules with [three.js](https://threejs.org/) vendored at a pinned
+version, with no bundler and no build step, so it works offline. Tests use
+pytest. Everything starts with one command:
+
+```bash
+uv run decision-pitch
+```
+
+**Why.** This is the stack Decision Arena uses, so its model adapters and
+local model launcher carry over with little change (section 3), and API keys
+stay in the Python process and never reach the browser.
+
+**Rejected.** A Node or TypeScript server: the adapters would have to be
+rewritten, which the brief rules out.
+
+## 2. The engine runs on the server; the page only draws
+
+**Choice.** The match (physics, rules, clock, score) runs in Python as an
+authoritative simulation with a fixed 60 Hz physics step. The server sends
+snapshots to the page, which interpolates between them and draws the scene.
+The engine runs headless as well: a whole match can be played and checked in
+a test or from the command line without a browser.
+
+- **Pitch and physics.** The pitch is a flat 105 m × 68 m rectangle.
+  Players move in two dimensions as discs with a top speed, acceleration and
+  turning rate. The ball moves in three: it rolls with friction, flies with
+  gravity and simple drag, and bounces off the ground and the goal frame.
+  This is enough for passes, lofted balls, shots, saves and the ball going
+  out of play, and keeps the engine small enough to test fully.
+- **Rules.** The laws are implemented in stages, each with tests: kick-off,
+  ball out of play, throw-ins, goal kicks, corners, goals, fouls and free
+  kicks, offside, yellow and red cards, two halves and substitutions. Until a
+  law is implemented, the README's rule table lists it as not implemented
+  yet; play never skips it silently.
+- **Fairness.** Both teams run through the same code with the same physics.
+  Each player's state is built by one function, mirrored for the team
+  attacking the other way, so neither side gets a different view.
+
+**Why.** Rules and physics are the hard part, and Python tests make them
+cheap to check exhaustively. The decision models and managers already live in
+the server, so the state they see and the state that is drawn come from one
+place. Headless matches also let us compare models without recording video.
+
+**Rejected.** Running the engine in the browser, as Decision Arena does with
+its runner engine: there it was inherited, here it would put the rules where
+they are hardest to test, and send every one of 22 players' questions back
+through the page.
+
+## 3. Decision models: Decision Arena's adapters, copied with attribution
+
+**Choice.** Decision Arena's model adapters (`apis.py`) and local model
+launcher (`local.py`) are copied into this package, unchanged except where
+noted, with Decision Arena's MIT licence notice kept beside them and the
+commit they came from recorded in the file header. The one planned change:
+the set of allowed moves becomes a parameter instead of the runner's fixed
+five, so the adapters validate soccer actions.
+
+- **Players.** Laya (local), Jev, GPT-6 Luna Decisions, Perplexity Decider,
+  Clef and Decision Arena's other registered models, plus built-in bots.
+  Keys come from the environment only, under the same variable names Decision
+  Arena uses, so one `.env` serves both projects.
+- **Keyless by default.** With no keys set, Laya and the built-in bots play
+  a full match. Models whose keys are missing are not offered.
+- **Tests** use fake models and `httpx.MockTransport` recordings, as Decision
+  Arena's do. No test calls a paid API.
+
+**Why.** Decision Arena's adapters are small and depend only on its
+`Question` and `Answer` types, but they validate against the runner's move
+list, and the brief keeps that repository read-only. A copy lets this project
+make the one change it needs today without waiting for a shared package.
+
+**Rejected.** A git dependency on Decision Arena: it would install the whole
+runner game and still validate runner moves. A shared package extracted from
+both projects is the better long-term shape; it is proposed to Decision
+Arena's maintainer once this project's needs are known, not built first.
+
+## 4. Real time, with no turns
+
+**Choice.** Decision Arena's timing approach, moved from the page to the
+server. Each player has its own loop: build the player's state, ask its model,
+apply the answer as soon as it arrives, ask again. Every player has at most
+one question in flight. While it waits, the player keeps doing what it was
+last told, and the match never waits for anyone. Each answer's latency is
+measured around the model call, and each player is told its own recent
+answer time in its state, as in Decision Arena. A failed answer waits 0.5 s
+before the next question.
+
+A player's answer is one action from a small fixed set (for example: go to
+the ball, hold position, support the attack, mark, tackle, dribble, pass,
+shoot), each described in words in the question. The engine turns the action
+into movement and a target, such as which teammate to pass to, using simple
+rules that are the same for both teams. The exact action set and state text
+are decided in the decision-model issue and recorded here.
+
+**Why.** A fixed decision tick would make slow models nearly unable to act
+and fast models wait; letting each model act as often as it can answer is the
+story the game tells.
+
+**Rejected.** A shared decision tick for all 22 players.
+
+## 5. Managers
+
+**Choice.** A manager interface with two implementations:
+
+- **A built-in manager**, with no model, picks a line-up from the models'
+  stated characteristics, and makes substitutions by simple rules. It is the
+  keyless default.
+- **A language-model manager** does the same through an LLM, with optional
+  assistant models feeding it summaries. It receives a continuous text feed
+  of the match (score, clock, events and each player's model, decisions and
+  latency), and answers with instructions to individual players or
+  substitutions, applied within the substitution rules. Instructions reach a
+  player as one line in that player's state.
+
+**Why.** The match must run with no keys, and a manager behind an interface
+lets an LLM manager and the built-in one be compared under the same rules.
+Which LLM providers are supported, and how often a manager is consulted, is
+decided in the managers issue; any run that spends beyond the keys already
+configured waits for the maintainer's go-ahead with its expected cost.
+
+## 6. Look and feel
+
+**Choice.** A three.js scene of the pitch, stadium and players, built
+procedurally in code so it needs no third-party assets: low-poly players in
+each team's colour with names and numbers, a broadcast camera that follows
+play, and clear moments for goals, fouls and cards. A toggle shows each
+player's model, latest decision and latency, and the managers' instructions
+and substitutions; hidden, the screen is just the match. Kits, names and
+crests are invented; no club, league, player or tournament is used.
+
+The graphic elements are built by a backbone swarm of Codex `gpt-6-astra`
+members, against the snapshot format the engine publishes, after its issue is
+written. Its output goes through the usual review and merge rules.
+
+## 7. References and licences
+
+Prefer original work. Open-source soccer simulators may be studied for rules
+and physics. Every project studied or reused is listed below with its licence
+and where it informed or entered this code, and any reused code or assets keep
+their notices.
+
+| Project | Licence | Studied or reused | Where |
+|---|---|---|---|
+| [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/` (once copied) |
