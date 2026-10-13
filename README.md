@@ -10,7 +10,7 @@ It is a sibling of [Decision Arena](https://github.com/eandualem/decision-arena)
 where the same models race in a runner game.
 
 **Status:** early. Decision models or built-in bots play a full match on the
-page; the managers are being built. See [docs/decisions.md](docs/decisions.md)
+page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
 for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
 
 ## Run it
@@ -35,11 +35,13 @@ uv run decision-pitch --headless --seed 1
 
 ## Choose the models
 
-Each team is played by the built-in bot unless you choose a decision model for
-it with `--home` and `--away`:
+Each team is played by the built-in bot unless you name the decision models its
+manager may choose from with `--home` and `--away`, separated by commas. One
+name puts the whole team on that model:
 
 ```bash
 uv run decision-pitch --home laya --away bot
+uv run decision-pitch --home laya,jev,bot --away clef
 ```
 
 | Name | Model | Needs |
@@ -58,6 +60,30 @@ With no keys, Laya and the bots play a full match. To use the others, copy
 `.env.example` to `.env` and fill in the keys you have; the names are Decision
 Arena's, so one `.env` serves both. At startup each model with a key is asked
 one question, and one that does not answer is named with the key to check.
+
+## Choose the managers
+
+Each team has a manager. Before kick-off it picks a model for every player
+from the ones it may choose, and during the match it is consulted every 15
+seconds with a feed of the game: it can give a player a one-line instruction,
+which the player reads with its state, and substitute a player, bringing on a
+substitute with a model of its choice at the next stoppage. Press O on the
+page to see every player's model, latest decision and answer time, and the
+managers' instructions and substitutions.
+
+The built-in manager (`builtin`, the default) needs nothing: it picks models
+by their typical answer times and substitutes by simple rules. A language
+model can manage instead, through OpenAI's API with `OPENAI_API_KEY`:
+
+```bash
+uv run decision-pitch --home laya,bot --home-manager openai --away-manager builtin
+```
+
+`openai` uses `gpt-5.4-mini`; name another model with `openai:MODEL`.
+`--assistants 1` or `2` gives each language-model manager assistant models
+(`gpt-5.4-nano`) that send it a short note before each consultation. A
+language-model manager is asked about 25 times a team in a match of two
+three-minute halves, each time with about 1,000 tokens.
 A model that answers faster acts more often: each player asks its model again
 as soon as its last answer is applied, and keeps carrying out that answer
 while it waits.
@@ -81,7 +107,7 @@ while it waits.
 | Advantage | Not implemented: every foul stops play |
 | Offside | Implemented, judged when a teammate kicks the ball, with an indirect free kick. Interfering with an opponent without playing the ball is not judged yet |
 | Yellow and red cards | Implemented: a yellow for stopping a promising attack, a red for denying an obvious goal-scoring opportunity or a second yellow. A sent-off player leaves the match; a team with fewer than seven ends it |
-| Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage. The managers that ask for them are not built yet |
+| Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage, as the managers ask for them. A substitute takes the place and position of the player it replaces |
 
 ## Test it
 

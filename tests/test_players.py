@@ -210,7 +210,10 @@ def test_a_player_sent_off_is_no_longer_asked():
         match = in_play(Match())
         squad = Players(match, {7: Fake("hold")})
         match._card(match.player(7), red=True)
-        await asyncio.wait_for(squad.run(), 1.0)  # its loop has ended
+        running = asyncio.create_task(squad.run())
+        await asyncio.sleep(0.3)
+        assert squad._loops[7].done()  # its loop has ended
+        running.cancel()
 
     asyncio.run(go())
 

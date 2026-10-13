@@ -210,6 +210,84 @@ Which LLM providers are supported, and how often a manager is consulted, is
 decided in the managers issue; any run that spends beyond the keys already
 configured waits for the maintainer's go-ahead with its expected cost.
 
+### How a manager works
+
+- **The choice of models.** `--home` and `--away` now name the models each
+  team's manager may choose from, separated by commas (`bot` by default).
+  One name still means the whole team plays that model. Each model is
+  described to the manager by its stated characteristics: where it runs,
+  whether it answers one question at a time for the whole team, and its
+  typical answer time, measured in this project
+  (warm, one question at a time: Laya 0.2 s, Jev 0.3 s, Aplomb 0.3 s, GPT-6
+  Luna Decisions 0.33 s, Clef 0.4 s, Perplexity Decider 0.42 s; d1-3B and
+  the AI Gateway models are not measured yet).
+- **Line-up.** Before kick-off the manager is told its players and the
+  models, and names a model for each of its eleven. The match waits for it,
+  so the page's first frame already shows every player's model.
+- **Consultations.** During the match the manager is consulted every 15 s of
+  play (real time in a live match), one consultation at a time: the next one
+  starts 15 s after the previous answer was applied, so a slow manager is
+  consulted less often, as a slow player is. It is not consulted at half
+  time or after full time. A headless match with only bots and built-in
+  managers runs as fast as it can, consulting on the same match clock.
+- **The feed.** Each consultation gets the match from the team's own side, in
+  plain text: clock, half, score and phase; possession so far; the events
+  since its last consultation (goals, fouls, cards, offsides, corners,
+  penalties, substitutions and half time; throw-ins, goal kicks and free
+  kicks are left out, as too many to read) and any advice that was refused,
+  with why; each player on the pitch, named by its id, with its position,
+  model, answers and median answer time over its last ten answers, failed
+  answers, current action and instruction; the bench; substitutions and
+  stoppages used and any substitution waiting for a stoppage; and the models
+  it may choose from.
+- **Advice.** A manager answers with instructions and substitution requests.
+  An instruction is one line of up to 80 characters for one of its players
+  on the pitch; it replaces that player's previous instruction and appears
+  in the player's state as "Manager: ...". A substitution names the player
+  leaving, the substitute and the substitute's model. It is checked against
+  the substitution rules (section 8) when it is asked for and made at the
+  next stoppage; the substitute's model starts asking once it is on. Advice
+  that breaks a rule, or names a player or model the manager does not have,
+  is dropped and does not stop the rest. Both are shown in the overlay as
+  `manager` messages.
+- **Built-in manager.** Line-up: forwards first, then midfielders,
+  defenders and the goalkeeper, each player gets the model with the shortest
+  expected answer time, where a model that answers one question at a time is
+  expected to take its typical time once for every teammate already on it.
+  Substitutions, like for like at the same position: a player whose model
+  failed three of its last five answers is replaced at once; from the 60th
+  minute, a player on a yellow card is replaced; and at its first
+  consultation after each of the 60th, 70th and 80th minutes, the starting
+  outfield player with the slowest answers (the forwards first when all
+  answer equally) is replaced. The bot is chosen only when no model is
+  offered, or every model is expected to take longer than 1.5 s. Instructions: from the 70th
+  minute, a losing team's forwards are told to shoot when they can and a
+  winning team's defenders to hold their shape and clear danger.
+- **Language-model manager.** OpenAI's Chat Completions API, with the
+  answer constrained to a JSON schema, model `gpt-5.4-mini` unless another
+  is named (`--home-manager openai:MODEL`). The key is `OPENAI_API_KEY`, from
+  the environment or `.env` only, and is never logged or shown; an error is
+  reported by its HTTP status. Each assistant model (`--assistants N`, by
+  default none, model `gpt-5.4-nano`) gets the same feed with its own brief
+  (one watches the decision models' answers and failures, the next the run
+  of play) and returns a short note; the notes reach the manager in the same
+  consultation. The schema lists the manager's own player ids and models, so
+  an answer cannot name anyone else's. A failed line-up falls back to the
+  built-in manager's, and a failed consultation changes nothing. Recorded on
+  14 October 2026: a consultation took 2 to 5 s and 800 to 1,400 tokens.
+
+**Why.** A fixed interval keeps an LLM manager's cost known in advance
+(about 25 consultations a team in a match of two three-minute halves) while
+it still sees each phase of play. A JSON schema makes every answer parseable
+without retries. OpenAI is the one language-model provider whose key is
+configured here; another provider is one more request function behind the
+same interface.
+
+**Rejected.** Consulting the manager at every event: goals and cards come in
+bursts, and a manager that lags behind them would be asked again before it
+answered. Replacing a player's model without a substitution: the brief puts
+model changes within the substitution rules.
+
 ## 6. Look and feel
 
 **Choice.** A three.js scene of the pitch, stadium and players, built
