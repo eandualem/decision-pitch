@@ -30,6 +30,7 @@ Sent once when the page connects.
     {
       "name": "Harbour",
       "colours": {"shirt": "#1f5fbf", "shorts": "#ffffff", "keeper": "#f2c230"},
+      "manager": "Built-in",
       "players": [
         {"id": 1, "number": 1, "name": "Vale", "position": "GK", "model": "Laya"}
       ]
@@ -41,7 +42,9 @@ Sent once when the page connects.
 `teams` has the two teams, home (`team` 0) first, each with the eleven who
 start in `players` and its substitutes in `bench`, in the same shape. `id` is
 unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
-player's decision model, or `null` for the built-in bot.
+player's decision model, or `null` for the built-in bot; a substitute's is
+`null` until its manager chooses one. `manager` is the team's manager:
+`Built-in`, or the language model's name.
 
 ### `snapshot`
 
@@ -114,13 +117,20 @@ asking to the answer, including any wait for a local model's turn. `action`
 is one of `press`, `hold`, `support`, `mark`, `dribble`, `pass`, `shoot` and
 `clear` (see `docs/decisions.md`, section 4).
 
-### `manager` (planned)
+### `manager`
 
-A manager's instruction or substitution request, for the overlay.
+A manager's instruction or substitution request, for the overlay. `text` is
+ready to show.
 
 ```json
 {"type": "manager", "team": 0, "kind": "instruction", "player": 7, "text": "Stay wide and wait for the switch."}
+{"type": "manager", "team": 0, "kind": "substitution", "off": 8, "on": 26, "model": "laya", "text": "Heath (Laya) to come on for Brook: Faster midfield decisions."}
 ```
+
+An `instruction` is for `player`, on the manager's team and on the pitch. A
+`substitution` is asked for here and made at the next stoppage, when its
+`substitution` event follows; `model` is the name the model is chosen with
+(see the README), or `bot`.
 
 ## Page to server
 
