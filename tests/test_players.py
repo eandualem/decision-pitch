@@ -9,7 +9,7 @@ import pytest
 from decision_pitch import actions, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
-from decision_pitch.bots import _taker
+from decision_pitch.bots import DRIBBLE_SPEED, _home, _taker
 from decision_pitch.match import TEAMS, Hold, KickTo, Match, MoveTo, Team
 from decision_pitch.players import FAILURE_WAIT, Players
 from decision_pitch.server import main, run, seat
@@ -106,7 +106,44 @@ def test_a_pass_from_the_player_on_the_ball_is_a_kick():
     match.ball.place(p.x + 0.5, p.y)
     match.owner = p.id
     assert isinstance(actions.command(match, p, "pass"), KickTo)
-    assert isinstance(actions.command(match, p, "press"), Hold)  # it already has the ball
+
+
+def test_a_player_on_the_ball_keeps_playing_it_whatever_the_action():
+    match = in_play(Match())
+    p = match.player(7)
+    match.ball.place(p.x + 0.5, p.y)
+    match.owner = p.id
+    for action in ("press", "hold", "support", "mark"):
+        command = actions.command(match, p, action)
+        assert isinstance(command, MoveTo) and command.speed == DRIBBLE_SPEED  # not standing on it
+
+
+def test_without_the_ball_only_the_nearest_goes_for_it_to_kick_it():
+    match = in_play(Match())
+    nearest, other = match.player(7), match.player(8)
+    match.ball.place(nearest.x + 2, nearest.y)
+    for action in ("dribble", "pass", "shoot", "clear"):
+        assert actions.command(match, nearest, action) != actions.command(match, nearest, "hold")
+        assert actions.command(match, other, action) == MoveTo(*_home(match, other), 5.0)
+
+
+def test_a_presser_does_not_chase_its_own_teammate_on_the_ball():
+    match = in_play(Match())
+    carrier, presser = match.player(7), match.player(8)
+    match.ball.place(carrier.x + 0.5, carrier.y)
+    match.owner = carrier.id
+    assert actions.command(match, presser, "press") == actions.command(match, presser, "support")
+
+
+def test_a_shot_out_of_range_is_dribbled_into_range_first():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    goal_x = match.attack(p.team) * 52.5
+    for x, kind in ((goal_x * 0.2, MoveTo), (goal_x * 0.8, KickTo)):
+        p.x, p.y = x, 0.0
+        match.ball.place(x, 0.0)
+        assert isinstance(actions.command(match, p, "shoot"), kind)
 
 
 def test_at_a_restart_only_the_taker_goes_to_the_ball():
@@ -120,13 +157,11 @@ def test_at_a_restart_only_the_taker_goes_to_the_ball():
     assert isinstance(held, MoveTo) and (held.x, held.y) != (10.0, 34.0)
 
 
-def test_a_taker_that_never_takes_the_restart_is_taken_over():
+def test_a_taker_whose_action_does_not_kick_takes_the_restart_at_once():
     match = Match()
     match._restart("corner", 0, 52.5, 34.0)
     taker = _taker(match, 0)
-    assert isinstance(actions.command(match, taker, "hold"), MoveTo)
-    match.since_restart = actions.RESTART_WAIT
-    assert isinstance(actions.command(match, taker, "hold"), KickTo)
+    assert isinstance(actions.command(match, taker, "hold"), KickTo)  # it does not stall the match
 
 
 def test_a_kick_once_made_is_done():
@@ -141,6 +176,8 @@ def test_a_kick_once_made_is_done():
 
 def test_a_kick_answered_just_after_a_kick_is_still_carried_out():
     match = in_play(Match())
+    match.ball.place(match.player(7).x + 0.5, match.player(7).y)
+    match.owner = 7  # back on the ball
     squad = Players(match, {7: Fake()})
     seat_ = squad.seats[7]
     seat_.action = "clear"

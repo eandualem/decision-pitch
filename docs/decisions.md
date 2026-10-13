@@ -132,23 +132,41 @@ A model chooses one of eight actions, each described to it in a few words:
 
 | Action | What the player does until the next answer |
 |---|---|
-| `press` | runs at the ball to win it or collect it |
+| `press` | runs at the ball to win it or collect it; supports a teammate who has it |
 | `hold` | keeps its place in the team's shape (a goalkeeper guards its goal) |
 | `support` | moves into space ahead to offer a pass |
 | `mark` | stays goal-side of the nearest opponent |
 | `dribble` | runs with the ball towards the opponents' goal |
 | `pass` | passes to the best-placed open teammate, or clears if none is open |
-| `shoot` | shoots inside the post further from the goalkeeper |
+| `shoot` | shoots inside the post further from the goalkeeper; from 24 m or more, dribbles into range first |
 | `clear` | kicks the ball long upfield |
 
-Dribble, pass, shoot and clear need the ball: without it the player runs to
-the ball first. The action is turned into an engine command on every physics
-step, with the built-in bot's rules for where "its place" is and whom to pass
-to, so a player keeps acting sensibly while its next answer is on the way.
-Once a pass, shot or clearance is made, the player holds its place until the
-next answer. At a restart only the taker goes to the ball; if the taker has
-not taken it after 8 s, its bot takes it, so a model that never chooses a
-kick cannot stall the match.
+The action is turned into an engine command on every physics step, with the
+built-in bot's rules for where "its place" is and whom to pass to, so a player
+keeps acting sensibly while its next answer is on the way. Once a pass, shot or
+clearance is made, the player holds its place until the next answer.
+
+Each action is carried out as the moment allows, because a model may give the
+same answer for a long time: a slow model's answer is seconds old, and a small
+model often repeats the action its state says it is doing (Laya repeated its
+previous answer in 98% of a recorded match). So a repeated answer still plays
+sensible football, the same rules for both teams:
+
+- **On the ball**, `press`, `hold`, `support` and `mark` keep playing it as
+  the built-in bot does (dribble, pass when pressed, shoot in range), instead
+  of standing on it.
+- **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
+  built-in bot does: the team's nearest outfield player goes for the ball and
+  the others keep their places, instead of every one of them running at it.
+- **At a restart** only the taker goes to the ball. A taker whose action is a
+  pass, shot or clearance takes the restart that way; any other action takes
+  it as its bot would, so a model that never chooses a kick cannot stall the
+  match.
+
+Measured on a Laya against Laya match of two 60 s halves, before and after
+these rules: three or more teammates within 6 m of the ball fell from 14% of
+play to 0.3%, a carrier standing still on the ball from 15% to 1%, and the
+free-kick phase from 10% of the match to 2%.
 
 The state is short, because a local model answers a shorter question faster
 (Laya: about 0.2 s for 300 characters, 0.5 s for 700). It is told from the
