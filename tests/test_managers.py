@@ -9,7 +9,7 @@ from decision_pitch import actions, managers
 from decision_pitch.managers import Advice, BuiltIn, LanguageModel, Staff
 from decision_pitch.match import Match
 from decision_pitch.players import Players
-from decision_pitch.server import fast, hello, main
+from decision_pitch.server import fast, hello, main, run
 
 KEY = "test-key-not-real"
 RECORDED = json.loads((Path(__file__).parent / "recordings" / "openai_manager.json").read_text())
@@ -109,6 +109,21 @@ def test_advice_that_breaks_the_rules_is_dropped_and_the_manager_told():
     assert "Substitution of [26] for [7] refused: that is not your player or model." in feed
     assert "Substitution of [26] for [9] refused: that substitution is already asked for." in feed
     assert "waiting for a stoppage: Heath for Brook" in feed
+
+
+def test_a_live_match_streams_a_substitution_request_with_the_model_s_name():
+    staff = staffed(options=({"bot": None, "jev": Fake("Jev")}, {"bot": None}))
+    staff.apply(0, Advice(substitutions=[(8, 26, "jev")]))
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+        if message["type"] == "manager":
+            staff.match.phase = "full_time"
+
+    asyncio.run(asyncio.wait_for(run(staff.match, send, staff.squad, staff), 5.0))
+    [asked] = [m for m in sent if m["type"] == "manager"]
+    assert asked["model"] == "jev"
 
 
 def test_the_feed_tells_the_match_from_the_team_s_side():
