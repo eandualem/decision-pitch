@@ -4,17 +4,19 @@ model at all. Both teams use the same rules."""
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from decision_pitch import pitch
-from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import ROLLING, TOP_SPEED, Player
+from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hold, KickTo, Match, MoveTo
+from decision_pitch.physics import ROLLING, TOP_SPEED, Player, _step_ball
 
 SHOOTING_RANGE = 24.0  # m from goal
 FREE_KICK_RANGE = 30.0  # m from goal within which a direct free kick is shot
 WALL = 3  # players in a defensive wall
 WALL_RANGE = 32.0  # m from goal within which a free kick gets a wall
 WALL_DISTANCE = 9.5  # m from the ball, just beyond the 9.15 the laws require
-PRESSURE = 4.0  # m: an opponent this close makes the player pass
+PRESSURE = 4.0  # m: a teammate with no opponent this close is open for a pass
+PRESSED = 2.5  # m: an opponent this close makes the player on the ball pass
 DRIBBLE_SPEED = 6.0
 JOG = 5.0
 ROUND_WIDE = 2.0  # m to the side that a challenger from behind passes the carrier at
@@ -22,6 +24,8 @@ ROUND_AHEAD = 1.5  # m ahead of the carrier it aims for once out wide, so it get
 ROUND_LEAD = 1.0  # s of the carrier's run it aims further ahead by
 ROUND_INTERCEPT = 2.0  # s ahead, at most, that it aims to meet the ball once in front
 ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the ball
+CHASE_AHEAD = 3.0  # s of a loose ball's path searched for the player who reaches it first
+CHASE_STEP = 0.1  # s between the points of that path
 
 
 def play(match: Match) -> None:
@@ -54,9 +58,56 @@ def command(m: Match, p: Player) -> Command:
         if _ball_in_own_area(m, p) and p.id == _nearest(m, p.team).id:
             return MoveTo(m.ball.x, m.ball.y)
         return MoveTo(*_goal_line_spot(m, p))
-    if p.id == _nearest(m, p.team, outfield=True).id:
+    if m.owner is None:
+        chaser, spot = _chase(m, p.team)
+        if p.id == chaser.id:
+            return MoveTo(*spot)
+    elif p.id == _nearest(m, p.team, outfield=True).id:
         return MoveTo(*_press_spot(m, p))
     return MoveTo(*_home(m, p), JOG)
+
+
+_chases: tuple[tuple, dict[int, tuple[Player, tuple[float, float]]]] = ((), {})
+
+
+def _chase(m: Match, team: int) -> tuple[Player, tuple[float, float]]:
+    """The outfield player of `team` who can reach the loose ball first on its path, and
+    where; so a pass is met by its receiver, not chased by its passer. Worked out once per
+    step for both teams."""
+    global _chases
+    b = m.ball
+    key = (id(m), m.t, b.x, b.y, b.z, b.vx, b.vy, b.vz)
+    if _chases[0] != key:
+        path, ball = [(b.x, b.y, b.z)], replace(b)
+        for _ in range(round(CHASE_AHEAD / CHASE_STEP)):
+            _step_ball(ball, CHASE_STEP)  # coarse: a guide to where it goes, not a replay
+            if abs(ball.x) > pitch.HALF_LENGTH or abs(ball.y) > pitch.HALF_WIDTH:
+                break  # it goes out: meet it before the line
+            path.append((ball.x, ball.y, ball.z))
+        found = {}
+        for side in (0, 1):
+            best = None
+            for q in m.players:
+                if q.team == side and q.position != "GK":
+                    time, spot = _meet(q, path, m.recovering.get(q.id, 0.0))
+                    if best is None or time < best[0]:
+                        best = (time, q, spot)
+            found[side] = best[1:]
+        _chases = (key, found)
+    return _chases[1][team]
+
+
+def _meet(
+    q: Player, path: list[tuple[float, float, float]], ready: float
+) -> tuple[float, tuple[float, float]]:
+    """How soon `q`, able to play the ball after `ready` seconds, can reach a ball on `path`
+    and where; if it cannot within the path, after its end, at the path's last point."""
+    for i, (x, y, z) in enumerate(path):
+        t = i * CHASE_STEP
+        if t >= ready and z <= CONTROL_HEIGHT and math.hypot(x - q.x, y - q.y) - CONTROL <= TOP_SPEED * t:
+            return t, (x, y)
+    x, y, _ = path[-1]
+    return CHASE_AHEAD + math.hypot(x - q.x, y - q.y) / TOP_SPEED, (x, y)
 
 
 def _press_spot(m: Match, p: Player) -> tuple[float, float]:
@@ -165,7 +216,7 @@ def _pass_or_clear(m: Match, p: Player) -> Command:
 
 
 def _pressed(m: Match, p: Player) -> bool:
-    return _space(m, p) < PRESSURE
+    return _space(m, p) < PRESSED
 
 
 def _space(m: Match, p: Player) -> float:
