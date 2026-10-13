@@ -96,7 +96,7 @@ export function createOverlay(teams) {
         row.action.textContent = message.error ? 'Answer failed' : (message.action ?? 'Waiting');
         row.action.title = message.error ? String(message.error) : '';
         row.latency.textContent = Number.isFinite(message.ms) ? `${Math.round(message.ms)} ms` : '—';
-      } else if (message.kind === 'substitution' || message.type === 'substitution') {
+      } else if (message.type !== 'manager' && (message.kind === 'substitution' || message.type === 'substitution')) {
         const row = rows.get(message.on);
         if (row) { row.model.textContent = message.model ?? 'Built-in bot'; row.decided = false; row.latency.textContent = '—'; }
         appendFeed(message.team, `${playerLabel(message.off)} → ${playerLabel(message.on)}${message.model ? ` · ${message.model}` : ''}`);

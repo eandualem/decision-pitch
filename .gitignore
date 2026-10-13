@@ -12,6 +12,7 @@
 # Local model weights, caches and match recordings
 models/
 recordings/
+!tests/recordings/
 # Build and runtime output
 node_modules/
 dist/
