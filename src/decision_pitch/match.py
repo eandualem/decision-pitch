@@ -273,7 +273,7 @@ class Match:
         if self.phase == "play":
             self._check_ball(before)
 
-        if self.penalty_live and math.hypot(self.ball.vx, self.ball.vy) < 0.5:
+        if self.penalty_live and self.ball.vx == self.ball.vy == self.ball.vz == 0:
             self.penalty_live = False  # it came to rest untouched
         waiting = self.phase == "penalty" or self.penalty_live  # a penalty is completed first
         if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time") and not waiting:
@@ -317,6 +317,9 @@ class Match:
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
+            if self.penalty_live and self.elapsed >= self.half_length:
+                self._end_half()  # this touch completes the penalty the half waited for
+                return
             if nearest.id in self.offside:
                 self._offside(nearest)
                 return

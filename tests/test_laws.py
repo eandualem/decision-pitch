@@ -163,6 +163,29 @@ def test_a_half_waits_for_a_penalty_awarded_at_its_end():
     assert events[-1] == "half_time" and events[-2] in ("goal", "goal_kick", "corner")
 
 
+def penalty_after_time(ball, velocity):
+    """A penalty kick on its way after the half's time is up."""
+    m = in_play()
+    m.elapsed, m.penalty_live = m.half_length, True
+    m.ball.place(*ball)
+    m.ball.vx = velocity
+    return m
+
+
+def test_a_slow_penalty_ball_is_followed_until_it_stops():
+    m = penalty_after_time((52.55, 0.0), 0.45)
+    run(m, 1.0)
+    assert kinds(m.drain_events()) == ["goal", "half_time"]
+
+
+def test_a_touch_after_time_ends_the_half_before_that_player_can_score():
+    m = penalty_after_time((52.3, 2.0), 1.0)
+    m.player(10).x, m.player(10).y = 51.9, 2.0
+    m.command(10, KickTo(pitch.HALF_LENGTH + 2, 2.0, 24.0))
+    m.step()
+    assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
+
+
 def test_the_bot_shoots_a_penalty():
     m = in_play()
     on_the_ball(m, 10, 45.0, 5.0)
