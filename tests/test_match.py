@@ -194,3 +194,13 @@ def test_a_goalkeeper_has_no_extra_reach_for_a_ball_outside_its_area():
     keeper.x, keeper.y = -36.1, 0.0
     m.step()
     assert m.owner is None
+
+
+def test_a_kicked_ball_leaves_before_a_nearby_opponent_can_claim_it():
+    m = in_play(ball=(0.0, 0.0))
+    kicker, defender = m.players[5], m.players[16]
+    kicker.x, kicker.y = -0.6, 0.0
+    defender.x, defender.y = 0.7, 0.0
+    m.command(kicker.id, KickTo(-30.0, 0.0, 30.0))
+    run(m, 3 * STEP)
+    assert m.owner is None and m.ball.vx < -20

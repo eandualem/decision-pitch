@@ -203,6 +203,7 @@ class Match:
         command = self.commands[owner.id] if owner else None
         if owner and isinstance(command, KickTo) and self._may_kick(owner):
             self._kick(owner, command)
+            step_ball(self.ball)  # on its way before anyone else can claim it
         elif owner and self.phase == "play":
             self.ball.vx, self.ball.vy = owner.vx, owner.vy
             carry(
