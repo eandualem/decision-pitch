@@ -133,9 +133,22 @@ def test_a_kick_once_made_is_done():
     match = in_play(Match())
     squad = Players(match, {7: Fake()})
     squad.seats[7].action = "clear"
-    match.recovering[7] = 0.25
+    squad.play()
+    match.commands[7], match.recovering[7] = Hold(), 0.25  # as the engine does once it kicks
     squad.play()
     assert squad.seats[7].action == "hold"
+
+
+def test_a_kick_answered_just_after_a_kick_is_still_carried_out():
+    match = in_play(Match())
+    squad = Players(match, {7: Fake()})
+    seat_ = squad.seats[7]
+    seat_.action = "clear"
+    squad.play()
+    match.commands[7], match.recovering[7] = Hold(), 0.25
+    seat_.action, seat_.answers = "pass", seat_.answers + 1  # a new answer, before the next step
+    squad.play()
+    assert seat_.action == "pass" and isinstance(match.commands[7], KickTo)
 
 
 # -- the real-time loop -------------------------------------------------------------------------
@@ -208,6 +221,23 @@ def test_startup_names_the_key_to_check_when_a_model_does_not_answer(monkeypatch
         "Jev", "https://example.test/v1", "m", KEY, transport=refused, key_name="TYPESAFE_API_KEY"))
     reason = asyncio.run(players.available())["jev"]
     assert "did not answer" in reason and "check TYPESAFE_API_KEY" in reason
+
+
+def test_an_error_that_could_carry_a_key_is_named_by_its_type_only():
+    async def leaky(question):
+        raise httpx.LocalProtocolError(f"Illegal header value b'Bearer {KEY}\\n'")
+
+    async def go():
+        match = in_play(Match())
+        model = Fake()
+        model.decide = leaky
+        squad = Players(match, {7: model})
+        task = asyncio.create_task(squad.run())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        return squad.drain_decisions()
+
+    assert asyncio.run(go())[0]["error"] == "LocalProtocolError"
 
 
 def test_choosing_a_model_without_its_key_says_which_key(capsys):

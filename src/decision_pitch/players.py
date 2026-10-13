@@ -17,7 +17,7 @@ from decision_pitch import actions, bots
 from decision_pitch.arena import apis, local
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Answer, Model, Question
-from decision_pitch.match import Match
+from decision_pitch.match import Command, Match
 
 FAILURE_WAIT = 0.5  # s before asking again after a failed answer
 BOT = "bot"
@@ -61,6 +61,9 @@ class Seat:
     action: str = "hold"
     answer: float | None = None  # seconds
     instruction: str | None = None
+    answers: int = 0  # answers applied so far
+    command: Command | None = None  # the command last given for its action
+    commanded: int = 0  # how many answers had been applied when it was given
 
 
 class Players:
@@ -83,9 +86,13 @@ class Players:
             if seat is None:
                 m.command(p.id, bots.command(m, p))
                 continue
-            if seat.action in actions.KICKS and p.id in m.recovering:
-                seat.action = "hold"  # the ball is kicked: the action is done
-            m.command(p.id, actions.command(m, p, seat.action))
+            # The engine replaces a kick command once the kick is made. If no answer has
+            # arrived since that command was given, the kick was this action: it is done.
+            kicked = seat.command is not None and m.commands[p.id] is not seat.command
+            if kicked and seat.action in actions.KICKS and seat.answers == seat.commanded:
+                seat.action = "hold"
+            seat.command, seat.commanded = actions.command(m, p, seat.action), seat.answers
+            m.command(p.id, seat.command)
 
     def drain_decisions(self) -> list[dict]:
         decisions, self.decisions = self.decisions, []
@@ -113,13 +120,21 @@ class Players:
                 answer = await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
                 ms = round((time.perf_counter() - start) * 1000)
-                error = str(exc)[:120] or type(exc).__name__
-                self.decisions.append(_decision(player_id, seat, ms, error=error))
+                self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
             seat.answer = time.perf_counter() - start
-            seat.action = answer.move
+            seat.action, seat.answers = answer.move, seat.answers + 1
             self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000)))
+
+
+def _error(exc: Exception) -> str:
+    """What went wrong, safe to show. The adapters' own messages have the key taken out;
+    any other error is named only by its type, since its text can carry a request header."""
+    text = str(exc)
+    if isinstance(exc, (RuntimeError, ValueError)) and text.startswith(("HTTP ", "unusable answer")):
+        return text[:120]
+    return type(exc).__name__
 
 
 def _decision(player_id: int, seat: Seat, ms: int, error: str | None = None) -> dict:
@@ -150,7 +165,7 @@ async def available() -> dict[str, str | None]:
             await model.decide(PROBE)
             return None
         except Exception as exc:  # noqa: BLE001 - any failure: name the key to check
-            return f"{model.name} did not answer ({str(exc)[:80] or type(exc).__name__}); check {model.key_name}"
+            return f"{model.name} did not answer ({_error(exc)[:80]}); check {model.key_name}"
         finally:
             await model.aclose()
 
