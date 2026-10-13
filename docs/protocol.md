@@ -38,10 +38,11 @@ Sent once when the page connects.
 }
 ```
 
-`teams` has two entries once a match is set up (empty before). `id` is unique
-across both teams; positions are `GK`, `DF`, `MF` or `FW`.
+`teams` has the two teams, home (`team` 0) first. `id` is unique across both
+teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the player's decision
+model, or `null` for the built-in bot.
 
-### `snapshot` (planned)
+### `snapshot`
 
 The state of play, about 30 times a second.
 
@@ -55,19 +56,21 @@ The state of play, about 30 times a second.
   "score": [1, 0],
   "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7},
   "players": [
-    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "dribble"}
+    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"}
   ]
 }
 ```
 
 - `t`: match seconds since kick-off; `period`: 1 or 2.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
-  `free_kick`, `penalty`, `half_time` or `full_time`.
+  `half_time` or `full_time`; `free_kick` and `penalty` are planned.
 - `ball.owner`: the player in possession, or `null`.
+- `action`: the engine command the player is carrying out: `hold`, `move` or
+  `kick`. The decision model's own choice is in `decision` messages.
 - `players`: only players on the pitch; a substituted or sent-off player
   disappears from it.
 
-### `event` (planned)
+### `event`
 
 A moment the page shows, sent when it happens.
 
@@ -75,10 +78,13 @@ A moment the page shows, sent when it happens.
 {"type": "event", "kind": "goal", "t": 734.2, "team": 0, "player": 9}
 ```
 
-`kind` is one of `goal`, `foul`, `free_kick`, `penalty`, `offside`,
-`throw_in`, `goal_kick`, `corner`, `yellow`, `red`, `substitution`,
-`half_time` or `full_time`. A `substitution` adds `"off"` and `"on"` player
-ids and the incoming player's `"model"`.
+`kind` is one of `goal`, `throw_in`, `goal_kick`, `corner`, `half_time` or
+`full_time`; `foul`, `free_kick`, `penalty`, `offside`, `yellow`, `red` and
+`substitution` are planned. `team` is the team that scored or takes the
+restart (`null` for `half_time` and `full_time`). A `goal` adds the scorer as
+`player`: for now, the scoring team's player nearest the ball. A
+`substitution` will add `"off"` and `"on"` player ids and the incoming
+player's `"model"`.
 
 ### `decision` (planned)
 

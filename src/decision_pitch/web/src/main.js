@@ -1,6 +1,6 @@
-// The match page: draws the pitch and shows the connection to the match server.
-// The full match graphics are built in their own issue; this draws only what the
-// `hello` message describes.
+// The match page: draws the pitch, the players and the ball from the match server's
+// snapshots, interpolating between them. The full match graphics are built in their
+// own issue; this is the plain view they replace.
 import * as THREE from 'three';
 
 const status = document.getElementById('status');
@@ -17,6 +17,16 @@ camera.position.set(0, 62, 88);
 camera.lookAt(0, 0, 0);
 
 let pitch = null;
+let teams = [];
+const players = new Map(); // id -> mesh
+const ball = new THREE.Mesh(
+  new THREE.SphereGeometry(0.3, 16, 12), // drawn larger than life so it can be seen
+  new THREE.MeshLambertMaterial({ color: 0xffffff }),
+);
+scene.add(ball);
+let before = null; // the last two snapshots and when the second arrived
+let after = null;
+let arrived = 0;
 
 // Match coordinates (x along the length, y across, z up; see docs/protocol.md)
 // map to three.js as x -> x, y -> -z, z -> y.
@@ -53,12 +63,60 @@ function drawPitch({ length, width, goalWidth }) {
   scene.add(pitch);
 }
 
+function drawPlayers(teamList) {
+  for (const mesh of players.values()) scene.remove(mesh);
+  players.clear();
+  teams = teamList;
+  teams.forEach((team) => {
+    for (const p of team.players) {
+      const colour = p.position === 'GK' ? team.colours.keeper : team.colours.shirt;
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.4, 0.4, 1.8, 16),
+        new THREE.MeshLambertMaterial({ color: colour }),
+      );
+      mesh.position.y = 0.9;
+      players.set(p.id, mesh);
+      scene.add(mesh);
+    }
+  });
+}
+
+function showScore(snapshot) {
+  const [home, away] = teams.map((t) => t.name);
+  const phase = snapshot.phase === 'play' ? '' : ` · ${snapshot.phase.replace('_', ' ')}`;
+  status.textContent = `${home} ${snapshot.score[0]} – ${snapshot.score[1]} ${away} · ${snapshot.clock}${phase}`;
+}
+
+function draw() {
+  if (!after) return;
+  const span = before ? after.t - before.t : 0;
+  const k = span > 0 ? Math.min(1, (performance.now() - arrived) / 1000 / span) : 1;
+  const from = before ?? after;
+  const mix = (a, b) => a + (b - a) * k;
+  const fromPlayers = new Map(from.players.map((p) => [p.id, p]));
+  for (const p of after.players) {
+    const mesh = players.get(p.id);
+    const q = fromPlayers.get(p.id) ?? p;
+    if (mesh) mesh.position.set(mix(q.x, p.x), 0.9, -mix(q.y, p.y));
+  }
+  ball.position.set(mix(from.ball.x, after.ball.x), Math.max(0.3, mix(from.ball.z, after.ball.z)), -mix(from.ball.y, after.ball.y));
+}
+
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => { status.textContent = 'Connected'; };
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === 'hello') drawPitch(message.pitch);
+    if (message.type === 'hello') {
+      drawPitch(message.pitch);
+      drawPlayers(message.teams);
+      before = after = null;
+    } else if (message.type === 'snapshot') {
+      before = after;
+      after = message;
+      arrived = performance.now();
+      showScore(message);
+    }
   };
   ws.onclose = () => {
     status.textContent = 'Disconnected, retrying…';
@@ -75,4 +133,7 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 connect();
-renderer.setAnimationLoop(() => renderer.render(scene, camera));
+renderer.setAnimationLoop(() => {
+  draw();
+  renderer.render(scene, camera);
+});
