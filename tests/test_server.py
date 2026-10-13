@@ -2,7 +2,7 @@ import pytest
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from decision_pitch.server import PITCH, app
+from decision_pitch.server import PITCH, app, main
 
 
 HERE = {"host": "127.0.0.1:8000", "origin": "http://127.0.0.1:8000"}
@@ -36,3 +36,10 @@ def test_only_this_page_on_this_computer_may_connect(headers):
         with TestClient(app()).websocket_connect("/ws", headers=headers):
             pass
     assert closed.value.code == 1008
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "inf", "nan"])
+def test_the_half_length_must_be_a_positive_number_of_seconds(value):
+    with pytest.raises(SystemExit) as stopped:
+        main(["--headless", "--half-length", value])
+    assert stopped.value.code == 2

@@ -173,3 +173,24 @@ def test_a_player_cannot_carry_the_ball_through_a_post():
     m.command(p.id, MoveTo(60.0, y))
     run(m, 3)
     assert m.phase == "play" and m.ball.x < pitch.HALF_LENGTH
+
+
+def test_an_opponent_on_the_centre_spot_at_kick_off_is_moved_into_its_own_half():
+    m = Match()
+    for p in m.players:  # nobody nearby to nudge the opponent off the spot
+        if p.team == 0 and abs(p.x) < 2:
+            p.x = -20.0
+    opponent = next(p for p in m.players if p.team == 1)
+    opponent.x, opponent.y = 0.0, 0.0
+    m.step()
+    assert opponent.x * m.attack(1) <= 0
+    assert math.hypot(opponent.x, opponent.y) >= pitch.CENTRE_RADIUS - 1e-9
+
+
+def test_a_goalkeeper_has_no_extra_reach_for_a_ball_outside_its_area():
+    m = in_play(ball=(-35.0, 0.0))
+    m.ball.z = 2.0
+    keeper = m.players[0]
+    keeper.x, keeper.y = -36.1, 0.0
+    m.step()
+    assert m.owner is None

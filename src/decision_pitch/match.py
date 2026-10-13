@@ -238,7 +238,7 @@ class Match:
         if self.phase in RESTARTS and p.team != self.restart_team:
             return False
         reach, height = CONTROL, CONTROL_HEIGHT
-        if self.phase == "play" and p.position == "GK" and self._in_own_penalty_area(p):
+        if self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team):
             reach, height = KEEPER_CONTROL, KEEPER_HEIGHT
         b = self.ball
         return b.z <= height and math.hypot(b.x - p.x, b.y - p.y) <= reach
@@ -278,9 +278,10 @@ class Match:
         if self.phase != "play":
             self.phase, self.restart_team = "play", None
 
-    def _in_own_penalty_area(self, p: Player) -> bool:
-        goal = -self.attack(p.team) * pitch.HALF_LENGTH
-        return abs(p.x - goal) <= pitch.PENALTY_DEPTH and abs(p.y) <= pitch.PENALTY_HALF_WIDTH
+    def _ball_in_own_penalty_area(self, team: int) -> bool:
+        goal = -self.attack(team) * pitch.HALF_LENGTH
+        b = self.ball
+        return abs(b.x - goal) <= pitch.PENALTY_DEPTH and abs(b.y) <= pitch.PENALTY_HALF_WIDTH
 
     # -- ball out of play, goals and restarts -----------------------------------------------
 
@@ -369,7 +370,7 @@ class Match:
             dist = math.hypot(dx, dy)
             if dist < distance:
                 if dist == 0:
-                    dx, dy, dist = -self.attack(self.restart_team), 0.0, 1.0
+                    dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
                 p.x = self.ball.x + dx / dist * distance
                 p.y = self.ball.y + dy / dist * distance
 

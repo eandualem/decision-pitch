@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import threading
 import time
 import webbrowser
@@ -101,7 +102,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-browser", action="store_true", help="don't open the page")
     parser.add_argument(
-        "--half-length", type=float, default=180.0, help="seconds per half (default: 180)"
+        "--half-length", type=_seconds, default=180.0, help="seconds per half (default: 180)"
     )
     parser.add_argument(
         "--headless", action="store_true", help="play one match as fast as it runs and print it"
@@ -120,6 +121,13 @@ def main(argv: list[str] | None = None) -> None:
         threading.Thread(target=_open_when_listening, args=(server, url), daemon=True).start()
     with contextlib.suppress(KeyboardInterrupt):  # Ctrl+C ends it quietly
         server.run()
+
+
+def _seconds(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number of seconds")
+    return value
 
 
 def headless(match: Match) -> None:
