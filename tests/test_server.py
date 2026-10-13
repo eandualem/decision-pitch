@@ -15,11 +15,13 @@ def test_the_page_and_three_js_are_served():
     assert client.get("/vendor/three/three.module.js").status_code == 200
 
 
-def test_the_socket_says_hello_with_the_pitch():
+def test_the_socket_says_hello_then_streams_the_match():
     with TestClient(app()).websocket_connect("/ws", headers=HERE) as ws:
-        message = ws.receive_json()
-    assert message["type"] == "hello"
-    assert message["pitch"] == PITCH
+        hello = ws.receive_json()
+        snapshot = ws.receive_json()
+    assert hello["type"] == "hello" and hello["pitch"] == PITCH
+    assert [len(team["players"]) for team in hello["teams"]] == [11, 11]
+    assert snapshot["type"] == "snapshot" and len(snapshot["players"]) == 22
 
 
 @pytest.mark.parametrize(

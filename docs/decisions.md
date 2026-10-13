@@ -44,6 +44,22 @@ a test or from the command line without a browser.
   kicks, offside, yellow and red cards, two halves and substitutions. Until a
   law is implemented, the README's rule table lists it as not implemented
   yet; play never skips it silently.
+- **Commands.** The engine is driven by one command per player, which lasts
+  until it is replaced: hold, run to a point, or kick the ball towards a
+  point. A player told to kick runs to the ball and kicks it as soon as it
+  can play it. The decision layer turns each model's action into a command.
+- **Possession.** The nearest player within reach of a low ball has it and
+  carries it as it runs. A goalkeeper reaches further and higher in its own
+  penalty area. Kicks get a small aim error that grows with their power,
+  from a seeded random generator, so a match can be replayed exactly.
+- **Restarts.** The engine holds opponents at the required distance from the
+  ball until it is played, and only the restarting team can play it. After
+  a goal the players walk back for the kick-off; anyone not in place after
+  5 s is moved there, so a model that never walks back cannot stall the
+  match.
+- **Built-in bot.** Simple rules (keep shape, chase the ball, dribble, pass
+  to an open teammate, shoot in range) that play any position, so a full
+  match runs with no model at all.
 - **Fairness.** Both teams run through the same code with the same physics.
   Each player's state is built by one function, mirrored for the team
   attacking the other way, so neither side gets a different view.
