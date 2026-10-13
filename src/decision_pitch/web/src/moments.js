@@ -56,6 +56,11 @@ export function createMoments(scene, teams) {
   };
   return {
     setSnapshot(snapshot) {
+      // Keep a position even when several socket messages arrive before a frame.
+      for (const player of snapshot.players) {
+        if (!lastPositions.has(player.id)) lastPositions.set(player.id, new THREE.Vector3());
+        lastPositions.get(player.id).set(player.x, 0, -player.y);
+      }
       score.textContent = `${snapshot.score[0]} : ${snapshot.score[1]}`;
       clock.textContent = snapshot.clock;
       phase.textContent = snapshot.phase === 'play' ? `${snapshot.period === 2 ? '2ND' : '1ST'} HALF` : (labels[snapshot.phase] ?? snapshot.phase.replaceAll('_', ' '));
