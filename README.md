@@ -39,12 +39,13 @@ uv run decision-pitch --headless --seed 1
 | Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players who are not in their own half after 5 s are moved there |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
-| Throw-ins | Implemented. Opponents stay 2 m away; foul throws and a goal scored directly from a throw-in are not checked yet |
+| Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
 | Goal kicks | Implemented. Opponents stay 9.15 m away; they are not yet kept out of the penalty area |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends. No added time |
 | Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
 | Playing the ball twice at a restart | Not implemented yet |
+| Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick or corner) | Not implemented yet: such a goal currently counts |
 | Fouls, free kicks and penalties | Not implemented yet |
 | Offside | Not implemented yet |
 | Yellow and red cards | Not implemented yet |
