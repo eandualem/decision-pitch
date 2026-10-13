@@ -73,9 +73,11 @@ league, player or tournament names, logos or kits.
 
 ## Working on it
 
-`main` is the default and integration branch. Every change lands through a
-reviewed pull request into `main`, with conventional commits (`feat:`,
-`fix:`, `docs:`, `chore:`) and a body saying why. Record stack and design
+`develop` is the default and integration branch. Every change, including a
+swarm's, lands through a reviewed pull request into `develop`, with
+conventional commits (`feat:`, `fix:`, `docs:`, `chore:`) and a body saying
+why. `main` is the released branch: it receives only a promotion pull request
+from `develop` when the maintainer asks for one. Record stack and design
 decisions in `docs/decisions.md` before implementing them.
 
 The repository is private for now but written for publication: everything
