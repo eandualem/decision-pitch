@@ -5,7 +5,7 @@ import pytest
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
 from decision_pitch.match import DRIBBLE, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import STEP
+from decision_pitch.physics import STEP, TOP_SPEED
 
 
 def in_play():
@@ -102,6 +102,11 @@ def test_a_presser_behind_the_carrier_runs_round_it_and_wins_the_ball_fairly(spe
         if m.owner != 10:
             break
     assert m.drain_events() == [] and m.owner == 15
+
+
+def test_a_presser_meets_a_ball_coming_at_it_as_fast_as_it_runs():
+    # 4 m apart, closing at twice its speed
+    assert bots._intercept(-4.0, 0.0, TOP_SPEED, 0.0, TOP_SPEED) == pytest.approx(4 / (2 * TOP_SPEED))
 
 
 def test_a_free_kick_waits_before_it_can_be_taken():

@@ -86,10 +86,13 @@ def _intercept(dx: float, dy: float, vx: float, vy: float, speed: float) -> floa
     a = vx * vx + vy * vy - speed * speed
     b = 2 * (dx * vx + dy * vy)
     c = dx * dx + dy * dy
-    if a >= 0:
-        return ROUND_INTERCEPT
-    t = (-b - math.sqrt(b * b - 4 * a * c)) / (2 * a)
-    return min(ROUND_INTERCEPT, max(0.0, t))
+    if abs(a) < 1e-9:  # as fast as the runner: met only if it is coming towards it
+        times = [-c / b] if b < 0 else []
+    elif (d := b * b - 4 * a * c) >= 0:
+        times = [(-b - math.sqrt(d)) / (2 * a), (-b + math.sqrt(d)) / (2 * a)]
+    else:
+        times = []
+    return min([t for t in times if t >= 0] + [ROUND_INTERCEPT])
 
 
 def _on_the_ball(m: Match, p: Player) -> Command:
