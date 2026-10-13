@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from decision_pitch import pitch
 from decision_pitch.physics import (
     BALL_RADIUS,
+    PLAYER_RADIUS,
     STEP,
     TOP_SPEED,
     Ball,
@@ -56,9 +57,19 @@ THROW_MAX = 15.0  # m/s
 KICK_RECOVERY = 0.25  # s after a kick before the kicker can play the ball again
 KICK_ERROR = 0.002  # radians of aim error per m/s of kick speed
 KICKOFF_WAIT = 5.0  # s players have to take their places before they are placed
+SET_PIECE_WAIT = 1.5  # s before a free kick or penalty can be taken
 HALF_TIME = 3.0  # s
-RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick": 9.15, "throw_in": 2.0}
+RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick": 9.15, "throw_in": 2.0,
+                    "free_kick": 9.15, "penalty": 9.15}  # fmt: skip
 RESTARTS = tuple(RESTART_DISTANCE)
+NO_OFFSIDE = ("throw_in", "goal_kick", "corner")  # restarts no one can be offside from
+FOUL_SPEED = 2.0  # m/s a challenger runs into the ball carrier at for its challenge to be judged
+BEHIND = -0.5  # cosine: a challenger more than 120° from where the carrier faces is behind it
+PROMISING_ATTACK = 27.0  # m from goal within which a foul stops a promising attack: a yellow card
+GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-scoring chance
+SUBSTITUTES = 5  # substitutions a team may make
+WINDOWS = 3  # stoppages it may make them in, half time not counted
+FEWEST = 7  # players a team needs to play on
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -67,20 +78,23 @@ FORMATION = [
     ("MF", (-20.0, -22.0)), ("MF", (-22.0, -7.0)), ("MF", (-22.0, 7.0)), ("MF", (-20.0, 22.0)),
     ("FW", (-1.0, -6.0)), ("FW", (-10.0, 8.0)),
 ]  # fmt: skip
+BENCH = ("GK", "DF", "DF", "MF", "MF", "FW", "FW")
 
 
 @dataclass
 class Team:
     name: str
     colours: dict[str, str]
-    names: list[str]
+    names: list[str]  # the eleven who start, then the bench
 
 
 TEAMS = (
     Team("Harbour", {"shirt": "#1f5fbf", "shorts": "#ffffff", "keeper": "#f2c230"},
-         ["Vale", "Moss", "Hart", "Quill", "Reed", "Stone", "Finch", "Brook", "Ash", "Lark", "Pike"]),
+         ["Vale", "Moss", "Hart", "Quill", "Reed", "Stone", "Finch", "Brook", "Ash", "Lark", "Pike",
+          "Cove", "Dune", "Gale", "Heath", "Marsh", "Fern", "Rill"]),
     Team("Ridge", {"shirt": "#e0562b", "shorts": "#1b1b1b", "keeper": "#3fbf6f"},
-         ["Rook", "Sable", "Thorne", "Wren", "Yarrow", "Birch", "Cliff", "Drake", "Ember", "Frost", "Glen"]),
+         ["Rook", "Sable", "Thorne", "Wren", "Yarrow", "Birch", "Cliff", "Drake", "Ember", "Frost", "Glen",
+          "Crag", "Flint", "Knoll", "Scree", "Tarn", "Briar", "Heron"]),
 )  # fmt: skip
 
 
@@ -103,13 +117,31 @@ class Match:
 
     def __post_init__(self) -> None:
         self.rng = random.Random(self.seed)
+        # the players on the pitch, and the substitutes not yet used
         self.players = [
             Player(team * 11 + i + 1, team, i + 1, team_.names[i], position, home)
             for team, team_ in enumerate(self.teams)
             for i, (position, home) in enumerate(FORMATION)
         ]
-        self.commands: dict[int, Command] = {p.id: Hold() for p in self.players}
+        self.bench = [
+            Player(23 + team * len(BENCH) + i, team, 12 + i, team_.names[11 + i], position, (0.0, 0.0))
+            for team, team_ in enumerate(self.teams)
+            for i, position in enumerate(BENCH)
+        ]
+        self.everyone = {p.id: p for p in [*self.players, *self.bench]}
+        self.commands: dict[int, Command] = {pid: Hold() for pid in self.everyone}
         self.recovering: dict[int, float] = {}
+        self.offside: set[int] = set()  # players in an offside position since the last kick
+        self.indirect: int | None = None  # who took an indirect free kick no one else has touched
+        self.restart_indirect = False  # the free kick about to be taken is indirect
+        self.taker: int | None = None  # a penalty's taker
+        self.penalty_live = False  # a penalty kick is on its way: the half waits for it
+        self.yellows: dict[int, int] = {}
+        self.substitutions = [0, 0]  # made by each team
+        self.windows = [0, 0]  # stoppages each team has made substitutions in
+        self.window_at: list[int | None] = [None, None]  # the stoppage of each team's latest
+        self.stoppage = 0  # counts the restarts
+        self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -118,7 +150,7 @@ class Match:
         self.commands[player_id] = command
 
     def player(self, player_id: int) -> Player:
-        return self.players[player_id - 1]
+        return self.everyone[player_id]
 
     def attack(self, team: int) -> int:
         """+1 if `team` attacks towards +x in this half, else -1."""
@@ -129,15 +161,15 @@ class Match:
         return f"{int(minutes):02d}:{int(minutes * 60) % 60:02d}"
 
     def hello_teams(self) -> list[dict]:
+        def entry(p: Player) -> dict:
+            return {"id": p.id, "number": p.number, "name": p.name, "position": p.position, "model": None}
+
         return [
             {
                 "name": team.name,
                 "colours": team.colours,
-                "players": [
-                    {"id": p.id, "number": p.number, "name": p.name, "position": p.position, "model": None}
-                    for p in self.players
-                    if p.team == index
-                ],
+                "players": [entry(p) for p in self.players if p.team == index],
+                "bench": [entry(p) for p in self.bench if p.team == index],
             }
             for index, team in enumerate(self.teams)
         ]
@@ -169,6 +201,25 @@ class Match:
         events, self.events = self.events, []
         return events
 
+    def substitute(self, off: int, on: int) -> str | None:
+        """Ask to replace player `off` with substitute `on` at the next stoppage. Returns
+        why it cannot be made, or None once it is asked for."""
+        p, q = self.everyone.get(off), self.everyone.get(on)
+        if p is None or p not in self.players:
+            return "that player is not on the pitch"
+        if q is None or q not in self.bench or q.team != p.team:
+            return "that player is not on the team's bench"
+        if any(off == a or on == b for a, b in self.pending):
+            return "that substitution is already asked for"
+        asked = sum(1 for a, _ in self.pending if self.player(a).team == p.team)
+        if self.substitutions[p.team] + asked >= SUBSTITUTES:
+            return f"all {SUBSTITUTES} substitutions are used"
+        in_window = self.phase in RESTARTS and self.window_at[p.team] == self.stoppage
+        if self.windows[p.team] >= WINDOWS and self.phase != "half_time" and not in_window:
+            return f"all {WINDOWS} stoppages for substitutions are used"
+        self.pending.append((off, on))
+        return None
+
     # -- one step ---------------------------------------------------------------------------
 
     def step(self) -> None:
@@ -176,11 +227,14 @@ class Match:
             return
         self.t += STEP
         if self.phase == "half_time":
+            self._substitute()
             self.since_restart += STEP
             if self.since_restart >= HALF_TIME:
                 self.period, self.elapsed = 2, 0.0
                 self._kickoff(1, place_players=True)
             return
+        if self.phase in RESTARTS:
+            self._substitute()
         self.elapsed += STEP
         self.since_restart += STEP
         for pid in list(self.recovering):
@@ -190,6 +244,9 @@ class Match:
 
         for p in self.players:
             self._move(p)
+        self._judge_challenge()
+        if self.phase == "full_time":
+            return
         separate(self.players)
         for p in self.players:
             p.x = max(-pitch.HALF_LENGTH - 3, min(pitch.HALF_LENGTH + 3, p.x))
@@ -216,7 +273,10 @@ class Match:
         if self.phase == "play":
             self._check_ball(before)
 
-        if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time"):
+        if self.penalty_live and self.ball.vx == self.ball.vy == self.ball.vz == 0:
+            self.penalty_live = False  # it came to rest untouched
+        waiting = self.phase == "penalty" or self.penalty_live  # a penalty is completed first
+        if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time") and not waiting:
             self._end_half()
 
     def _move(self, p: Player) -> None:
@@ -233,16 +293,22 @@ class Match:
 
     # -- possession and kicks ---------------------------------------------------------------
 
-    def _can_play(self, p: Player) -> bool:
-        if p.id in self.recovering:
-            return False
-        if self.phase in RESTARTS and p.team != self.restart_team:
-            return False
+    def _reaches(self, p: Player) -> bool:
+        """Whether the ball is within `p`'s reach."""
         reach, height = CONTROL, CONTROL_HEIGHT
         if self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team):
             reach, height = KEEPER_CONTROL, KEEPER_HEIGHT
         b = self.ball
         return b.z <= height and math.hypot(b.x - p.x, b.y - p.y) <= reach
+
+    def _can_play(self, p: Player) -> bool:
+        if p.id in self.recovering:
+            return False
+        if self.phase in RESTARTS and p.team != self.restart_team:
+            return False
+        if self.phase == "penalty" and p.id != self.taker:
+            return False
+        return self._reaches(p)
 
     def _take_possession(self) -> None:
         able = [p for p in self.players if self._can_play(p)]
@@ -250,11 +316,23 @@ class Match:
             self.owner = None
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
-        self.owner = nearest.id
         if self.phase == "play":
+            if self.penalty_live and self.elapsed >= self.half_length:
+                self._end_half()  # this touch completes the penalty the half waited for
+                return
+            if nearest.id in self.offside:
+                self._offside(nearest)
+                return
+            self.offside = set()  # someone onside played it
+            self.penalty_live = False
+            if nearest.id != self.indirect:
+                self.indirect = None
             self.last_touch = nearest.team
+        self.owner = nearest.id
 
     def _may_kick(self, p: Player) -> bool:
+        if self.phase in ("free_kick", "penalty"):
+            return self.since_restart >= SET_PIECE_WAIT
         if self.phase != "kickoff":
             return True
         if self.since_restart >= KICKOFF_WAIT:
@@ -268,6 +346,10 @@ class Match:
         speed = max(0.0, min(command.speed, cap))
         angle = math.atan2(command.y - self.ball.y, command.x - self.ball.x)
         angle += self.rng.gauss(0, KICK_ERROR * speed)
+        self.offside = set() if self.phase in NO_OFFSIDE else self._offside_positions(p)
+        if self.phase == "free_kick" and self.restart_indirect:
+            self.indirect = p.id
+        self.penalty_live = self.phase == "penalty"
         self.ball.vx = speed * math.cos(loft) * math.cos(angle)
         self.ball.vy = speed * math.cos(loft) * math.sin(angle)
         self.ball.vz = speed * math.sin(loft)
@@ -280,9 +362,121 @@ class Match:
             self.phase, self.restart_team = "play", None
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:
+        return self._in_own_penalty_area(self.ball.x, self.ball.y, team)
+
+    def _in_own_penalty_area(self, x: float, y: float, team: int) -> bool:
         goal = -self.attack(team) * pitch.HALF_LENGTH
-        b = self.ball
-        return abs(b.x - goal) <= pitch.PENALTY_DEPTH and abs(b.y) <= pitch.PENALTY_HALF_WIDTH
+        return abs(x - goal) <= pitch.PENALTY_DEPTH and abs(y) <= pitch.PENALTY_HALF_WIDTH
+
+    # -- fouls, offside and cards -----------------------------------------------------------
+
+    def _judge_challenge(self) -> None:
+        """An opponent running into the ball carrier fouls it if it came from behind or
+        could not reach the ball (docs/decisions.md, section 8)."""
+        if self.phase != "play" or self.owner is None:
+            return
+        carrier = self.player(self.owner)
+        facing = math.cos(carrier.heading), math.sin(carrier.heading)
+        for q in self.players:
+            dx, dy = q.x - carrier.x, q.y - carrier.y
+            dist = math.hypot(dx, dy)
+            if q.team == carrier.team or dist == 0 or dist >= 2 * PLAYER_RADIUS:
+                continue
+            towards = -(q.vx * dx + q.vy * dy) / dist
+            behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
+            if towards > FOUL_SPEED and (behind or not self._reaches(q)):
+                self._foul(q, carrier)
+                return
+
+    def _foul(self, offender: Player, fouled: Player) -> None:
+        team = fouled.team
+        self._event("foul", team, offender.id, fouled=fouled.id)
+        goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
+        if goal <= GOAL_CHANCE and self._denies_goal(offender, fouled):
+            self._card(offender, red=True)
+        elif goal <= PROMISING_ATTACK:
+            self._card(offender)
+        if self.phase == "full_time":
+            return
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
+        if self._in_own_penalty_area(x, y, offender.team):
+            goal = -self.attack(offender.team) * pitch.HALF_LENGTH
+            spot = goal - math.copysign(pitch.PENALTY_MARK, goal)
+            self._restart("penalty", team, spot, 0.0, taker=fouled.id)
+        else:
+            self._restart("free_kick", team, x, y)
+
+    def _denies_goal(self, offender: Player, fouled: Player) -> bool:
+        """No outfield defender but the offender is nearer the goal line than the carrier."""
+        direction = self.attack(fouled.team)
+        return not any(
+            q.team == offender.team and q is not offender and q.position != "GK"
+            and q.x * direction > fouled.x * direction
+            for q in self.players
+        )
+
+    def _card(self, p: Player, red: bool = False) -> None:
+        if not red:
+            self.yellows[p.id] = self.yellows.get(p.id, 0) + 1
+            self._event("yellow", p.team, p.id)
+            red = self.yellows[p.id] == 2
+        if red:
+            self._event("red", p.team, p.id)
+            self._send_off(p)
+
+    def _send_off(self, p: Player) -> None:
+        self.players.remove(p)
+        self.recovering.pop(p.id, None)
+        self.pending = [(off, on) for off, on in self.pending if off != p.id]
+        if self.owner == p.id:
+            self.owner = None
+        team = [q for q in self.players if q.team == p.team]
+        if len(team) < FEWEST:
+            self.phase = "full_time"
+            self._event("full_time", None)
+        elif p.position == "GK":  # the teammate nearest its own goal goes in goal
+            goal = -self.attack(p.team) * pitch.HALF_LENGTH
+            keeper = min(team, key=lambda q: math.hypot(goal - q.x, q.y))
+            keeper.position, keeper.home = "GK", FORMATION[0][1]
+
+    def _offside_positions(self, kicker: Player) -> set[int]:
+        """The kicker's teammates in the opponents' half nearer their goal line than both
+        the ball and the second-last opponent."""
+        direction = self.attack(kicker.team)
+        opponents = sorted((q.x * direction for q in self.players if q.team != kicker.team), reverse=True)
+        line = max(0.0, self.ball.x * direction, opponents[1] if len(opponents) > 1 else -math.inf)
+        return {
+            q.id for q in self.players
+            if q.team == kicker.team and q is not kicker and q.x * direction > line
+        }  # fmt: skip
+
+    def _offside(self, p: Player) -> None:
+        team = 1 - p.team
+        self._event("offside", team, p.id)
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, p.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, p.y))
+        self._restart("free_kick", team, x, y, indirect=True)
+
+    # -- substitutions ----------------------------------------------------------------------
+
+    def _substitute(self) -> None:
+        """Make the substitutions asked for, now that play has stopped."""
+        for off, on in self.pending:
+            p, q = self.player(off), self.player(on)
+            if self.phase != "half_time" and self.window_at[p.team] != self.stoppage:
+                self.windows[p.team] += 1
+                self.window_at[p.team] = self.stoppage
+            self.substitutions[p.team] += 1
+            self.players[self.players.index(p)] = q
+            self.bench.remove(q)
+            q.x, q.y, q.vx, q.vy, q.heading = p.x, p.y, 0.0, 0.0, p.heading
+            q.position, q.home = p.position, p.home
+            self.commands[q.id] = Hold()
+            if self.taker == off:
+                self.taker = on
+            self._event("substitution", p.team, off=off, on=on)
+        self.pending = []
 
     # -- ball out of play, goals and restarts -----------------------------------------------
 
@@ -304,7 +498,8 @@ class Match:
         if line == "goal":
             end = 1 if x > 0 else -1
             attackers = 0 if self.attack(0) == end else 1
-            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT:
+            # no goal straight from an indirect free kick
+            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT and self.indirect is None:
                 self.score[attackers] += 1
                 self._event("goal", attackers, self._last_player(attackers))
                 self._kickoff(1 - attackers)
@@ -324,11 +519,19 @@ class Match:
         players = [p for p in self.players if p.team == team]
         return min(players, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y)).id
 
-    def _restart(self, kind: str, team: int, x: float, y: float) -> None:
+    def _restart(
+        self, kind: str, team: int, x: float, y: float, indirect: bool = False, taker: int | None = None
+    ) -> None:
         self.ball.place(x, y)
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
-        self._event(kind, team)
+        self.offside, self.indirect, self.penalty_live = set(), None, False
+        self.restart_indirect, self.taker = indirect, taker
+        self.stoppage += 1
+        if kind == "free_kick":
+            self._event(kind, team, indirect=indirect)
+        else:
+            self._event(kind, team, taker)
 
     def _kickoff(self, team: int, place_players: bool = False) -> None:
         self._restart("kickoff", team, 0.0, 0.0)
@@ -356,24 +559,50 @@ class Match:
             if p.x * side < 0:
                 p.x = 0.0
         self._keep_distance()
-        if formation:  # the kicking team's centre forward stands at the ball
-            taker = next(p for p in self.players if p.team == self.restart_team and p.position == "FW")
+        if formation:  # the kicking team's most advanced player stands at the ball
+            team = [p for p in self.players if p.team == self.restart_team]
+            taker = max(team, key=lambda p: p.home[0])
             side = -self.attack(taker.team)
             taker.x, taker.y = side * 0.6, 0.0
 
     def _keep_distance(self) -> None:
         """Opponents of the restarting team keep their distance from the ball."""
+        if self.phase == "penalty":
+            self._line_up_for_penalty()
+            return
         distance = RESTART_DISTANCE[self.phase]
         for p in self.players:
             if p.team == self.restart_team:
                 continue
-            dx, dy = p.x - self.ball.x, p.y - self.ball.y
-            dist = math.hypot(dx, dy)
-            if dist < distance:
-                if dist == 0:
-                    dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
-                p.x = self.ball.x + dx / dist * distance
-                p.y = self.ball.y + dy / dist * distance
+            self._keep_away(p, distance)
+
+    def _keep_away(self, p: Player, distance: float) -> None:
+        dx, dy = p.x - self.ball.x, p.y - self.ball.y
+        dist = math.hypot(dx, dy)
+        if dist < distance:
+            if dist == 0:
+                dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
+            p.x = self.ball.x + dx / dist * distance
+            p.y = self.ball.y + dy / dist * distance
+
+    def _line_up_for_penalty(self) -> None:
+        """The defending goalkeeper on its goal line; everyone else but the taker outside the
+        penalty area and arc, and behind the penalty mark."""
+        goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
+        out = -math.copysign(1.0, goal)  # from the goal line towards halfway
+        for p in self.players:
+            if p.id == self.taker:
+                continue
+            if p.team != self.restart_team and p.position == "GK":
+                p.x = goal + out * PLAYER_RADIUS
+                p.y = max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, p.y))
+                p.vx = p.vy = 0.0
+                continue
+            if abs(p.x - goal) <= pitch.PENALTY_DEPTH and abs(p.y) <= pitch.PENALTY_HALF_WIDTH:
+                p.x = goal + out * (pitch.PENALTY_DEPTH + 1.0)
+            if (p.x - self.ball.x) * out < 0:
+                p.x = self.ball.x  # level with the mark at the nearest
+            self._keep_away(p, RESTART_DISTANCE["penalty"])
 
     def _end_half(self) -> None:
         self.owner = None
@@ -384,8 +613,9 @@ class Match:
             self.phase = "full_time"
             self._event("full_time", None)
 
-    def _event(self, kind: str, team: int | None, player: int | None = None) -> None:
+    def _event(self, kind: str, team: int | None, player: int | None = None, **details) -> None:
         event = {"type": "event", "kind": kind, "t": round(self.t, 3), "team": team}
         if player is not None:
             event["player"] = player
+        event.update(details)
         self.events.append(event)

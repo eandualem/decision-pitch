@@ -205,6 +205,40 @@ def test_a_match_with_a_model_on_every_player_runs_to_full_time():
     assert decided == set(range(1, 23))
 
 
+def test_a_player_sent_off_is_no_longer_asked():
+    async def go():
+        match = in_play(Match())
+        squad = Players(match, {7: Fake("hold")})
+        match._card(match.player(7), red=True)
+        await asyncio.wait_for(squad.run(), 1.0)  # its loop has ended
+
+    asyncio.run(go())
+
+
+def test_a_substitute_with_a_model_is_named_and_asked_once_it_comes_on():
+    match = Match()
+    squad = Players(match, {23: Fake("hold", delay=0.01, name="Sub")})
+    assert match.substitute(10, 23) is None  # made at the kick-off, a stoppage
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+        if message["type"] == "decision":
+            match.phase = "full_time"
+
+    asyncio.run(asyncio.wait_for(run(match, send, squad), 5.0))
+    [substitution] = [m for m in sent if m.get("kind") == "substitution"]
+    assert (substitution["off"], substitution["on"], substitution["model"]) == (10, 23, "Sub")
+    assert {m["player"] for m in sent if m["type"] == "decision"} == {23}
+
+
+def test_a_penalty_taker_is_told_it_takes_it():
+    match = Match()
+    match._restart("penalty", 0, 41.5, 0.0, taker=10)
+    text = actions.question(match, match.player(10), "hold", None).state
+    assert "Harbour take a penalty, you take it." in text
+
+
 # -- which models can play ----------------------------------------------------------------------
 
 

@@ -234,3 +234,54 @@ their notices.
 | Project | Licence | Studied or reused | Where |
 |---|---|---|---|
 | [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/`, copied from commit 770bb4a |
+
+## 8. The laws: fouls, offside, cards and substitutions
+
+**Choice.** The remaining laws are judged by the engine from what it already
+simulates, by fixed rules that are the same for both teams, so each call can be
+set up in a test and checked. Every foul stops play: there is no advantage.
+
+- **Fouls.** Only a challenge on the player with the ball is judged. An
+  opponent who runs into the ball carrier (their discs touch while it moves
+  towards the carrier faster than 2 m/s) commits a foul if it came from behind
+  the carrier, or if it could not reach the ball. An opponent who reaches the
+  ball from the front or side wins it fairly.
+- **Free kicks and penalties.** The fouled team takes a free kick where the
+  foul happened, after a pause of 1.5 s, with opponents held 9.15 m from the
+  ball; within 32 m of its goal, the defending team's three nearest outfield
+  players line up as a wall 9.15 m away. A foul in the offender's own penalty
+  area is a penalty: the fouled player takes it from the penalty mark, the
+  defending goalkeeper stays on its goal line and everyone else waits outside
+  the penalty area and arc, behind the mark, until the kick. A half does not
+  end until a penalty awarded in it has been taken and its ball has been
+  played, gone out or come to rest.
+- **Offside.** When a player kicks the ball, every teammate in the opponents'
+  half that is nearer their goal line than both the ball and the second-last
+  opponent is in an offside position. If one of them is the next player to
+  reach the ball, it is offside: the opponents take an indirect free kick
+  there, from which a goal cannot be scored directly. Anyone else reaching the
+  ball first ends it. No offside is judged from a throw-in, goal kick or
+  corner. Interfering with an opponent without playing the ball is not judged.
+- **Cards.** A foul that stops a promising attack (the carrier within 27 m of
+  the goal it attacks) is a yellow card. A foul that denies an obvious
+  goal-scoring opportunity (the carrier within 25 m of goal with no outfield
+  defender other than the offender nearer the goal line) is a red card. A
+  second yellow is a red. A sent-off player leaves the pitch; if it was the
+  goalkeeper, the teammate nearest its own goal goes in goal. A team reduced
+  below seven players ends the match.
+- **Substitutions.** Each team has seven substitutes on the bench and may make
+  up to five substitutions in at most three stoppages, with half time not
+  counted. A substitution is requested at any time and made at the next
+  stoppage (any restart or half time): the incoming player takes the outgoing
+  player's place and position, and is played by the built-in bot until a
+  manager chooses its model. A substituted or sent-off player cannot return,
+  and a sent-off player cannot be replaced.
+
+**Why.** Geometry the engine already has (positions, headings, speeds and who
+has the ball) is enough for calls that look right on screen and that a test can
+reproduce exactly. A random foul chance would make each call harder to test
+and to explain.
+
+**Rejected.** A referee model that judges fouls from the snapshot stream: it
+would add a model call to every challenge and make the laws depend on a
+model's latency, which is the variable the game is about.

@@ -75,11 +75,13 @@ while it waits.
 | Two halves and half time | Implemented, with a change of ends. No added time |
 | Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
 | Playing the ball twice at a restart | Not implemented yet |
-| Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick or corner) | Not implemented yet: such a goal currently counts |
-| Fouls, free kicks and penalties | Not implemented yet |
-| Offside | Not implemented yet |
-| Yellow and red cards | Not implemented yet |
-| Substitutions | Not implemented yet |
+| Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick, corner or direct free kick) | Not implemented yet: such a goal currently counts. A goal straight from an indirect free kick does not count |
+| Fouls | Implemented for challenges on the player with the ball: running into it from behind, or without being able to reach the ball. Handball and fouls off the ball are not implemented yet |
+| Free kicks and penalties | Implemented. Opponents stay 9.15 m away, with a wall near goal; at a penalty only the taker and the goalkeeper on its line stay in the area and arc |
+| Advantage | Not implemented: every foul stops play |
+| Offside | Implemented, judged when a teammate kicks the ball, with an indirect free kick. Interfering with an opponent without playing the ball is not judged yet |
+| Yellow and red cards | Implemented: a yellow for stopping a promising attack, a red for denying an obvious goal-scoring opportunity or a second yellow. A sent-off player leaves the match; a team with fewer than seven ends it |
+| Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage. The managers that ask for them are not built yet |
 
 ## Test it
 
