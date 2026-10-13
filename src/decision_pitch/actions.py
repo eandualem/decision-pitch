@@ -2,8 +2,10 @@
 
 A model answers with one of ACTIONS. The player keeps carrying the action out, turned
 into an engine command on every step by the rules below, until the model's next answer
-arrives. The rules are the same for both teams, and the state is told from the player's
-own side of the pitch, so a team attacking the other way sees the same text."""
+arrives. Each action is carried out as the moment allows, so a player whose model gives
+the same answer again and again still plays sensible football. The rules are the same for
+both teams, and the state is told from the player's own side of the pitch, so a team
+attacking the other way sees the same text."""
 
 from __future__ import annotations
 
@@ -15,8 +17,10 @@ from decision_pitch.bots import (
     DRIBBLE_SPEED,
     JOG,
     PRESSURE,
+    SHOOTING_RANGE,
     _goal_line_spot,
     _home,
+    _on_the_ball,
     _pass_or_clear,
     _press_spot,
     _space,
@@ -24,6 +28,7 @@ from decision_pitch.bots import (
     _taker,
     _wall_spot,
 )
+from decision_pitch.bots import command as bot_command
 from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
 from decision_pitch.physics import Player
 
@@ -34,16 +39,15 @@ ACTIONS = {
     "mark": "stay goal-side of the nearest opponent",
     "dribble": "run with the ball towards their goal",
     "pass": "pass to your best-placed open teammate, or clear if none is open",
-    "shoot": "shoot at their goal",
+    "shoot": "shoot at their goal, from in range",
     "clear": "kick the ball long upfield",
 }
 KICKS = ("pass", "shoot", "clear")  # spent once the ball is kicked
 INSTRUCTIONS = (
     "Choose this soccer player's next action. It is carried out until your next answer "
     "arrives, and the match does not wait for you. Dribble, pass, shoot and clear need the "
-    "ball: without it, you run to the ball first."
+    "ball: without it, you go for it if you are nearest."
 )
-RESTART_WAIT = 8.0  # s a restart may wait for its taker before the taker's bot takes it
 NEARBY = 3  # teammates and opponents described, nearest first
 POSITIONS = {"GK": "goalkeeper", "DF": "defender", "MF": "midfielder", "FW": "forward"}
 RESTART_NAMES = {"kickoff": "kick off", "throw_in": "take a throw-in", "goal_kick": "take a goal kick",
@@ -55,17 +59,23 @@ def command(m: Match, p: Player, action: str) -> Command:
     """The engine command that carries out `action` for `p` now."""
     if m.phase == "half_time":
         return Hold()
+    direction = m.attack(p.team)
+    if action == "shoot" and math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y) >= SHOOTING_RANGE:
+        action = "dribble"  # into range first
     if m.phase in RESTARTS:
         taker = m.restart_team == p.team and p.id == _taker(m, p.team).id
-        if taker and m.since_restart >= RESTART_WAIT:
-            return _take_restart(m, p)  # so a model that never takes it cannot stall the match
-        if taker and action in ("press", "dribble"):
-            action = "pass"  # the ball is not carried at a restart
-        elif not taker and (wall := _wall_spot(m, p)):
+        if taker and action not in KICKS:
+            return _take_restart(m, p)  # the ball is not carried, and nobody else can play it
+        if not taker and (wall := _wall_spot(m, p)):
             return MoveTo(*wall, JOG)  # the wall lines up whatever the action
         elif not taker and action in ("press", "dribble", *KICKS):
             action = "hold"  # only the taker goes to the ball
-    direction = m.attack(p.team)
+    if m.owner == p.id and action in ("press", "hold", "support", "mark"):
+        return _on_the_ball(m, p)  # it has the ball: it keeps playing it
+    if m.phase == "play" and m.owner != p.id and action in ("dribble", *KICKS):
+        return bot_command(m, p)  # the nearest goes for the ball; the others keep their places
+    if action == "press" and m.owner is not None and m.player(m.owner).team == p.team:
+        action = "support"  # a teammate has it
     if action == "hold":
         if p.position == "GK":
             return MoveTo(*_goal_line_spot(m, p))
@@ -80,7 +90,7 @@ def command(m: Match, p: Player, action: str) -> Command:
         goal_x = -direction * pitch.HALF_LENGTH
         dist = math.hypot(goal_x - q.x, q.y) or 1.0
         return MoveTo(q.x + (goal_x - q.x) / dist * 2, q.y - q.y / dist * 2)
-    if action == "dribble" and m.owner == p.id:
+    if action == "dribble":
         return MoveTo(direction * pitch.HALF_LENGTH, p.y * 0.8, DRIBBLE_SPEED)
     if action == "pass":
         return _pass_or_clear(m, p)
@@ -88,10 +98,7 @@ def command(m: Match, p: Player, action: str) -> Command:
         return KickTo(direction * pitch.HALF_LENGTH, _far_post(m, p), 24.0, 0.06)
     if action == "clear":
         return KickTo(p.x + direction * 40, p.y * 0.5, 26.0, 0.5)
-    # press, and dribble without the ball
-    if m.owner == p.id:
-        return Hold()
-    return MoveTo(*_press_spot(m, p))
+    return MoveTo(*_press_spot(m, p))  # press, without the ball
 
 
 def _far_post(m: Match, p: Player) -> float:
