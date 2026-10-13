@@ -257,9 +257,10 @@ configured waits for the maintainer's go-ahead with its expected cost.
   Substitutions, like for like at the same position: a player whose model
   failed three of its last five answers is replaced at once; from the 60th
   minute, a player on a yellow card is replaced; and at its first
-  consultation after each of the 60th, 70th and 80th minutes, the starting
+  consultation after each of the 55th, 65th and 75th minutes, the starting
   outfield player with the slowest answers (the forwards first when all
-  answer equally) is replaced. The bot is chosen only when no model is
+  answer equally) is replaced, early enough that a stoppage usually follows to
+  make it in. The bot is chosen only when no model is
   offered, or every model is expected to take longer than 1.5 s. Instructions: from the 70th
   minute, a losing team's forwards are told to shoot when they can and a
   winning team's defenders to hold their shape and clear danger.

@@ -18,7 +18,9 @@ PRESSURE = 4.0  # m: an opponent this close makes the player pass
 DRIBBLE_SPEED = 6.0
 JOG = 5.0
 ROUND_WIDE = 2.0  # m to the side that a challenger from behind passes the carrier at
-ROUND_LEAD = 1.0  # s of the carrier's run it aims ahead by, once out wide
+ROUND_AHEAD = 1.5  # m ahead of the carrier it aims for once out wide, so it gets in front
+ROUND_LEAD = 1.0  # s of the carrier's run it aims further ahead by
+ROUND_INTERCEPT = 2.0  # s ahead, at most, that it aims to meet the ball once in front
 ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the ball
 
 
@@ -69,12 +71,25 @@ def _press_spot(m: Match, p: Player) -> tuple[float, float]:
     dx, dy = p.x - c.x, p.y - c.y
     if dx * fx + dy * fy >= ROUND_UNTIL * math.hypot(dx, dy):
         # into the ball's path, where it can be reached before the carrier's body
-        lead = min(ROUND_LEAD, math.hypot(b.x - p.x, b.y - p.y) / TOP_SPEED)
+        lead = _intercept(b.x - p.x, b.y - p.y, b.vx, b.vy, TOP_SPEED)
         return b.x + b.vx * lead, b.y + b.vy * lead
     across = fx * dy - fy * dx  # how far p is to the carrier's left
     side = 1.0 if across >= 0 else -1.0
-    lead = ROUND_LEAD * min(1.0, abs(across) / ROUND_WIDE)  # run on once out wide
-    return c.x - fy * side * ROUND_WIDE + c.vx * lead, c.y + fx * side * ROUND_WIDE + c.vy * lead
+    on = min(1.0, abs(across) / ROUND_WIDE)  # run on past the carrier once out wide
+    ahead_x, ahead_y = fx * ROUND_AHEAD + c.vx * ROUND_LEAD, fy * ROUND_AHEAD + c.vy * ROUND_LEAD
+    return c.x - fy * side * ROUND_WIDE + ahead_x * on, c.y + fx * side * ROUND_WIDE + ahead_y * on
+
+
+def _intercept(dx: float, dy: float, vx: float, vy: float, speed: float) -> float:
+    """How soon a runner at `speed` can meet a point (dx, dy) away moving at (vx, vy), in
+    seconds, at most ROUND_INTERCEPT."""
+    a = vx * vx + vy * vy - speed * speed
+    b = 2 * (dx * vx + dy * vy)
+    c = dx * dx + dy * dy
+    if a >= 0:
+        return ROUND_INTERCEPT
+    t = (-b - math.sqrt(b * b - 4 * a * c)) / (2 * a)
+    return min(ROUND_INTERCEPT, max(0.0, t))
 
 
 def _on_the_ball(m: Match, p: Player) -> Command:

@@ -107,7 +107,7 @@ class BuiltIn:
     """Picks models by their stated answer times and substitutes by simple rules."""
 
     name = "Built-in"
-    SCHEDULE = (60, 70, 80)  # minutes at which the slowest outfield player is replaced
+    SCHEDULE = (55, 65, 75)  # minutes at which the slowest outfield player is replaced
     BOOKED_FROM = 60  # minute from which a player on a yellow card is replaced
     FAILING = 3  # failed answers in the last five that get a player replaced
     LATE = 70  # minute from which the losing or winning team is told how to play
