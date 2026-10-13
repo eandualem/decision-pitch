@@ -51,7 +51,8 @@ function setup(protocol = 'http:') {
     setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout() {},
     WebSocket: class {
       constructor(url) { this.url = url; sockets.push(this); }
-      close() { this.onclose(); }
+      // Real close callbacks are asynchronous and can be deferred while frozen.
+      close() { this.closeCalls = (this.closeCalls ?? 0) + 1; }
     },
   };
   vm.runInNewContext(source, context);
@@ -115,4 +116,47 @@ test('secure transport, reconnect and back-forward cache lifecycle', () => {
   app.handlers.pageshow({ persisted: true });
   assert.equal(app.sockets.length, 3);
   assert.equal(typeof app.loop(), 'function');
+});
+
+test('callbacks deferred from a superseded socket cannot affect the restored match', () => {
+  const app = setup();
+  app.send(hello);
+  const original = app.sockets[0];
+  app.handlers.pagehide();
+  app.handlers.pageshow({ persisted: true });
+  const restored = app.sockets[1];
+  app.send(hello);
+  app.send(snapshot(9));
+  const callsBefore = app.calls.length;
+  const statusBefore = app.status.textContent;
+
+  original.onopen();
+  original.onmessage({ data: JSON.stringify(hello) });
+  original.onmessage({ data: JSON.stringify(snapshot(99)) });
+  original.onerror();
+  original.onclose();
+
+  assert.equal(app.calls.length, callsBefore, 'old messages cannot reset or feed modules');
+  assert.equal(app.status.textContent, statusBefore);
+  assert.equal(restored.closeCalls ?? 0, 0, 'old errors cannot close the new socket');
+  assert.equal(app.timers.length, 0, 'old close cannot schedule another match');
+  assert.equal(app.sockets.length, 2);
+  app.tick(16);
+  assert.equal(app.calls.findLast(([name]) => name === 'actors.update')[2].t, 9);
+
+  // Current connection failures must still recover normally.
+  restored.onclose();
+  assert.equal(app.timers.length, 1);
+  app.timers[0]();
+  assert.equal(app.sockets.length, 3);
+});
+
+test('a previously queued reconnect cannot replace the restored socket', () => {
+  const app = setup();
+  app.sockets[0].onclose();
+  const queuedRetry = app.timers[0];
+  app.handlers.pagehide();
+  app.handlers.pageshow({ persisted: true });
+  queuedRetry();
+  assert.equal(app.sockets.length, 2);
 });

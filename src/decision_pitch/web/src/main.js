@@ -72,15 +72,22 @@ function receive(message) {
 function connect() {
   if (stopped) return;
   status.textContent = 'Connecting to match…';
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  socket.onopen = () => { status.textContent = 'Waiting for match…'; };
-  socket.onmessage = (event) => { receive(JSON.parse(event.data)); };
-  socket.onclose = () => {
-    if (stopped) return;
-    status.textContent = 'Connection lost · reconnecting…';
-    reconnectTimer = setTimeout(connect, 1000);
+  const connection = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  socket = connection;
+  // A frozen page can deliver an old socket's callbacks after pageshow reconnects.
+  const isCurrent = () => !stopped && socket === connection;
+  connection.onopen = () => {
+    if (isCurrent()) status.textContent = 'Waiting for match…';
   };
-  socket.onerror = () => { socket.close(); };
+  connection.onmessage = (event) => {
+    if (isCurrent()) receive(JSON.parse(event.data));
+  };
+  connection.onclose = () => {
+    if (!isCurrent()) return;
+    status.textContent = 'Connection lost · reconnecting…';
+    reconnectTimer = setTimeout(() => { if (isCurrent()) connect(); }, 1000);
+  };
+  connection.onerror = () => { if (isCurrent()) connection.close(); };
 }
 
 function resize() {
