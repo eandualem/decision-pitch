@@ -3,19 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101d21">
 <title>Decision Pitch</title>
-<style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1a12; }
-  body { -webkit-user-select: none; user-select: none; font: 14px system-ui, sans-serif; }
-  #game { position: fixed; inset: 0; }
-  #game canvas { display: block; width: 100%; height: 100%; }
-  #status { position: fixed; left: 12px; bottom: 12px; color: #e8f0ea; opacity: 0.8; }
-</style>
+<link rel="stylesheet" href="./src/styles.css">
 <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
 </head>
 <body>
-<div id="game"></div>
-<div id="status">Connecting…</div>
+<div id="game" aria-label="Live three-dimensional soccer match"></div>
+<div id="status" role="status">Connecting…</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
