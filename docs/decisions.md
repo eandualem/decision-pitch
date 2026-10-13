@@ -224,6 +224,33 @@ The graphic elements are built by a backbone swarm of Codex `gpt-6-astra`
 members, against the snapshot format the engine publishes, after its issue is
 written. Its output goes through the usual review and merge rules.
 
+### Procedural broadcast presentation
+
+The page is split into stadium, players (including the ball), camera, moments
+and overlay ES modules, with one entry point owning the WebSocket and render
+loop. Each module disposes its scene objects, textures and listeners when a new
+hello resets the match. Match coordinates map to `(x, z, -y)` in the scene.
+
+The stadium uses striped grass, regulation pitch markings, netted goals,
+stands and floodlights built from shared geometry and materials. Player bodies
+are articulated low-poly meshes; shirt numbers are drawn into canvas textures
+using the system font. Keepers use the supplied keeper colour. Running and
+kicking poses follow snapshot speed and action; celebrations follow goal events.
+The ball is slightly enlarged for broadcast readability, with a ground shadow.
+No additional external assets, fonts or three.js addons are needed.
+
+Rendering interpolates the last two snapshots one snapshot behind the server,
+with reusable lookup data rather than allocating maps during every frame.
+Players absent from the current snapshot are hidden. A damped broadcast camera
+tracks play and briefly frames the scorer after a goal. Score, clock and event
+moments remain visible; the optional decision panel shows model answers and
+latencies, manager instructions and substitutions. It opens with O or a button.
+The page accepts the protocol's planned events without inventing match state.
+
+This keeps the engine authoritative and the page usable offline, while shared
+geometry, capped pixel density and one shadow-casting light limit GPU work for
+smooth laptop recording. It replaces the scaffold's cylinders and fixed camera.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules
