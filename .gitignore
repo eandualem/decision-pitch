@@ -1,0 +1,22 @@
+# Local agent state stays out of the repository
+.backbone/memory/
+.backbone/reviews/
+.agents/
+.claude/skills/
+.claude/settings.local.json
+.codex/
+# Secrets come from the environment only
+.env
+.env.*
+!.env.example
+# Local model weights, caches and match recordings
+models/
+recordings/
+# Build and runtime output
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
