@@ -75,7 +75,11 @@ export function createMoments(scene, teams) {
         root.append(node);
         markers.push({ node, player: event.player, until: now + 7, position: lastPositions.get(event.player)?.clone() ?? null });
       }
-      if (now < bannerUntil) {
+      if (event.kind === 'goal' || event.kind === 'full_time') {
+        // Decisive moments must match the live camera and supersede old play.
+        pending.length = 0;
+        show(event, now);
+      } else if (now < bannerUntil) {
         // Keep paired offence/restart and second-yellow/red events readable.
         pending.push(event);
         if (pending.length > 8) pending.shift();
