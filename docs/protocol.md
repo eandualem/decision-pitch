@@ -86,15 +86,19 @@ restart (`null` for `half_time` and `full_time`). A `goal` adds the scorer as
 `substitution` will add `"off"` and `"on"` player ids and the incoming
 player's `"model"`.
 
-### `decision` (planned)
+### `decision`
 
-One per model answer, for the overlay.
+One per model answer, for the overlay. Players played by the built-in bot
+send none.
 
 ```json
 {"type": "decision", "player": 7, "model": "Laya", "action": "pass", "ms": 182}
 ```
 
-A failed answer has `"error"` in place of `"action"`.
+A failed answer has `"error"` in place of `"action"`. `ms` is the time from
+asking to the answer, including any wait for a local model's turn. `action`
+is one of `press`, `hold`, `support`, `mark`, `dribble`, `pass`, `shoot` and
+`clear` (see `docs/decisions.md`, section 4).
 
 ### `manager` (planned)
 

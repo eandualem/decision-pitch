@@ -126,6 +126,70 @@ story the game tells.
 
 **Rejected.** A shared decision tick for all 22 players.
 
+### The action set and the state text
+
+A model chooses one of eight actions, each described to it in a few words:
+
+| Action | What the player does until the next answer |
+|---|---|
+| `press` | runs at the ball to win it or collect it |
+| `hold` | keeps its place in the team's shape (a goalkeeper guards its goal) |
+| `support` | moves into space ahead to offer a pass |
+| `mark` | stays goal-side of the nearest opponent |
+| `dribble` | runs with the ball towards the opponents' goal |
+| `pass` | passes to the best-placed open teammate, or clears if none is open |
+| `shoot` | shoots inside the post further from the goalkeeper |
+| `clear` | kicks the ball long upfield |
+
+Dribble, pass, shoot and clear need the ball: without it the player runs to
+the ball first. The action is turned into an engine command on every physics
+step, with the built-in bot's rules for where "its place" is and whom to pass
+to, so a player keeps acting sensibly while its next answer is on the way.
+Once a pass, shot or clearance is made, the player holds its place until the
+next answer. At a restart only the taker goes to the ball; if the taker has
+not taken it after 8 s, its bot takes it, so a model that never chooses a
+kick cannot stall the match.
+
+The state is short, because a local model answers a shorter question faster
+(Laya: about 0.2 s for 300 characters, 0.5 s for 700). It is told from the
+player's own side: "ahead" is towards the goal it attacks and "left" is as it
+faces that goal, so both teams read the same text for the same situation. For
+example:
+
+> You are Brook (8), a Harbour midfielder. 05:00, 1st half, Harbour 0-0 Ridge.
+> Play is on. You: 9 m into your half, 5 m left of centre, 2 m/s, doing
+> support; their goal 62 m. Ball: 2 m behind 8 m right, loose, 12 m/s.
+> Teammates: Finch 3 m behind 9 m right; Pike 9 m ahead 3 m right; Ash 2 m
+> ahead 13 m left open. Opponents: Drake 9 m right; Cliff 10 m ahead; Frost
+> 11 m behind 1 m right. Manager: Stay wide. Your answers take 2.0 s.
+
+The manager line appears once managers can give instructions; the answer time
+appears after the player's first answer.
+
+### Local models answer one question at a time
+
+Measured on the development machine (a 10-core Apple Silicon laptop), one Laya
+server answering 22 players who all ask at once managed about 2 answers a
+second, with answers queued past the 5 s timeout. Given one question at a
+time, the same server answers about 4 a second; two servers about 7.6; four
+no more than two. So a local model's questions are queued in the order they
+are asked and sent one at a time, and each team that chooses a local model
+gets its own server, so neither team's players wait behind the other's. A
+player's answer time includes its wait in that queue, because that is how long
+it waits for its decision. With Laya on all 22 players, each player decided
+about every 2 s (1,274 answers in a match of two 60 s halves); in a short
+match against Jev, Jev's players answered in a median 0.33 s and Laya's in
+1.0 s.
+
+### Choosing models and checking keys
+
+For now a whole team plays one model, chosen with `--home` and `--away`
+(`bot` by default); the managers will choose a model per position. Keys are
+read from the environment, or from `.env` in the current folder as Decision
+Arena reads them; a variable set in the shell wins. At startup every API
+model whose key is set is asked one short question, and one that does not
+answer is reported with the key to check and is not offered.
+
 ## 5. Managers
 
 **Choice.** A manager interface with two implementations:
@@ -169,4 +233,4 @@ their notices.
 
 | Project | Licence | Studied or reused | Where |
 |---|---|---|---|
-| [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/` (once copied) |
+| [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/`, copied from commit 770bb4a |
