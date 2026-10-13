@@ -223,6 +223,18 @@ def test_startup_names_the_key_to_check_when_a_model_does_not_answer(monkeypatch
     assert "did not answer" in reason and "check TYPESAFE_API_KEY" in reason
 
 
+def test_a_kick_answer_survives_the_second_half_kick_off():
+    match = Match()
+    p = next(q for q in match.players if q.team == 1 and q.position == "FW")
+    squad = Players(match, {p.id: Fake()})
+    squad.seats[p.id].action = "pass"
+    squad.play()
+    match.period = 2
+    match._kickoff(1, place_players=True)  # every command is reset to hold
+    squad.play()
+    assert squad.seats[p.id].action == "pass"
+
+
 def test_an_error_that_could_carry_a_key_is_named_by_its_type_only():
     async def leaky(question):
         raise httpx.LocalProtocolError(f"Illegal header value b'Bearer {KEY}\\n'")

@@ -86,9 +86,11 @@ class Players:
             if seat is None:
                 m.command(p.id, bots.command(m, p))
                 continue
-            # The engine replaces a kick command once the kick is made. If no answer has
-            # arrived since that command was given, the kick was this action: it is done.
-            kicked = seat.command is not None and m.commands[p.id] is not seat.command
+            # Once the kick is made, the engine replaces the kick command and the kicker
+            # recovers. If no answer has arrived since that command was given, the kick was
+            # this action: it is done.
+            replaced = seat.command is not None and m.commands[p.id] is not seat.command
+            kicked = replaced and p.id in m.recovering
             if kicked and seat.action in actions.KICKS and seat.answers == seat.commanded:
                 seat.action = "hold"
             seat.command, seat.commanded = actions.command(m, p, seat.action), seat.answers
