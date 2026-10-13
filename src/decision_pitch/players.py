@@ -112,8 +112,8 @@ class Players:
     async def _ask(self, player_id: int) -> None:
         m, seat = self.match, self.seats[player_id]
         p = m.player(player_id)
-        while m.phase != "full_time":
-            if m.phase == "half_time":
+        while m.phase != "full_time" and (p in m.players or p in m.bench):  # until it leaves
+            if m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
             question = actions.question(m, p, seat.action, seat.answer, seat.instruction)

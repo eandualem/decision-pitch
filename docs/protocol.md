@@ -38,9 +38,10 @@ Sent once when the page connects.
 }
 ```
 
-`teams` has the two teams, home (`team` 0) first. `id` is unique across both
-teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the player's decision
-model, or `null` for the built-in bot.
+`teams` has the two teams, home (`team` 0) first, each with the eleven who
+start in `players` and its substitutes in `bench`, in the same shape. `id` is
+unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
+player's decision model, or `null` for the built-in bot.
 
 ### `snapshot`
 
@@ -63,12 +64,12 @@ The state of play, about 30 times a second.
 
 - `t`: match seconds since kick-off; `period`: 1 or 2.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
-  `half_time` or `full_time`; `free_kick` and `penalty` are planned.
+  `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
 - `action`: the engine command the player is carrying out: `hold`, `move` or
   `kick`. The decision model's own choice is in `decision` messages.
 - `players`: only players on the pitch; a substituted or sent-off player
-  disappears from it.
+  disappears from it, and a substitute appears in it once it comes on.
 
 ### `event`
 
@@ -78,13 +79,26 @@ A moment the page shows, sent when it happens.
 {"type": "event", "kind": "goal", "t": 734.2, "team": 0, "player": 9}
 ```
 
-`kind` is one of `goal`, `throw_in`, `goal_kick`, `corner`, `half_time` or
-`full_time`; `foul`, `free_kick`, `penalty`, `offside`, `yellow`, `red` and
-`substitution` are planned. `team` is the team that scored or takes the
-restart (`null` for `half_time` and `full_time`). A `goal` adds the scorer as
-`player`: for now, the scoring team's player nearest the ball. A
-`substitution` will add `"off"` and `"on"` player ids and the incoming
-player's `"model"`.
+`kind` is one of the following. `team` is the team that scored or takes the
+restart, unless the list says otherwise, and is `null` for `half_time` and
+`full_time`.
+
+| `kind` | Extra fields |
+|---|---|
+| `goal` | `player`: the scorer; for now, the scoring team's player nearest the ball |
+| `throw_in`, `goal_kick`, `corner` | none |
+| `free_kick` | `indirect`: `true` after offside, when a goal cannot be scored from it directly |
+| `penalty` | `player`: the taker |
+| `foul` | `player`: the offender; `fouled`: the player fouled. `team` is the fouled player's team |
+| `offside` | `player`: the player caught offside. `team` is the defending team |
+| `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
+| `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
+| `half_time`, `full_time` | none |
+
+A foul is followed by any card it earns, then the `free_kick` or `penalty`; an
+offside by its `free_kick`. A second yellow card sends `yellow` then `red`. A
+sent-off player leaves `players`; if it was the goalkeeper, a teammate takes
+over in goal without an event.
 
 ### `decision`
 

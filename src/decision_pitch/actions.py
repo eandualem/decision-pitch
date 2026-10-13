@@ -19,7 +19,9 @@ from decision_pitch.bots import (
     _home,
     _pass_or_clear,
     _space,
+    _take_restart,
     _taker,
+    _wall_spot,
 )
 from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
 from decision_pitch.physics import Player
@@ -44,7 +46,8 @@ RESTART_WAIT = 8.0  # s a restart may wait for its taker before the taker's bot 
 NEARBY = 3  # teammates and opponents described, nearest first
 POSITIONS = {"GK": "goalkeeper", "DF": "defender", "MF": "midfielder", "FW": "forward"}
 RESTART_NAMES = {"kickoff": "kick off", "throw_in": "take a throw-in", "goal_kick": "take a goal kick",
-                 "corner": "take a corner"}  # fmt: skip
+                 "corner": "take a corner", "free_kick": "take a free kick",
+                 "penalty": "take a penalty"}  # fmt: skip
 
 
 def command(m: Match, p: Player, action: str) -> Command:
@@ -54,9 +57,11 @@ def command(m: Match, p: Player, action: str) -> Command:
     if m.phase in RESTARTS:
         taker = m.restart_team == p.team and p.id == _taker(m, p.team).id
         if taker and m.since_restart >= RESTART_WAIT:
-            return _pass_or_clear(m, p)  # so a model that never takes it cannot stall the match
+            return _take_restart(m, p)  # so a model that never takes it cannot stall the match
         if taker and action in ("press", "dribble"):
             action = "pass"  # the ball is not carried at a restart
+        elif not taker and (wall := _wall_spot(m, p)):
+            return MoveTo(*wall, JOG)  # the wall lines up whatever the action
         elif not taker and action in ("press", "dribble", *KICKS):
             action = "hold"  # only the taker goes to the ball
     direction = m.attack(p.team)

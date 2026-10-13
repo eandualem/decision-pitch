@@ -10,6 +10,10 @@ from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
 from decision_pitch.physics import ROLLING, Player
 
 SHOOTING_RANGE = 24.0  # m from goal
+FREE_KICK_RANGE = 30.0  # m from goal within which a direct free kick is shot
+WALL = 3  # players in a defensive wall
+WALL_RANGE = 32.0  # m from goal within which a free kick gets a wall
+WALL_DISTANCE = 9.5  # m from the ball, just beyond the 9.15 the laws require
 PRESSURE = 4.0  # m: an opponent this close makes the player pass
 DRIBBLE_SPEED = 6.0
 JOG = 5.0
@@ -34,8 +38,9 @@ def command(m: Match, p: Player) -> Command:
         return Hold()
     if m.phase in RESTARTS:
         if m.restart_team == p.team and p.id == _taker(m, p.team).id:
-            return _pass_or_clear(m, p)
-        return MoveTo(*_home(m, p), JOG)
+            return _take_restart(m, p)
+        wall = _wall_spot(m, p)
+        return MoveTo(*(wall or _home(m, p)), JOG)
     if m.owner == p.id:
         return _on_the_ball(m, p)
     if m.owner is not None and m.player(m.owner).team == p.team:
@@ -54,11 +59,46 @@ def _on_the_ball(m: Match, p: Player) -> Command:
     direction = m.attack(p.team)
     goal_x = direction * pitch.HALF_LENGTH
     if p.position != "GK" and math.hypot(goal_x - p.x, p.y) < SHOOTING_RANGE:
-        aim = m.rng.uniform(-pitch.GOAL_WIDTH / 2 + 0.6, pitch.GOAL_WIDTH / 2 - 0.6)
-        return KickTo(goal_x, aim, 24.0, 0.06)
+        return _shot(m, p)
     if p.position == "GK" or _pressed(m, p):
         return _pass_or_clear(m, p)
     return MoveTo(goal_x, p.y * 0.8, DRIBBLE_SPEED)
+
+
+def _shot(m: Match, p: Player, loft: float = 0.06) -> Command:
+    aim = m.rng.uniform(-pitch.GOAL_WIDTH / 2 + 0.6, pitch.GOAL_WIDTH / 2 - 0.6)
+    return KickTo(m.attack(p.team) * pitch.HALF_LENGTH, aim, 24.0, loft)
+
+
+def _take_restart(m: Match, p: Player) -> Command:
+    """Shoot a penalty, and a direct free kick in range over the wall; pass anything else."""
+    if m.phase == "penalty":
+        return _shot(m, p)
+    goal = math.hypot(m.attack(p.team) * pitch.HALF_LENGTH - m.ball.x, m.ball.y)
+    if m.phase == "free_kick" and not m.restart_indirect and goal < FREE_KICK_RANGE:
+        return _shot(m, p, loft=0.2)
+    return _pass_or_clear(m, p)
+
+
+def _wall_spot(m: Match, p: Player) -> tuple[float, float] | None:
+    """Where `p` stands in its team's wall at a free kick near its goal, if it is in it:
+    the defending team's nearest outfield players, across the line from the ball to the
+    goal."""
+    if m.phase != "free_kick" or p.team == m.restart_team or p.position == "GK":
+        return None
+    goal_x = -m.attack(p.team) * pitch.HALF_LENGTH
+    dx, dy = goal_x - m.ball.x, -m.ball.y
+    dist = math.hypot(dx, dy)
+    if dist > WALL_RANGE:
+        return None
+    outfield = [q for q in m.players if q.team == p.team and q.position != "GK"]
+    wall = sorted(sorted(outfield, key=lambda q: math.hypot(q.x - m.ball.x, q.y - m.ball.y))[:WALL],
+                  key=lambda q: q.id)  # fmt: skip
+    if p not in wall:
+        return None
+    ux, uy = dx / dist, dy / dist
+    across = (wall.index(p) - (len(wall) - 1) / 2) * 0.85
+    return m.ball.x + ux * WALL_DISTANCE - uy * across, m.ball.y + uy * WALL_DISTANCE + ux * across
 
 
 def _pass_or_clear(m: Match, p: Player) -> Command:
@@ -99,6 +139,8 @@ def _nearest(m: Match, team: int, outfield: bool = False) -> Player:
 
 
 def _taker(m: Match, team: int) -> Player:
+    if m.phase == "penalty" and m.taker is not None:
+        return m.player(m.taker)
     if m.phase == "goal_kick":
         return next(q for q in m.players if q.team == team and q.position == "GK")
     return _nearest(m, team, outfield=True)

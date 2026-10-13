@@ -63,6 +63,8 @@ async def run(match: Match, send, squad: Players | None = None) -> None:
             match.step()
             steps += 1
             for message in [*match.drain_events(), *squad.drain_decisions()]:
+                if message.get("kind") == "substitution":
+                    message["model"] = squad.model_name(message["on"])
                 await send(message)
             if steps % SNAPSHOT_EVERY == 0 or match.phase == "full_time":
                 await send(match.snapshot())
