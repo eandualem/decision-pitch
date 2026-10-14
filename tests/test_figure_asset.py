@@ -208,6 +208,19 @@ def test_the_defending_and_shielding_sets_stand_and_shuffle(info, name, directio
         assert "speed" not in meta or 0 < meta["duty"] < 1
 
 
+def test_turns_cuts_and_the_brake_say_how_far_they_turn_and_when_they_plant(info):
+    clips = info["clips"]
+    for name, sign in (("turn_L", 1), ("turn_R", -1)):
+        meta = clips[name]
+        assert meta["loop"] is False and meta["turn"] * sign > 0, name
+        start, end = meta["turning"]
+        assert 0 <= start < end <= meta["duration"], name
+    for name, sign in (("cut_L", 1), ("cut_R", -1)):
+        meta = clips[name]
+        assert meta["loop"] is False and meta["turn"] * sign > 0 and 0 < meta["contact"] < meta["duration"], name
+    assert clips["brake"]["loop"] is False and 0 < clips["brake"]["contact"] < clips["brake"]["duration"]
+
+
 def test_the_side_shuffles_are_jockeying(info):
     assert info["clips"]["strafe_L"]["set"] == info["clips"]["strafe_R"]["set"] == "jockey"
 

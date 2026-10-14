@@ -33,6 +33,11 @@
    "loop": true,
    "speed": 2.5
   },
+  "brake": {
+   "contact": 0.12,
+   "duration": 1.2667,
+   "loop": false
+  },
   "celebrate": {
    "duration": 4.0,
    "loop": false
@@ -53,6 +58,18 @@
    "contact": 0.3,
    "duration": 0.9,
    "loop": false
+  },
+  "cut_L": {
+   "contact": 0.25,
+   "duration": 0.7333,
+   "loop": false,
+   "turn": 60.0
+  },
+  "cut_R": {
+   "contact": 0.25,
+   "duration": 0.7333,
+   "loop": false,
+   "turn": -60.0
   },
   "despair": {
    "duration": 5.5,
@@ -327,6 +344,24 @@
    "contact": 0.6,
    "duration": 1.4,
    "loop": false
+  },
+  "turn_L": {
+   "duration": 0.9,
+   "loop": false,
+   "turn": 90.0,
+   "turning": [
+    0.0,
+    0.3
+   ]
+  },
+  "turn_R": {
+   "duration": 0.9,
+   "loop": false,
+   "turn": -90.0,
+   "turning": [
+    0.0,
+    0.3
+   ]
   },
   "walk": {
    "direction": "forward",
