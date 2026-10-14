@@ -701,3 +701,35 @@ test('a celebration over a run moves the upper body; a slide tackle moves the wh
   }
   assert.ok(tackler.forward.state().acts.some(a => a.name === 'tackle'), 'the whole slide, at a run');
 });
+
+test('a goalkeeper holds the ball it caught at its chest until it kicks it', () => {
+  const ui = setup();
+  const catchIt = { player: 1, kind: 'catch', t: 2, x: 0.7, y: 0.1, z: 0.11 };
+  const kick = { player: 1, kind: 'kick', t: 4, x: 0.6, y: 0, z: 0.11 };
+  const at = (t) => {
+    const touches = [catchIt, ...(t >= 4 ? [kick] : [])];
+    const owner = t >= 2 && t < 4 ? 1 : null;
+    const ball = t < 2 ? { x: 0.7 + (2 - t) * 10, y: 0.1 } : t < 4 ? { x: 0.6, y: 0, owner } : { x: 0.6 + (t - 4 + 1 / 60) * 20, y: 0 };
+    return snap(t, [player(1, 0, 0)], { ...ball, touches });
+  };
+  let shown = null;
+  const run = (from, to) => {
+    for (let t = from; t < to; t += 1 / 60) {
+      const a = at(Math.floor(t * 30 + 1e-9) / 30);
+      const b = at(Math.floor(t * 30 + 1e-9) / 30 + 1 / 30);
+      ui.actors.update(a, b, (t - a.t) * 30, 1 / 60, t, at(Math.floor(t * 30 + 1e-9) / 30 + 0.1));
+      shown = ui.keeper.act('keeper_catch');
+    }
+  };
+  run(1.8, 3.5); // well past the end of the catch
+  assert.ok(shown, 'still holding');
+  assert.equal(shown.time, ONE_SHOTS.keeper_catch[0], 'at the clip\'s end');
+  const figure = ui.keeper.group.children[1];
+  figure.updateWorldMatrix(true, true);
+  const hands = new THREE.Vector3();
+  for (const name of ['hand_L', 'hand_R']) hands.add(figure.getObjectByName(name).localToWorld(new THREE.Vector3(0, 0.07, 0)));
+  assert.ok(ui.ball.position.distanceTo(hands.multiplyScalar(0.5)) < 1e-6, 'the ball in its hands');
+  run(3.5, 4.4);
+  assert.equal(ui.keeper.act('keeper_catch'), undefined, 'it lets go to kick');
+  assert.ok(kickOf(ui.keeper), 'and kicks');
+});

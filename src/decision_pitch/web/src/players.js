@@ -129,7 +129,7 @@ export function createPlayers(scene, teams, figure) {
       group.add(badge);
       actors.set(player.id, {
         group, person, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
-        vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null,
+        vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
         celebrateAt: -Infinity,
       });
@@ -141,7 +141,7 @@ export function createPlayers(scene, teams, figure) {
   const ball = new THREE.Group();
   root.add(ball);
   const shell = new THREE.Mesh(geometry(ballGeometry(DRAWN_RADIUS)), material(new THREE.MeshLambertMaterial({
-    vertexColors: true, emissive: '#6b6b62',
+    vertexColors: true,
   })));
   shell.castShadow = true;
   ball.add(shell);
@@ -164,8 +164,10 @@ export function createPlayers(scene, teams, figure) {
   const seen = new Map(); // touches already posed, by time and player, with their time
   let taker = null; // the player picking the ball up for a throw-in
   let thrower = null; // the player with a throw-in under way
+  let keeping = null; // a goalkeeper holding the ball it caught
   const hands = new THREE.Vector3();
-  let held = false; // in the thrower's hands last frame
+  let held = false; // in someone's hands last frame
+  let thrown = false; // and that someone was taking a throw-in
   let settleFor = SETTLE;
 
   // Start the pose for each touch the engine reports, timed to its moment of contact. A
@@ -268,8 +270,9 @@ export function createPlayers(scene, teams, figure) {
     clip.anchor = { time, clipTime: clip.clipTime, rate, reached: time + (clip.contact - clip.clipTime) / rate };
   }
 
-  // Plays a timed clip; returns false once it has finished.
-  function playTimed(actor, clip, time) {
+  // Plays a timed clip; returns false once it has finished. A throw-in waiting to be
+  // thrown holds on the gesture layer, so a taker still stepping up does not skate.
+  function playTimed(actor, clip, time, waits = false) {
     const { anchor } = clip;
     if (time > clip.last) {
       if (!anchor) clip.clipTime = Math.min(clip.hold, clip.clipTime + time - clip.last);
@@ -279,7 +282,7 @@ export function createPlayers(scene, teams, figure) {
     }
     if (clip.clipTime >= clip.duration) return false;
     const share = Math.min(clamp((time - clip.start) / 0.12, 0, 1), clamp((clip.duration - clip.clipTime) / 0.3, 0, 1));
-    actor.person.act(clip.clip, clip.clipTime, share, 'whole');
+    actor.person.act(clip.clip, clip.clipTime, share, waits && !clip.anchor ? 'gesture' : 'whole');
     return true;
   }
 
@@ -309,7 +312,7 @@ export function createPlayers(scene, teams, figure) {
   // turn into the kick. A kick shows the shot or the pass by how fast the ball left.
   function playPose(actor, pose, time, after, latest, step) {
     const u = time - pose.at;
-    const w = envelope(u, pose.from, pose.end, 0.06, 0.2) * clamp(1 - (time - pose.cut) / FADE, 0, 1);
+    const w = envelope(u, pose.from, pose.held ? Infinity : pose.end, 0.06, 0.2) * clamp(1 - (time - pose.cut) / FADE, 0, 1);
     if (!(w > 0)) return;
     if (pose === actor.pose && (pose.kind === 'kick' || pose.kind === 'throw')) {
       if (pose.aim === null && (aim(pose, after) || aim(pose, latest))) pose.aimed = u;
@@ -325,6 +328,11 @@ export function createPlayers(scene, teams, figure) {
       const shot = person.clip('shot');
       if (pose.shot < 1) person.act('pass', contactTime(u, pose.from, pass.contact), w * (1 - pose.shot));
       if (pose.shot > 0 && shot) person.act('shot', contactTime(u, pose.from, shot.contact), w * pose.shot);
+    } else if (pose.held) {
+      // A caught ball is held at the chest at the clip's end, over the steps once it is done.
+      const clip = person.clip(pose.clip);
+      const at = contactTime(u, pose.from, clip.contact);
+      person.act(pose.clip, Math.min(at, clip.duration), w, at < clip.duration ? 'whole' : 'gesture');
     } else if (!(pose.kind === 'throw' && actor.throwing)) {
       const clip = person.clip(pose.clip);
       person.act(pose.clip, contactTime(u, pose.from, clip.contact), w, WHOLE.has(pose.clip) ? 'whole' : 'play');
@@ -366,6 +374,7 @@ export function createPlayers(scene, teams, figure) {
       if (taker?.throwing?.anchor) taker = null; // already thrown
     }
     thrower = null;
+    keeping = null;
     for (const player of after.players) {
       const actor = actors.get(player.id);
       if (!actor) continue;
@@ -395,7 +404,7 @@ export function createPlayers(scene, teams, figure) {
       const bx = after.ball.x - player.x;
       const by = after.ball.y - player.y;
       if (bx * bx + by * by > 6.25) actor.faceYaw = Math.atan2(by, bx);
-      if (stopped) actor.pose = actor.fading = actor.dive = actor.throwing = null;
+      if (stopped) actor.pose = actor.fading = actor.dive = actor.throwing = actor.holding = null;
       const pose = actor.pose;
       const diving = !stopped && Boolean(player.dive);
       if (diving && !actor.diving) actor.armed = true; // the snapshot first marks it diving
@@ -413,14 +422,27 @@ export function createPlayers(scene, teams, figure) {
       const fading = actor.fading;
       if (fading && (time - fading.cut > FADE || time < fading.cut)) actor.fading = null;
       else if (fading) playPose(actor, fading, time, after, latest, step);
-      if (pose && time - pose.at > pose.end) actor.pose = null;
+      if (pose && (pose.held ? time - pose.cut > FADE : time - pose.at > pose.end)) actor.pose = null;
       else if (pose) playPose(actor, pose, time, after, latest, step);
       if (actor.dive && !playTimed(actor, actor.dive, time)) actor.dive = null;
       // The throw-in's taker holds the ball until its throw, or lets go if play moves on.
       if (!actor.throwing && actor === taker) actor.throwing = timed(actor, 'throw_in', time, null, Math.max(0, person.clip('throw_in').contact - 0.15));
       if (actor.throwing && !actor.throwing.anchor && actor !== taker) actor.throwing = null;
-      if (actor.throwing && !playTimed(actor, actor.throwing, time)) actor.throwing = null;
+      if (actor.throwing && !playTimed(actor, actor.throwing, time, true)) actor.throwing = null;
       if (actor.throwing) thrower = actor;
+      // A goalkeeper that catches the ball holds it at its chest, over its steps, until it
+      // lets go of it or winds up to kick it.
+      const owns = !stopped && after.ball.owner === player.id;
+      const current = actor.pose;
+      if (owns && current?.kind === 'catch' && time >= current.at && current.cut === Infinity) {
+        actor.holding = current;
+        current.held = true;
+      }
+      if (actor.holding && (!owns || current !== actor.holding)) {
+        actor.holding.cut = Math.min(actor.holding.cut, time); // it lets go: the catch fades out
+        actor.holding = null;
+      }
+      if (actor.holding) keeping = actor;
       const since = now - actor.celebrateAt;
       const celebrate = person.clip('celebrate');
       if (celebrate && since >= 0) {
@@ -491,10 +513,12 @@ export function createPlayers(scene, teams, figure) {
         carrying = true;
       }
     }
-    // A throw-in's taker holds the ball in its hands until it lets go.
-    const inHands = Boolean(thrower?.group.visible && thrower.throwing.clipTime < thrower.throwing.contact);
+    // A throw-in's taker holds the ball in its hands until it lets go, and a goalkeeper
+    // the ball it has caught.
+    const throwing = Boolean(thrower?.group.visible && thrower.throwing.clipTime < thrower.throwing.contact);
+    const inHands = throwing || Boolean(keeping?.group.visible);
     if (inHands) {
-      thrower.person.hands(hands);
+      (throwing ? thrower : keeping).person.hands(hands);
       x = hands.x;
       y = hands.y;
       z = hands.z;
@@ -510,10 +534,11 @@ export function createPlayers(scene, teams, figure) {
       settle.set(ball.position.x - x, ball.position.y - y, ball.position.z - z);
       settleAt = time;
       // Thrown, it leaves the hands slowly enough for its path to rise to meet it.
-      settleFor = held && !inHands ? THROW_RELEASE : SETTLE;
+      settleFor = held && thrown && !inHands ? THROW_RELEASE : SETTLE;
     }
     carried = carrying;
     held = inHands;
+    thrown = throwing;
     // The offset fades on the drawn match's clock, so a kicked ball leaves the boot along its path.
     applied.copy(settle).multiplyScalar(1 - smooth(clamp((time - settleAt) / settleFor, 0, 1)));
     x += applied.x;
@@ -585,7 +610,9 @@ function ballGeometry(radius) {
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
-  const white = new THREE.Color('#fbfbf4');
+  // The white is brighter than white, so the shell stays bright on its shaded side while
+  // the panels stay dark (an emissive would grey them).
+  const white = new THREE.Color('#fbfbf4').multiplyScalar(1.6);
   const dark = new THREE.Color('#141b24');
   for (let i = 0; i < position.count; i += 3) {
     a.fromBufferAttribute(position, i);
