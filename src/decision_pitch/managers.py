@@ -244,6 +244,11 @@ class LanguageModel:
 
     assistant = ASSISTANT_MODEL
 
+    @property
+    def assistants(self) -> tuple[str, ...]:
+        """The model of each assistant helping it, for the page: a subclass's own."""
+        return (self.assistant,) * len(self._assistants)
+
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
@@ -253,7 +258,6 @@ class LanguageModel:
         if not 0 <= assistants <= len(ASSISTANTS):
             raise ValueError(f"a manager can have up to {len(ASSISTANTS)} assistants")
         self.name, self._model, self._assistants = model, model, ASSISTANTS[:assistants]
-        self.assistants = (ASSISTANT_MODEL,) * assistants
         self._key = apis._key("OPENAI_API_KEY", "The OpenAI manager")
         self._http = httpx.AsyncClient(
             transport=transport, headers={"Authorization": f"Bearer {self._key}"}, timeout=30.0

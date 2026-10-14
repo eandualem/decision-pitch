@@ -299,6 +299,22 @@ def test_the_page_is_told_each_manager_s_assistant_models(monkeypatch):
     asyncio.run(alone.aclose())
 
 
+def test_a_claude_manager_tells_the_page_its_own_assistant_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+
+    def client():
+        return DefaultAsyncHttpxClient(transport=httpx2.MockTransport(RecordedClaude()))
+
+    helped, alone = Claude(assistants=2, http_client=client()), Claude(http_client=client())
+    staff = staffed(helped, alone)
+    teams = hello(staff.match, staff.squad, staff)["teams"]
+    assert [team["manager"] for team in teams] == [managers.CLAUDE_MODEL] * 2
+    assert teams[0]["assistants"] == [managers.CLAUDE_MODEL, managers.CLAUDE_MODEL]
+    assert teams[1]["assistants"] == []
+    asyncio.run(helped.aclose())
+    asyncio.run(alone.aclose())
+
+
 @pytest.mark.parametrize("manager, key", [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])
 def test_a_language_model_manager_without_its_key_says_which_key(manager, key, capsys, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # no .env
