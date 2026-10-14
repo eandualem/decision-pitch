@@ -21,6 +21,7 @@ def test_the_socket_says_hello_then_streams_the_match():
         snapshot = ws.receive_json()
     assert hello["type"] == "hello" and hello["pitch"] == PITCH
     assert [len(team["players"]) for team in hello["teams"]] == [11, 11]
+    assert [(team["manager"], team["assistants"]) for team in hello["teams"]] == [("Built-in", [])] * 2
     assert snapshot["type"] == "snapshot" and len(snapshot["players"]) == 22
 
 

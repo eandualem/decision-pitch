@@ -51,6 +51,7 @@ def hello(match: Match, squad: Players | None = None, staff: Staff | None = None
     if staff:
         for team, manager in zip(teams, staff.managers, strict=True):
             team["manager"] = manager.name
+            team["assistants"] = list(manager.assistants)
     return {"type": "hello", "version": VERSION, "pitch": PITCH, "teams": teams}
 
 

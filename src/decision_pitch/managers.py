@@ -89,6 +89,7 @@ class Situation:
 
 class Manager(Protocol):
     name: str
+    assistants: tuple[str, ...]  # the model of each assistant helping it, for the page
 
     async def lineup(self, situation: Situation) -> dict[int, str]: ...
 
@@ -108,6 +109,7 @@ class BuiltIn:
     """Picks models by their stated answer times and substitutes by simple rules."""
 
     name = "Built-in"
+    assistants: tuple[str, ...] = ()
     SCHEDULE = (55, 65, 75)  # minutes at which the slowest outfield player is replaced
     BOOKED_FROM = 60  # minute from which a player on a yellow card is replaced
     FAILING = 3  # failed answers in the last five that get a player replaced
@@ -251,6 +253,7 @@ class LanguageModel:
         if not 0 <= assistants <= len(ASSISTANTS):
             raise ValueError(f"a manager can have up to {len(ASSISTANTS)} assistants")
         self.name, self._model, self._assistants = model, model, ASSISTANTS[:assistants]
+        self.assistants = (ASSISTANT_MODEL,) * assistants
         self._key = apis._key("OPENAI_API_KEY", "The OpenAI manager")
         self._http = httpx.AsyncClient(
             transport=transport, headers={"Authorization": f"Bearer {self._key}"}, timeout=30.0

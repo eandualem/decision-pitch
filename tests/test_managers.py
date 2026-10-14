@@ -264,8 +264,23 @@ def test_the_page_is_told_each_team_s_manager_and_models(monkeypatch):
     asyncio.run(staff.line_up())
     teams = hello(staff.match, staff.squad, staff)["teams"]
     assert [team["manager"] for team in teams] == ["Built-in", "Built-in"]
+    assert [team["assistants"] for team in teams] == [[], []]
     assert {p["model"] for p in teams[0]["players"]} == {"Laya"}
     assert {p["model"] for p in teams[1]["players"]} == {None}
+
+
+def test_the_page_is_told_each_manager_s_assistant_models(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    helped = LanguageModel(assistants=2, transport=httpx.MockTransport(Recorded()))
+    alone = LanguageModel(transport=httpx.MockTransport(Recorded()))
+    for away, expected in ((alone, []), (BuiltIn(), [])):
+        staff = staffed(helped, away)
+        teams = hello(staff.match, staff.squad, staff)["teams"]
+        assert teams[0]["manager"] == managers.DEFAULT_MODEL
+        assert teams[0]["assistants"] == [managers.ASSISTANT_MODEL, managers.ASSISTANT_MODEL]
+        assert teams[1]["assistants"] == expected
+    asyncio.run(helped.aclose())
+    asyncio.run(alone.aclose())
 
 
 @pytest.mark.parametrize("manager, key", [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])
