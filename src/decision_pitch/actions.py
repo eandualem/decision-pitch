@@ -62,7 +62,9 @@ def command(m: Match, p: Player, action: str) -> Command:
         return Hold()
     direction = m.attack(p.team)
     if action == "shoot" and math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y) >= SHOOTING_RANGE:
-        action = "dribble"  # into range first
+        if m.phase == "play" and m.owner == p.id:
+            return _on_the_ball(m, p)  # into range first, passing when pressed
+        action = "dribble"
     if m.phase in RESTARTS:
         taker = m.restart_team == p.team and p.id == _taker(m, p.team).id
         if taker and action not in KICKS:
