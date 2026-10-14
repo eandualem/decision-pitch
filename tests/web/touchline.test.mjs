@@ -233,6 +233,41 @@ test('a goal sets the scoring staff celebrating and the other manager holding it
   }
 });
 
+test('the managers applaud at half time and a level full time; a winner celebrates', () => {
+  const clapping = (t, name) => {
+    let closest = Infinity;
+    for (let i = 0; i < 40; i++) {
+      t.run(1 / 60);
+      const [right, left] = t.hands(name);
+      closest = Math.min(closest, right.distanceTo(left));
+    }
+    return closest < 0.2;
+  };
+  for (const [kind, score] of [['half_time', [1, 0]], ['full_time', [2, 2]], ['full_time', undefined]]) {
+    const t = setup();
+    try {
+      t.run(1);
+      t.touchline.handleEvent({ type: 'event', kind, team: null, score }, t.now);
+      t.run(0.3);
+      assert.ok(clapping(t, 'manager-0') && clapping(t, 'manager-1'), `${kind} ${score}: both applaud`);
+    } finally {
+      t.touchline.dispose();
+    }
+  }
+  const t = setup();
+  try {
+    t.run(1);
+    t.touchline.handleEvent({ type: 'event', kind: 'full_time', team: null, score: [0, 1] }, t.now);
+    t.run(1);
+    for (const name of ['manager-1', 'assistant-1-0', 'assistant-1-1']) {
+      assert.ok(t.hands(name).every(hand => hand.y > 2.0), `${name} celebrates the win`);
+    }
+    assert.ok(t.hands('manager-0').every(hand => hand.y > 1.6 && hand.y < 2.1), 'the loser holds its head');
+  } finally {
+    t.touchline.dispose();
+  }
+});
+
 test('dispose removes the touchline and releases everything it created', () => {
   const t = setup();
   const disposed = new Set();

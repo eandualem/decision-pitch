@@ -330,6 +330,14 @@ export function createTouchline(scene, teams, pitch) {
         gesture(managers[event.team], 'protest', now);
       } else if (event.kind === 'goal') {
         for (const f of figures) gesture(f, f.team === event.team ? 'celebrate' : 'despair', now);
+      } else if (event.kind === 'half_time' || event.kind === 'full_time') {
+        // Applause at the whistles, unless the final one has a winner.
+        const [home, away] = event.score ?? [0, 0];
+        if (event.kind === 'half_time' || home === away) {
+          for (const manager of managers) gesture(manager, 'clap', now);
+        } else {
+          for (const f of figures) gesture(f, f.team === (home > away ? 0 : 1) ? 'celebrate' : 'despair', now);
+        }
       }
     },
     dispose() {
