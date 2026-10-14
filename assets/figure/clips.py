@@ -1283,44 +1283,6 @@ def shield_clips(solver):
 # the root by exactly as much as the root moves and turns over it.
 
 
-class Linear:
-    """Straight lines through keys [(time, value)], held level beyond them."""
-
-    def __init__(self, keys):
-        self.keys = sorted(keys)
-
-    def __call__(self, t):
-        k = self.keys
-        if t <= k[0][0]:
-            return k[0][1]
-        for (t0, v0), (t1, v1) in zip(k, k[1:]):
-            if t <= t1:
-                return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
-        return k[-1][1]
-
-
-def root_path(t, speeds, headings, travels=None, step=1.0 / 240.0):
-    """Where the engine has carried the root by time t, and which way it faces: `speeds`
-    is a function of time (m/s) and headings (degrees) are [(time, value)] curves,
-    `travels` the direction it moves in (the heading if not given). Integrated from
-    t = 0, root at the origin facing -Y."""
-    speed, heading = speeds, Curve(headings)
-    travel = Curve(travels) if travels else heading
-    if t < 0.0:  # before the clip, still running as it starts
-        return heading_vector(travel(0.0)) * (speed(0.0) * t), heading(0.0)
-    pos = Vector()
-    k = 0.0
-    while k < t - 1e-9:
-        dt = min(step, t - k)
-        pos += heading_vector(travel(k + dt / 2.0)) * (speed(k + dt / 2.0) * dt)
-        k += dt
-    return pos, heading(t)
-
-
-def heading_vector(angle):
-    return heading(angle)
-
-
 class Footwork:
     """Feet planted on the grass and the steps between them, while the root moves.
 
@@ -1450,50 +1412,114 @@ def _plant(root, land, lift, x, y, yaw, **pivot):
     return (land, lift, at.x, at.y, root(land)[1] + yaw, *pivot.values())
 
 
+# The engine's turning and acceleration (src/decision_pitch/physics.py, docs/decisions.md
+# section 2): a runner turns its facing at TURN_RATE / (1 + speed / 3) rad/s, eases off
+# by the cosine of the turn still to make, and changes its velocity at most ACCELERATION.
+TURN_RATE, ACCELERATION = 9.0, 4.0
+
+
+class EngineTurn:
+    """The root's motion as the engine turns a runner at `speed` through `turn` degrees,
+    starting at time `start`: its facing, made to turn at an even rate over `window`
+    (how long the engine takes), and its position, from the engine's velocity, which
+    follows the facing only as fast as it may accelerate."""
+
+    def __init__(self, speed, turn, start, end, step=1.0 / 240.0):
+        self.speed, self.turn, self.start = speed, turn, start
+        facing, vx, vy, x, y, t = 0.0, speed, 0.0, 0.0, 0.0, start
+        target = math.radians(turn)
+        self.track = [(start, 0.0, 0.0, 0.0, speed)]  # time, along, across, travel (deg), speed
+        done = None
+        while t < end - 1e-9:
+            v = math.hypot(vx, vy)
+            left = target - facing
+            most = TURN_RATE / (1.0 + v / 3.0) * step
+            facing += max(-most, min(most, left))
+            want = speed * max(0.0, math.cos(left))
+            ax, ay = want * math.cos(facing) - vx, want * math.sin(facing) - vy
+            change = math.hypot(ax, ay)
+            if change > ACCELERATION * step:
+                ax, ay = ax * ACCELERATION * step / change, ay * ACCELERATION * step / change
+            vx, vy = vx + ax, vy + ay
+            x, y, t = x + vx * step, y + vy * step, t + step
+            if done is None and abs(target - facing) < 1e-6:
+                done = t
+            self.track.append((t, x, y, math.degrees(math.atan2(vy, vx)), math.hypot(vx, vy)))
+        self.window = (start, done if done is not None else end)
+
+    def facing(self, t):
+        a, b = self.window
+        return self.turn * min(1.0, max(0.0, (t - a) / (b - a)))
+
+    def _at(self, t):
+        if t <= self.start:
+            return (t, self.speed * (t - self.start), 0.0, 0.0, self.speed)
+        track = self.track
+        i = min(len(track) - 1, max(1, int((t - self.start) / (track[1][0] - track[0][0]))))
+        lo, hi = track[i - 1], track[i]
+        f = min(1.0, max(0.0, (t - lo[0]) / (hi[0] - lo[0])))
+        return tuple(a + (b - a) * f for a, b in zip(lo, hi))
+
+    def __call__(self, t):
+        """Root position and facing (degrees) in the clip's space, facing -Y at the start."""
+        _, along, across, _, _ = self._at(t)
+        return heading(0.0) * along + heading(90.0) * across, self.facing(t)
+
+    def travel(self, t):
+        return self._at(t)[3]
+
+    def pace(self, t):
+        return self._at(t)[4]
+
+
 def cut_clip(solver, turn=60.0, speed=4.0):
     """A sharp cut to the left at speed: the outside (right) foot reaches wide and plants,
-    the body drops and leans into the turn, the head already on the new way, and it
-    pushes off, the left foot stepping out on the new line. `contact` is the plant. The
-    feet stay planted for a root that comes in at `speed`, turns its travel `turn`
-    degrees over the plant and leaves at four fifths of the pace, as the engine slows a
-    runner that turns sharply; the page times it by `speeds`."""
-    end, contact = 22 / FPS, 0.25
+    the body drops and leans into the turn, the head leading onto the new way, and it
+    pushes off, the left foot stepping out. `contact` is the plant. Its root moves as
+    the engine turns a runner coming in at `speed` through `turn` degrees: the facing
+    turns at the engine's rate over `turning` and the travel follows more slowly, so
+    the page drives the clip from the heading it sees, as for a turn on the spot."""
+    contact = 0.22
+    root = EngineTurn(speed, turn, contact, 1.2)
+    window = root.window
+    end = round((window[1] + 0.36) * FPS) / FPS
 
-    speeds = [(0.0, speed), (contact, speed), (contact + 0.16, 0.8 * speed), (end, 0.8 * speed)]
-    pace = Linear(speeds)
-
-    def root(t):
-        return root_path(t, pace, [(0.0, 0.0), (contact - 0.05, 0.0), (contact + 0.25, turn), (end, turn)],
-                         [(0.0, 0.0), (contact, 0.0), (contact + 0.16, turn), (end, turn)])
+    def plant(land, lift, aside, ahead, yaw):
+        """A foot landing `ahead` of the root along its travel and `aside` of it, to the
+        left of the way it faces, turned `yaw` from that way."""
+        pos, facing = root(land)
+        at = pos + heading(root.travel(land)) * ahead + heading(facing + 90.0) * aside
+        return (land, lift, at.x, at.y, facing + yaw)
 
     c = contact
     plants = {
-        "L": [_plant(root, -0.04, 0.08, 0.06, -0.24, 5.0), _plant(root, c + 0.25, c + 0.40, 0.08, -0.26, 5.0),
-              _plant(root, c + 0.64, c + 0.78, 0.06, -0.24, 5.0)],
-        "R": [_plant(root, -0.24, -0.12, -0.06, -0.24, -5.0), _plant(root, c, c + 0.14, -0.27, -0.30, 20.0),
-              _plant(root, c + 0.45, c + 0.6, -0.06, -0.24, -5.0)],
+        "L": [plant(c - 0.27, c - 0.15, 0.06, 0.24, 5.0), plant(c + 0.24, c + 0.38, 0.07, 0.26, -20.0),
+              plant(c + 0.62, c + 0.76, 0.06, 0.24, -30.0)],
+        "R": [plant(c - 0.5, c - 0.38, -0.06, 0.24, -5.0), plant(c, c + 0.15, -0.26, 0.26, 20.0),
+              plant(c + 0.44, c + 0.58, -0.07, 0.24, -30.0)],
     }
     pitch = {
-        "L": Curve([(0.0, -25.0), (0.08, -58.0), (0.18, -45.0), (c + 0.18, -5.0), (c + 0.25, 2.0), (c + 0.32, -10.0),
-                    (c + 0.40, -55.0), (c + 0.52, -35.0), (c + 0.64, 0.0)]),
-        "R": Curve([(0.0, -50.0), (0.12, -30.0), (c - 0.03, -6.0), (c, -4.0), (c + 0.07, -14.0), (c + 0.14, -55.0),
-                    (c + 0.3, -35.0), (c + 0.45, 0.0), (c + 0.5, -12.0), (c + 0.6, -50.0)]),
+        "L": Curve([(0.0, -40.0), (c - 0.15, -55.0), (c - 0.05, -40.0), (c + 0.17, -5.0), (c + 0.24, 2.0),
+                    (c + 0.31, -10.0), (c + 0.38, -55.0), (c + 0.5, -35.0), (c + 0.62, 0.0)]),
+        "R": Curve([(0.0, -35.0), (c - 0.04, -6.0), (c, -4.0), (c + 0.08, -14.0), (c + 0.15, -55.0),
+                    (c + 0.3, -35.0), (c + 0.44, 0.0), (c + 0.5, -12.0), (c + 0.58, -50.0)]),
     }
-    feet = Footwork(root, plants, pitch, height=0.22)
+    feet = Footwork(root, plants, pitch, height=0.2)
     base = dict(READY)
     base.update({"hz": -0.07, "hpitch": 6.0, "sflex": 8.0, "cflex": 3.0, "look_down": 0.0,
                  "aLflex": 10.0, "aRflex": 10.0, "aLabd": 14.0, "aRabd": 14.0, "aLelbow": 85.0, "aRelbow": 85.0})
+    mid = 0.5 * (window[0] + window[1])
     keys = [
-        (0.0, {"aLflex": 35.0, "aRflex": -25.0}),
-        (c - 0.08, {"hz": -0.09, "look_yaw": 18.0, "sside": 4.0, "aLflex": -10.0, "aRflex": 25.0}),
-        (c + 0.05, {"hz": -0.15, "hx": -0.06, "hyaw": 12.0, "hroll": 6.0, "sside": 10.0, "cside": 6.0, "sflex": 14.0,
-                    "look_yaw": 22.0, "look_tilt": -6.0, "aLabd": 45.0, "aLflex": 15.0, "aLelbow": 60.0,
-                    "aRflex": 40.0, "aRabd": 10.0, "aRtwist": 25.0}),
-        (c + 0.2, {"hz": -0.10, "hx": 0.0, "hyaw": 10.0, "hroll": 2.0, "sside": 5.0, "cside": 2.0, "look_yaw": 8.0,
-                   "aLflex": -25.0, "aRflex": 40.0, "aRtwist": 0.0}),
-        (c + 0.38, {"hz": -0.07, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "cside": 0.0, "look_yaw": 0.0,
-                    "look_tilt": 0.0, "aLflex": 35.0, "aRflex": -25.0, "aLabd": 14.0}),
-        (end, {"aLflex": -20.0, "aRflex": 30.0}),
+        (0.0, {"aLflex": 30.0, "aRflex": -20.0}),
+        (c - 0.06, {"hz": -0.09, "look_yaw": 16.0, "sside": 4.0, "aLflex": -8.0, "aRflex": 22.0}),
+        (mid, {"hz": -0.14, "hx": -0.05, "hyaw": 10.0, "hroll": 6.0, "sside": 10.0, "cside": 6.0, "sflex": 13.0,
+               "look_yaw": 18.0, "look_tilt": -6.0, "aLabd": 45.0, "aLflex": 15.0, "aLelbow": 60.0,
+               "aRflex": 40.0, "aRabd": 12.0, "aRtwist": 25.0}),
+        (window[1] + 0.06, {"hz": -0.10, "hx": 0.0, "hyaw": 4.0, "hroll": 2.0, "sside": 4.0, "cside": 2.0,
+                            "look_yaw": 4.0, "aLflex": -25.0, "aRflex": 40.0, "aRtwist": 0.0}),
+        (window[1] + 0.24, {"hz": -0.07, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "cside": 0.0, "look_yaw": 0.0,
+                            "look_tilt": 0.0, "aLflex": 35.0, "aRflex": -25.0, "aLabd": 14.0}),
+        (end, {"aLflex": -15.0, "aRflex": 25.0}),
     ]
     shot = Shot(base, end, keys, lag={"aL": 0.03, "aR": 0.03, "look": -0.04}, settle=False)
 
@@ -1502,8 +1528,10 @@ def cut_clip(solver, turn=60.0, speed=4.0):
         p.update(feet(t))
         return p
 
+    speeds = [[0.0, speed]] + [[round(t, 4), round(root.pace(t), 2)]
+                               for t in (contact, mid, window[1], window[1] + 0.2, end)]
     clip = Clip("cut_L", int(round(end * FPS)), sample, loop=False, contact=contact, turn=turn,
-                speeds=[[round(t, 4), v] for t, v in speeds])
+                turning=[round(window[0], 4), round(window[1], 4)], speeds=speeds)
     clip.root = root
     return clip
 
@@ -1603,7 +1631,7 @@ def brake_clip(solver, speed=7.5, slowing=4.0):
 def cut_clips(solver):
     clip = cut_clip(solver)
     right = Clip("cut_R", clip.frames, lambda t: mirror(clip.sample(t)), loop=False, contact=clip.contact,
-                 turn=-clip.info["turn"], speeds=clip.info["speeds"])
+                 turn=-clip.info["turn"], turning=clip.info["turning"], speeds=clip.info["speeds"])
     right.root = lambda t: (Vector((-clip.root(t)[0].x, clip.root(t)[0].y, 0.0)), -clip.root(t)[1])
     return [clip, right, brake_clip(solver)]
 
