@@ -59,7 +59,7 @@ function setup(protocol = 'http:') {
   vm.runInNewContext(source, context);
   return {
     calls, handlers, sockets, timers, status,
-    tick: (ms) => { time += ms; renderLoop?.(); },
+    tick: (ms, frameTime) => { time += ms; renderLoop?.(frameTime); },
     wait: (ms) => { time += ms; },
     send: (message) => sockets.at(-1).onmessage({ data: JSON.stringify(message) }),
     loop: () => renderLoop,
@@ -100,6 +100,20 @@ test('draws snapshots a fixed delay behind, never blending across a restart', ()
   app.tick(16);
   assert.equal(named(app.calls, 'camera.update').at(-1)[4], 'kickoff', 'not the newest phase');
   assert.equal(touchline[4].ballPosition, touchline[1], 'and are given the players');
+});
+
+test('a frame is drawn for its own time, not when the code runs', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.tick(66, 1150); // the frame began at 1.15 s; the code runs at 1.166 s
+  const update = named(app.calls, 'actors.update').at(-1);
+  assert.ok(Math.abs(update[3] - 0.5) < 1e-9, 'drawn at 1.05 s of match');
+  assert.equal(update[5], 1.15);
+  app.tick(10, 1140); // a frame time that goes back cannot make dt negative
+  assert.ok(named(app.calls, 'actors.update').at(-1)[4] >= 0);
 });
 
 test('events wait for the drawn match to reach them; decisions and managers do not', () => {

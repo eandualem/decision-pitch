@@ -127,9 +127,11 @@ addEventListener('pageshow', (event) => {
   }
 });
 
-function draw() {
-  const now = performance.now() / 1000;
-  const dt = Math.min(now - lastFrame, 0.1);
+// Animation runs on the frame's own time, not the moment this code gets to run: under
+// load the two can be a frame apart, which would show as uneven motion.
+function draw(frameTime) {
+  const now = (frameTime ?? performance.now()) / 1000;
+  const dt = Math.max(0, Math.min(now - lastFrame, 0.1));
   lastFrame = now;
   const frame = actors && timeline.sample(now);
   if (frame) {
