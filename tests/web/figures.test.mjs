@@ -98,7 +98,8 @@ test('the blend changes smoothly with speed and travel', () => {
     for (let speed = 0; speed < 9; speed += 0.01) {
       const ra = blendLoops(steps, speed, travel, 1, a);
       const rb = blendLoops(steps, speed + 0.01, travel, 1, b);
-      for (let i = 0; i < a.length; i++) assert.ok(Math.abs(a[i] - b[i]) < 0.02, `weight jump at ${speed} m/s`);
+      // At most 3% of the blend per cm/s: steepest where a shuffle turns to step the way it goes.
+      for (let i = 0; i < a.length; i++) assert.ok(Math.abs(a[i] - b[i]) < 0.03, `weight jump at ${speed} m/s`);
       if (speed > 0.05) assert.ok(Math.abs(ra - rb) < 0.05, `rate jump at ${speed} m/s: ${ra} -> ${rb}`);
     }
   }
@@ -442,6 +443,16 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
     twice ||= turner.state().acts.filter(a => a.name === 'turn_L' && a.weight > 0).length === 2;
   }
   assert.ok(twice, 'a long turn steps round again');
+  // ...and never leaves a frame without a turn clip as it does.
+  const spinner = made.create({ seed: 9 });
+  let started = false;
+  for (let i = 0; i < 40; i++) {
+    spinner.object.rotation.y = 9 * i / 60; // 6 rad: nearly a full turn
+    spinner.update(1 / 60, 0, 0);
+    const shown = spinner.state().acts.some(a => a.name === 'turn_L' && a.weight > 1e-6);
+    started ||= shown;
+    if (started && i < 38) assert.ok(shown, `a turn shows at frame ${i}`);
+  }
   // Turning right, the other way.
   const other = made.create({ seed: 4 });
   for (let i = 0; i < 6; i++) {
@@ -457,6 +468,28 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
     cutter.update(1 / 60, 6, 0);
   }
   assert.equal(cutter.state().move?.name, 'cut_L');
+  // Slowing into a turn of the body, as the engine runs it: the brake gives way to the cut.
+  const turning = made.create({ seed: 8 });
+  for (let i = 0; i < 30; i++) turning.update(1 / 60, 6, 0);
+  let braked = false;
+  for (let i = 0; i < 20; i++) {
+    turning.update(1 / 60, 6 - i * 0.25, 0);
+    braked ||= turning.state().move?.name === 'brake';
+  }
+  assert.ok(braked, 'slowing hard, it brakes');
+  for (let i = 0; i < 6; i++) {
+    turning.object.rotation.y = -4 * (i + 1) / 60; // the body turning right at 4 rad/s
+    turning.update(1 / 60, 3, 4 * (i + 1) / 60); // the run, still going the old way
+  }
+  assert.equal(turning.state().move?.name, 'cut_R', 'and cuts as the body turns');
+  assert.ok(turning.state().acts.some(a => a.name === 'brake' && a.weight > 0), 'the brake fading out under it');
+  // A brake that runs on fades out too.
+  const runsOn = made.create({ seed: 10 });
+  for (let i = 0; i < 30; i++) runsOn.update(1 / 60, 7, 0);
+  for (let i = 0; i < 20 && runsOn.state().move?.name !== 'brake'; i++) runsOn.update(1 / 60, 7 - i * 0.15, 0);
+  assert.equal(runsOn.state().move?.name, 'brake');
+  for (let i = 0; i < 40; i++) runsOn.update(1 / 60, 4.5, 0);
+  assert.equal(runsOn.state().move, null, 'running on at 4.5 m/s, it ends');
   // A steady curve is not a cut.
   const runner = made.create({ seed: 6 });
   for (let i = 0; i < 90; i++) {
@@ -863,6 +896,34 @@ test('a leg bends to put the ankle on a target, the knee bending its own way and
   const reach = world(foot).sub(world(thigh));
   assert.ok(reach.length() > 0.87 * 1.05 - 1e-3, 'stretched out');
   assert.ok(reach.normalize().dot(far.sub(world(thigh)).normalize()) > 0.999, 'towards the target');
+});
+
+test('built figure: drifting slowly, a figure steps with its feet held and lifted, not skimming the grass', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  for (const [speed, travel] of [[0.3, 0], [0.6, -Math.PI / 2], [0.8, 2.4]]) {
+    const slip = plantedSlip(template, 7, speed, travel);
+    assert.ok(slip < 0.1, `${speed} m/s, travel ${travel.toFixed(2)}: a planted foot slides at ${slip.toFixed(3)} m/s`);
+  }
+  // The highest the toe joint rises over a few strides, with the page's pose and without.
+  const lift = (footLock) => {
+    const made = createFigures(template, { footLock });
+    const person = made.create({ seed: 7 });
+    const group = new THREE.Group();
+    group.add(person.object);
+    const toe = person.object.getObjectByName('toe_L');
+    const at = new THREE.Vector3();
+    let most = 0;
+    for (let i = 0; i < 300; i++) {
+      group.position.z = 0.3 * i / 60;
+      person.update(1 / 60, 0.3, 0);
+      group.updateMatrixWorld(true);
+      if (i > 60) most = Math.max(most, toe.getWorldPosition(at).y);
+    }
+    made.dispose();
+    return most;
+  };
+  const [bare, lifted] = [lift(false), lift(true)];
+  assert.ok(lifted > bare + 0.03 && lifted > 0.06, `the toe clears the grass: ${lifted.toFixed(3)} m against ${bare.toFixed(3)}`);
 });
 
 test('hair, number and coat are painted even when figure.json lists only the kit regions', () => {

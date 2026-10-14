@@ -775,6 +775,18 @@ test('a sprinter knocking the ball on meets it with its stride, not a clip, and 
   actors.dispose();
 });
 
+test('a player turning back on itself steps the new way within a few centimetres', () => {
+  const { actors, play } = match();
+  // Player 3 walks along +x facing +y, stops at x = 0 and walks back along -x.
+  const x = (t) => (t < 2 ? -1.4 * (2 - t) : -1.4 * (t - 2));
+  play((t) => [[player(1, 30, 30), player(2, 30, -30), player(3, x(t), 0, { heading: Math.PI / 2, speed: 1.4 }), player(4, -30, 30)], { x: 40, y: 0 }], 1.2, 1);
+  // A fifth of a second back, under 0.3 m: it is going -x, at pi/2 to the left of its facing.
+  const { travel } = actors.inspect(3);
+  const off = Math.abs(((travel - Math.PI / 2) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);
+  assert.ok(off < 0.35, `stepping the new way: ${off.toFixed(2)} rad off`);
+  actors.dispose();
+});
+
 test('a goal: the scoring team celebrates, the other does not', () => {
   const scene = new THREE.Scene();
   const actors = createPlayers(scene, [

@@ -25,8 +25,10 @@ const FASTEST = 35; // m/s: no kick leaves faster (the engine's cap is 30)
 const SHOT = 18; // m/s: a kick that leaves faster plays the shot, a slower one the pass
 const GAIT = 0.08; // s over which the drawn velocity that drives the stride settles
 // m travelled over which the direction of travel settles: by distance rather than time,
-// so the jitter of a player barely moving cannot swing its steps from side to side.
-const TURNING = 0.15;
+// so the jitter of a player barely moving cannot swing its steps from side to side, and
+// short, so a player turning back on itself steps the new way at once (below a shuffle
+// the figure ignores the travel anyway).
+const TURNING = 0.04;
 const FADE = 0.12; // s a pose cut short by the next one takes to fade out
 // A dribbler's right foot meets the ball at its stride's touch (figures.js), just before
 // it plants at 0.5: the ball runs ahead from there and the runner catches it up.
