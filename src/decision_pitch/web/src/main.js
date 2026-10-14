@@ -76,7 +76,7 @@ function receive(message) {
 function show(event, now, late) {
   if (!late) {
     actors.handleEvent(event, now);
-    broadcast.handleEvent(event, now, actors);
+    broadcast.handleEvent(event, now, actors, touchline);
     moments.handleEvent(event, now);
     touchline.handleEvent(event, now);
   }
@@ -140,7 +140,7 @@ function draw() {
     }
     for (const { event, late } of timeline.release()) show(event, now, late);
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
-    broadcast.update(actors.ballPosition, dt, now);
+    broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
     touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }
