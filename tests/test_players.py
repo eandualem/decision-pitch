@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from decision_pitch import actions, players
+from decision_pitch import actions, bots, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
 from decision_pitch.bots import DRIBBLE_SPEED, _goal_line_spot, _home, _save_spot, _taker
@@ -173,6 +173,20 @@ def test_a_shot_out_of_range_is_passed_when_pressed():
     presser.x, presser.y = p.x + 1.0, p.y
     command = actions.command(match, p, "shoot")
     assert isinstance(command, KickTo) and abs(command.x) != 52.5  # a pass, not a shot
+
+
+def test_a_shot_from_outside_the_area_is_carried_closer_unless_pressed():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    p.x, p.y = match.attack(p.team) * (52.5 - 22.0), 0.0
+    match.ball.place(p.x, p.y)
+    for command in (actions.command(match, p, "shoot"), bots.command(match, p)):
+        assert isinstance(command, MoveTo) and command.speed == DRIBBLE_SPEED
+    presser = next(q for q in match.players if q.team != p.team and q.position != "GK")
+    presser.x, presser.y = p.x + 1.0, p.y
+    for command in (actions.command(match, p, "shoot"), bots.command(match, p)):
+        assert isinstance(command, KickTo) and abs(command.x) == 52.5  # a shot
 
 
 def test_at_a_restart_only_the_taker_goes_to_the_ball():

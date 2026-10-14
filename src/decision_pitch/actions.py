@@ -14,6 +14,7 @@ import math
 from decision_pitch import pitch
 from decision_pitch.arena.models import Question
 from decision_pitch.bots import (
+    CLOSE_RANGE,
     DRIBBLE_SPEED,
     JOG,
     PRESSURE,
@@ -23,6 +24,7 @@ from decision_pitch.bots import (
     _on_the_ball,
     _pass_or_clear,
     _press_spot,
+    _pressed,
     _save_spot,
     _space,
     _take_restart,
@@ -61,10 +63,13 @@ def command(m: Match, p: Player, action: str) -> Command:
     if m.phase == "half_time":
         return Hold()
     direction = m.attack(p.team)
-    if action == "shoot" and math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y) >= SHOOTING_RANGE:
+    goal = math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y)
+    if action == "shoot" and goal >= SHOOTING_RANGE:
         if m.phase == "play" and m.owner == p.id:
             return _on_the_ball(m, p)  # into range first, passing when pressed
         action = "dribble"
+    if action == "shoot" and m.phase == "play" and m.owner == p.id and goal >= CLOSE_RANGE and not _pressed(m, p):
+        return _on_the_ball(m, p)  # unpressed, it carries the ball closer first
     if m.phase in RESTARTS:
         taker = m.restart_team == p.team and p.id == _taker(m, p.team).id
         if taker and action not in KICKS:

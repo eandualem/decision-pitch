@@ -98,7 +98,18 @@ a test or from the command line without a browser.
   answering as Laya does, 28% of shots from 16-20 m and 15% from 20-24 m
   scored, now 11% and 3.5% (goals from 3.1 to 1.6 a match). A larger reach
   gave similar numbers but would show the ball stopping short of the keeper;
-  12 m/s² saved nearly every shot from outside 12 m.
+  12 m/s² saved nearly every shot from outside 12 m. An outfield player on
+  the ball shoots within 16 m of goal, about the edge of the penalty area,
+  or within 24 m when an opponent is within 2.5 m; with nobody that close it
+  dribbles on first. Shooting the moment it came within 24 m, as first
+  built, put most shots at 20-24 m, where a diving keeper saves nearly all
+  of them. Over 64 matches with models answering as Laya does, shots from
+  20-24 m fell from 7.6 to 4.0 a match and those from 12-16 m rose from 1.7
+  to 4.7, with shots in all about the same (13.0 and 12.8); corners rose
+  from 0.5 to 1.0 and goals only from 1.2 to 1.3. Over 64 bot matches, shots
+  from 20-24 m fell from 10.4 to 5.2 and those from 12-16 m rose from 2.9 to
+  6.2, with goals unchanged (0.9). Carrying the ball to 18 m moved the long
+  shots to 16-20 m instead.
 - **Fairness.** Both teams run through the same code with the same physics.
   Each player's state is built by one function, mirrored for the team
   attacking the other way, so neither side gets a different view.
@@ -177,7 +188,7 @@ A model chooses one of eight actions, each described to it in a few words:
 | `mark` | stays goal-side of the nearest opponent |
 | `dribble` | runs with the ball towards the opponents' goal |
 | `pass` | passes to the best-placed open teammate, or clears if none is open |
-| `shoot` | shoots inside the post further from the goalkeeper; from 24 m or more, plays the ball as the built-in bot does (dribbles into range, passes when pressed) |
+| `shoot` | shoots inside the post further from the goalkeeper; from 16 m or more with no opponent within 2.5 m, or from 24 m or more, plays the ball as the built-in bot does (dribbles closer, passes when pressed out of range) |
 | `clear` | kicks the ball long upfield |
 
 The action is turned into an engine command on every physics step, with the
@@ -194,10 +205,11 @@ sensible football, the same rules for both teams:
 - **On the ball**, `press`, `hold`, `support` and `mark` keep playing it as
   the built-in bot does (dribble, pass when pressed, shoot in range), instead
   of standing on it. So does `shoot` out of range, instead of dribbling into
-  a tackle. Laya answers `shoot` almost every time; with every outfielder
-  answering it, the ball changed hands by a tackle about 590 times a bot
-  match of two 180 s halves, and now about 16 (bots alone: 10), with passes
-  made under pressure again.
+  a tackle, and `shoot` from 16-24 m with no opponent within 2.5 m, which
+  carries the ball closer before shooting, as the bot does. Laya answers
+  `shoot` almost every time; with every outfielder answering it, the ball
+  changed hands by a tackle about 590 times a bot match of two 180 s halves,
+  and now about 16 (bots alone: 10), with passes made under pressure again.
 - **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
   built-in bot does: the one player who can reach the ball first goes for it
   and the others keep their places, instead of every one of them running at it.
