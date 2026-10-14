@@ -253,6 +253,8 @@ def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
     x = p.home[0] + 0.5 * bx + (8 if attacking else 0) + 15
     y = p.home[1] * 0.85 + 0.25 * by
     x = max(-pitch.HALF_LENGTH + 4, min(pitch.HALF_LENGTH - 6, x))
+    if m.phase == "goal_kick" and p.team != m.restart_team:
+        x = min(x, pitch.HALF_LENGTH - pitch.PENALTY_DEPTH - 1)  # outside the area until the kick
     return direction * x, direction * y
 
 

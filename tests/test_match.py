@@ -90,6 +90,17 @@ def test_opponents_keep_their_distance_at_a_corner():
     assert m.phase == "corner"
 
 
+def test_opponents_wait_outside_the_penalty_area_at_a_goal_kick():
+    m = in_play(ball=(pitch.HALF_LENGTH - 1, 15.0), velocity=(10.0, 0.0, 0.0), last_touch=0)
+    run(m, 0.5)
+    attacker = next(p for p in m.players if p.team == 0 and p.position == "FW")
+    attacker.x, attacker.y = pitch.HALF_LENGTH - 6, -10.0
+    m.command(attacker.id, MoveTo(attacker.x, attacker.y))
+    run(m, 3)  # it runs out, then is held there
+    assert attacker.x < pitch.HALF_LENGTH - pitch.PENALTY_DEPTH
+    assert m.phase == "goal_kick"
+
+
 def test_only_the_restarting_team_may_play_the_ball_and_its_kick_restarts_play():
     m = in_play(ball=(10.0, pitch.HALF_WIDTH - 1), velocity=(0.0, 8.0, 0.0), last_touch=0)
     run(m, 0.5)
