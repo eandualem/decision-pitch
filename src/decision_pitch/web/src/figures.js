@@ -10,7 +10,9 @@ import { clone as cloneScene } from 'three/addons/utils/SkeletonUtils.js';
 export const FIGURE_HEIGHT = 1.8; // m, at scale 1
 const SHORTEST = 1.7;
 const TALLEST = 1.95;
-const SIDEWAYS = 1; // m/s above a walk over which the direction of travel comes in
+// m/s: below a shuffle the direction of travel is too uncertain to follow, so the figure
+// steps forwards; the direction comes in over this range of speeds.
+const SHUFFLE = [0.15, 0.35];
 const STILL = 0.4; // m/s below which a one-shot plays with its whole body
 const MOST = 0.999; // the largest share of a bone a one-shot takes from the loops
 
@@ -34,10 +36,12 @@ const LAYERS = {
   gesture: new Set(ARMS),
 };
 
-// Skin tones, lightest first, and the hair colours that go with each.
+// Skin tones, lightest first, and the hair colours that go with each. Grey (the last
+// colour) is kept for the staff on the touchline.
 export const SKINS = ['#f2cfb1', '#e2b48e', '#c99168', '#a8704a', '#80502f', '#5b3720'];
 export const HAIRS = ['#15100c', '#2c1d14', '#4b3020', '#6f4a2b', '#a47c47', '#7b3a1d', '#8e8a85'];
-const HAIR_FOR_SKIN = [[1, 2, 3, 4, 5, 0, 6], [0, 1, 2, 3, 4, 5, 6], [0, 1, 2, 3, 1, 6], [0, 1, 0, 2, 6], [0, 1, 0, 6], [0, 0, 1, 6]];
+const GREY = HAIRS.length - 1;
+const HAIR_FOR_SKIN = [[1, 2, 3, 4, 5, 0], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 1], [0, 1, 0, 2], [0, 1, 0], [0, 0, 1]];
 const BOOTS = '#151a20';
 const SHOES = '#101317';
 const TROUSERS = '#252a31';
@@ -75,7 +79,7 @@ export function gait(clips) {
   for (const group of groups) group.sort((a, b) => loops[a].speed - loops[b].speed);
   for (let d = 1; d < groups.length; d++) if (!groups[d].length) groups[d] = groups[0];
   const walk = groups[0].length ? loops[groups[0][0]].speed : 1.5;
-  return { loops, groups, walk, lower: new Int32Array(4), upper: new Int32Array(4), t: new Float64Array(4), stride: new Float64Array(4) };
+  return { loops, groups, walk, shuffle: SHUFFLE[1], lower: new Int32Array(4), upper: new Int32Array(4), t: new Float64Array(4), stride: new Float64Array(4) };
 }
 
 // Blends the loops for a figure moving over the ground at `speed` m/s, travelling at
@@ -86,8 +90,8 @@ export function gait(clips) {
 // Each direction blends the two loops either side of the speed (over the scale: a taller
 // figure's stride is longer). The directions share out so that the blended stride points
 // along the travel, and played at the returned rate that stride covers the ground at
-// exactly `speed`, so the planted foot stays put. At a walk's pace or less the travel is
-// ignored and the figure walks forwards; just above it the two blends cross-fade.
+// exactly `speed`, so the planted foot stays put, whichever way it goes. Below a shuffle
+// the travel is ignored and the figure steps forwards; above it the blends cross-fade.
 export function blendLoops(gait, speed, travel, scale, weights) {
   weights.fill(0);
   if (!(speed > 0)) {
@@ -117,7 +121,7 @@ export function blendLoops(gait, speed, travel, scale, weights) {
     }
     stride[d] = loops[lower[d]].stride * (1 - t[d]) + loops[upper[d]].stride * t[d];
   }
-  const across = ramp(pace, gait.walk, gait.walk + SIDEWAYS);
+  const across = ramp(pace, SHUFFLE[0], SHUFFLE[1]);
   // Forwards, whatever the travel.
   let length = (1 - across) * stride[0];
   add(gait, weights, 0, 1 - across);
@@ -186,8 +190,9 @@ function seedOf(seed) {
 }
 
 // A person's look from its id: height, skin, hair style and colour, sleeves and the build
-// and face shape keys. The same seed gives the same look everywhere.
-export function variation(seed, { hairs = 1, morphs = [] } = {}) {
+// and face shape keys. The same seed gives the same look everywhere. `greying` people
+// (the managers and their assistants) are grey-haired about half the time.
+export function variation(seed, { hairs = 1, morphs = [], greying = false } = {}) {
   const n = seedOf(seed);
   const at = (k) => fract((n + 1) * SPREAD[k % SPREAD.length] + k * 0.137);
   const skin = Math.floor(at(1) * SKINS.length);
@@ -211,7 +216,7 @@ export function variation(seed, { hairs = 1, morphs = [] } = {}) {
     height: SHORTEST + (TALLEST - SHORTEST) * at(0),
     skin,
     hair: Math.floor(at(2) * Math.max(1, hairs)),
-    hairColour: hairColours[Math.floor(at(3) * hairColours.length)],
+    hairColour: greying && at(8) < 0.5 ? GREY : hairColours[Math.floor(at(3) * hairColours.length)],
     longSleeves: at(4) < 0.22,
     shapes,
     phase: fract(n * 0.7548776662),
@@ -307,6 +312,7 @@ export function prepareFigure(scene, animations, info = {}) {
     scene, info, clips, described, hairs, morphs,
     gait: gait(described),
     layered: { play: new Map(), gesture: new Map() }, // clips with only that layer's tracks
+    twins: new Map(),
     parts: { body: info.body ?? 'body', coat: info.coat ?? 'coat', number: info.number ?? 'number' },
   };
 }
@@ -323,6 +329,16 @@ function layeredClip(template, name, layer) {
     made.set(name, clip);
   }
   return clip;
+}
+
+// A copy of `clip` sharing its tracks, for a second action on the same clip.
+function twinOf(template, clip) {
+  let twin = template.twins.get(clip);
+  if (!twin) {
+    twin = new THREE.AnimationClip(clip.name, clip.duration, clip.tracks);
+    template.twins.set(clip, twin);
+  }
+  return twin;
 }
 
 // Skinned meshes that shared a skeleton in the source share one in the clone, so the
@@ -370,7 +386,9 @@ export function createFigures(template) {
   // One person. `seed` picks its look; `role` is 'outfield', 'keeper', 'manager' or
   // 'assistant'; `colours` are its team's; `number` is printed on its back.
   function create({ seed = 0, role = 'outfield', colours = {}, number = null } = {}) {
-    const look = variation(seed, { hairs: template.hairs.length, morphs: template.morphs });
+    const look = variation(seed, {
+      hairs: template.hairs.length, morphs: template.morphs, greying: role === 'manager' || role === 'assistant',
+    });
     const palette = outfit(role, colours, look);
     const object = cloneScene(template.scene);
     shareSkeletons(template.scene, object);
@@ -430,6 +448,8 @@ export function createFigures(template) {
     let lastTravel = 0;
 
     function action(clip) {
+      // The same clip twice in a frame (one fading out as it starts again) plays on a twin.
+      if (oneShots.get(clip)?.frame === frame) clip = twinOf(template, clip);
       let entry = oneShots.get(clip);
       if (!entry) {
         entry = { action: mixer.clipAction(clip), frame: -1 };

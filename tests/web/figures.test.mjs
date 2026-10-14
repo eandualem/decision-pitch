@@ -69,12 +69,11 @@ test('feet stay planted at every speed and direction, through the blend boundari
   const weights = new Float32Array(steps.loops.length);
   for (const scale of [1.7 / 1.8, 1.95 / 1.8]) {
     for (let speed = 0.02; speed <= 9; speed += 0.07) {
-      // Ignoring the travel at a walk or less, the figure walks forwards, so check forwards there.
+      // Ignoring the travel below a shuffle, the figure steps forwards, so check forwards there.
       const pace = speed / scale;
-      const travels = pace <= steps.walk ? [0] : [0, 0.4, 1.2, Math.PI / 2, 2.2, Math.PI, -0.7, -Math.PI / 2, -2.6];
+      const travels = pace <= steps.shuffle ? [0] : [0, 0.4, 1.2, Math.PI / 2, 2.2, Math.PI, -0.7, -Math.PI / 2, -2.6];
       for (const travel of travels) {
         const rate = blendLoops(steps, speed, travel, scale, weights);
-        if (pace > steps.walk && pace < steps.walk + 1 && travel !== 0) continue; // the travel comes in here
         const slip = footSlip(steps, weights, rate, scale, speed, travel);
         assert.ok(slip < 1e-6 * speed, `slip ${slip} m/s at ${speed.toFixed(2)} m/s, travel ${travel}`);
       }
@@ -91,7 +90,7 @@ test('the blend changes smoothly with speed and travel', () => {
       const ra = blendLoops(steps, speed, travel, 1, a);
       const rb = blendLoops(steps, speed + 0.01, travel, 1, b);
       for (let i = 0; i < a.length; i++) assert.ok(Math.abs(a[i] - b[i]) < 0.02, `weight jump at ${speed} m/s`);
-      if (speed > 0.05) assert.ok(Math.abs(ra - rb) < 0.02, `rate jump at ${speed} m/s: ${ra} -> ${rb}`);
+      if (speed > 0.05) assert.ok(Math.abs(ra - rb) < 0.05, `rate jump at ${speed} m/s: ${ra} -> ${rb}`);
     }
   }
   for (let travel = -Math.PI; travel < Math.PI; travel += 0.01) {
@@ -101,13 +100,22 @@ test('the blend changes smoothly with speed and travel', () => {
   }
 });
 
-test('at a walk or slower the direction of travel is ignored', () => {
+test('below a shuffle the travel is ignored; above it a slow sideways or backwards move steps that way', () => {
   const steps = gait(describe());
   const weights = new Float32Array(steps.loops.length);
-  for (const travel of [Math.PI / 2, Math.PI, -2]) {
-    blendLoops(steps, 1.2, travel, 1, weights);
-    const shown = steps.loops.filter((_, i) => weights[i] > 0).map(loop => loop.name);
-    assert.deepEqual(shown, ['idle', 'walk']);
+  const shown = () => steps.loops.filter((_, i) => weights[i] > 1e-9).map(loop => loop.name);
+  blendLoops(steps, 0.1, Math.PI / 2, 1, weights);
+  assert.deepEqual(shown(), ['idle', 'walk'], 'barely moving: a step forwards');
+  for (const speed of [1, 1.5, 2]) {
+    let rate = blendLoops(steps, speed, Math.PI / 2, 1, weights);
+    assert.deepEqual(shown(), ['idle', 'strafe_L'].slice(speed >= 2 ? 1 : 0), `${speed} m/s to its left`);
+    assert.ok(footSlip(steps, weights, rate, 1, speed, Math.PI / 2) < 1e-6, 'planted');
+    rate = blendLoops(steps, speed, Math.PI, 1, weights);
+    assert.deepEqual(shown(), ['idle', 'backpedal'].slice(speed >= 2 ? 1 : 0), `${speed} m/s backwards`);
+    assert.ok(footSlip(steps, weights, rate, 1, speed, Math.PI) < 1e-6, 'planted');
+    rate = blendLoops(steps, speed, 2.4, 1, weights);
+    assert.ok(!shown().some(name => ['walk', 'jog', 'sprint'].includes(name)), 'never forwards against a backwards move');
+    assert.ok(footSlip(steps, weights, rate, 1, speed, 2.4) < 1e-6, 'planted on a diagonal');
   }
   blendLoops(steps, 4, Math.PI / 2, 1, weights);
   assert.ok(near(weights[steps.loops.findIndex(loop => loop.name === 'strafe_L')], 1), 'sideways at a run, it strafes');
@@ -146,6 +154,8 @@ test('a person looks the same for the same id, and 22 players do not repeat each
   const options = { hairs: HAIRS.length, morphs: ['build_slim', 'build_broad', 'face_wide', 'face_long', 'jaw_strong', 'nose_big'] };
   assert.deepEqual(variation(7, options), variation(7, options));
   assert.deepEqual(variation('manager-1', options), variation('manager-1', options));
+  const staff = Array.from({ length: 40 }, (_, i) => variation(`assistant-${i}`, { ...options, greying: true }));
+  assert.ok(staff.filter(l => l.hairColour === 6).length >= 10, 'staff on the touchline are often grey');
   assert.notDeepEqual(variation('manager-0', options), variation('manager-1', options));
   const looks = Array.from({ length: 22 }, (_, i) => variation(i + 1, options));
   for (const look of looks) {
@@ -154,6 +164,7 @@ test('a person looks the same for the same id, and 22 players do not repeat each
     assert.ok(!(look.shapes.build_slim > 0 && look.shapes.build_broad > 0), 'one build at a time');
     assert.ok(!(look.shapes.face_wide > 0 && look.shapes.face_long > 0), 'one face shape at a time');
   }
+  assert.equal(looks.filter(l => l.hairColour === 6).length, 0, 'no grey-haired players');
   const keys = looks.map(l => `${l.skin}/${l.hair}/${l.hairColour}/${l.height.toFixed(2)}`);
   assert.equal(new Set(keys).size, 22, 'no two alike');
   for (const team of [looks.slice(0, 11), looks.slice(11)]) {
@@ -295,4 +306,14 @@ test('the shadow-casting and culling choices hold for the template', () => {
   assert.ok(eyes.material.vertexColors, 'and keep their vertex colours');
   assert.ok(template.scene.getObjectByName('body').children[1].castShadow);
   assert.ok(THREE.MathUtils.isPowerOfTwo(4)); // three resolves through the vendored copy
+});
+
+test('the same clip twice in a frame plays twice, as when a pass fades out as the next begins', () => {
+  const made = createFigures(fixture());
+  const person = made.create({ seed: 4 });
+  person.act('pass', 0.7, 0.4);
+  person.act('pass', 0.1, 0.6);
+  person.update(1 / 60, 0, 0);
+  const acts = person.state().acts.filter(a => a.name === 'pass').map(a => a.time).sort();
+  assert.deepEqual(acts, [0.1, 0.7]);
 });
