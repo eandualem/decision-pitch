@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         parser.add_argument(
             f"--{team}-manager", type=_manager, default="builtin", metavar="MANAGER",
-            help=f"the {team} team's manager: builtin (default), or openai or openai:MODEL",
+            help=f"the {team} team's manager: builtin (default), openai, openai:MODEL, anthropic or anthropic:MODEL",
         )
     parser.add_argument(
         "--assistants", type=int, choices=range(len(managers.ASSISTANTS) + 1), default=0,
@@ -199,8 +199,8 @@ def _names(text: str) -> tuple[str, ...]:
 
 
 def _manager(text: str) -> str:
-    if text != "builtin" and text.split(":", 1)[0] != "openai":
-        raise argparse.ArgumentTypeError("builtin, openai or openai:MODEL")
+    if text != "builtin" and text.split(":", 1)[0] not in ("openai", "anthropic"):
+        raise argparse.ArgumentTypeError("builtin, openai, openai:MODEL, anthropic or anthropic:MODEL")
     return text
 
 
@@ -208,12 +208,14 @@ def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int):
     """What makes a team's manager for each match, checked now so a missing key shows at once."""
     if spec == "builtin":
         return managers.BuiltIn
-    model = spec.split(":", 1)[1] if ":" in spec else managers.DEFAULT_MODEL
+    provider, _, model = spec.partition(":")
+    kind = managers.Claude if provider == "anthropic" else managers.LanguageModel
+    model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else managers.DEFAULT_MODEL)
     try:
-        asyncio.run(managers.LanguageModel(model, assistants).aclose())
+        asyncio.run(kind(model, assistants).aclose())
     except MissingKey as exc:
         parser.error(str(exc))
-    return lambda: managers.LanguageModel(model, assistants)
+    return lambda: kind(model, assistants)
 
 
 def _models(

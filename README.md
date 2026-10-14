@@ -73,15 +73,18 @@ managers' instructions and substitutions.
 
 The built-in manager (`builtin`, the default) needs nothing: it picks models
 by their typical answer times and substitutes by simple rules. A language
-model can manage instead, through OpenAI's API with `OPENAI_API_KEY`:
+model can manage instead, through Anthropic's API with `ANTHROPIC_API_KEY`
+or OpenAI's API with `OPENAI_API_KEY`:
 
 ```bash
-uv run decision-pitch --home laya,bot --home-manager openai --away-manager builtin
+uv run decision-pitch --home laya,bot --home-manager anthropic --away-manager builtin
 ```
 
-`openai` uses `gpt-5.4-mini`; name another model with `openai:MODEL`.
+`anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-5.4-mini`; name
+another model with `anthropic:MODEL` or `openai:MODEL`.
 `--assistants 1` or `2` gives each language-model manager assistant models
-(`gpt-5.4-nano`) that send it a short note before each consultation. A
+(`claude-haiku-5-5` or `gpt-5.4-nano`) that send it a short note before each
+consultation. A
 language-model manager is asked about 25 times a team in a match of two
 three-minute halves, each time with about 1,000 tokens.
 A model that answers faster acts more often: each player asks its model again
