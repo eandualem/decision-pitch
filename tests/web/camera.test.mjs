@@ -30,7 +30,7 @@ function setup(aspect = 16 / 9) {
     message(team, kind = 'instruction') { broadcast.handleMessage({ type: 'manager', team, kind }, now, touchline); },
     // The manager the camera is on, or -1 for none.
     on() { return managers.findIndex(manager => camera.position.distanceTo(manager) < 15); },
-    wide() { return camera.position.y > 25; },
+    wide() { return camera.fov < 30 && camera.position.y > 15; },
     run(seconds, phase = 'play') {
       for (let t = 0; t < seconds; t += 1 / 60) {
         now += 1 / 60;
@@ -50,20 +50,27 @@ function setup(aspect = 16 / 9) {
   };
 }
 
-test('the wide shot follows play from the stand, two thirds as far as it used to be', () => {
+test('the wide shot follows play from the stand like a broadcast main camera', () => {
+  const down = THREE.MathUtils.degToRad(22);
   for (const [x, z] of [[0, 0], [-20, 10], [15, 25], [60, -40]]) {
     const t = setup();
     t.ball.set(x, 0.3, z);
-    t.run(6);
+    t.run(8);
     // It follows part of the ball's way, but keeps the ball well inside the frame.
-    const lookZ = Math.max(z - 14, Math.min(z + 35, Math.max(-PITCH.width * 0.3, Math.min(PITCH.width * 0.3, z * 0.28))));
-    const side = 27 - 0.5 * Math.max(0, z - lookZ);
-    const lookX = Math.max(x - side, Math.min(x + side, x * 0.44));
-    assert.ok(t.camera.position.distanceTo(new THREE.Vector3(lookX, 35, lookZ + 42)) < 0.01, `ball (${x}, ${z})`);
+    const lookZ = Math.max(z - 12, Math.min(z + 30, Math.max(-PITCH.width * 0.35, Math.min(PITCH.width * 0.35, z * 0.5))));
+    const side = 15 - 0.3 * Math.max(0, z - lookZ);
+    const lookX = Math.max(x - side, Math.min(x + side, Math.max(-PITCH.length * 0.42, Math.min(PITCH.length * 0.42, x * 0.75))));
+    const expected = new THREE.Vector3(lookX, 72 * Math.sin(down), lookZ + 72 * Math.cos(down));
+    assert.ok(t.camera.position.distanceTo(expected) < 0.02, `ball (${x}, ${z}): ${t.camera.position.toArray()}`);
     const centre = t.screen(lookX, 0, lookZ);
     assert.ok(Math.abs(centre.x) < 0.01 && Math.abs(centre.y) < 0.01, 'aimed at the look point');
-    const distance = t.camera.position.distanceTo(new THREE.Vector3(lookX, 0, lookZ));
-    assert.ok(distance < 0.7 * Math.hypot(53, 64), `closer than the first wide shot: ${distance}`);
+    assert.ok(Math.abs(t.camera.fov - 20) < 1e-6, 'through a longer lens than the close-ups');
+    // A player at the look point stands 40-50 px tall in a 720p frame.
+    const height = (t.screen(lookX, 1.8, lookZ).y - t.screen(lookX, 0, lookZ).y) / 2 * 720;
+    assert.ok(height > 40 && height < 52, `a player ${height.toFixed(1)} px tall`);
+    // And the frame shows 35-45 m of pitch across at that depth.
+    const across = 2 * 72 * Math.tan(THREE.MathUtils.degToRad(10)) * (16 / 9);
+    assert.ok(across > 35 && across < 47, `${across.toFixed(1)} m across`);
   }
 });
 
@@ -95,7 +102,7 @@ test('the play around the ball stays in frame, and a fast switch of play never l
       pulled = Math.max(pulled, t.camera.position.y);
     }
     assert.ok(worst < 0.9, `ball in frame across ${x0},${z0} -> ${x1},${z1}: ${worst}`);
-    assert.ok(pulled > 36, 'the shot pulls back a little for a fast ball');
+    assert.ok(pulled > 28, 'the shot pulls back a little for a fast ball');
   }
 });
 
@@ -105,7 +112,9 @@ test('a ball placed for a restart is not led as if it had been kicked', () => {
   t.run(3);
   t.ball.set(0, 0.3, 0); // the kick-off spot, in one frame
   t.run(4);
-  assert.ok(t.camera.position.distanceTo(new THREE.Vector3(0, 35, 42)) < 0.05, `settled on the spot: ${t.camera.position.toArray()}`);
+  const down = THREE.MathUtils.degToRad(22);
+  const spot = new THREE.Vector3(0, 72 * Math.sin(down), 72 * Math.cos(down));
+  assert.ok(t.camera.position.distanceTo(spot) < 0.05, `settled on the spot: ${t.camera.position.toArray()}`);
 });
 
 test('the ball stays comfortably in frame anywhere on the pitch', () => {
@@ -125,6 +134,7 @@ test('after the scorer close-up a goal cuts to the scoring manager while the bal
   assert.ok(t.camera.position.distanceTo(t.actors.getPlayerPosition(9)) < 30, 'close on the scorer');
   t.run(1, 'kickoff');
   assert.equal(t.on(), 1, 'cut to the scoring manager');
+  assert.equal(t.camera.fov, 40, 'through the close-ups\' lens');
   const manager = t.managers[1];
   const centre = t.screen(manager.x, 1.3, manager.z);
   assert.ok(Math.abs(centre.x) < 0.2 && Math.abs(centre.y) < 0.2, 'framed on the manager');
