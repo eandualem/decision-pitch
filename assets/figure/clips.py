@@ -572,6 +572,8 @@ class Gait:
     def foot_channels(self, s, t):
         """The channels of foot `s` at time t after its own touchdown."""
         t = t % self.T
+        if self.T - t < 1e-9:
+            t = 0.0  # a touchdown, however the arithmetic rounds it
         ts = self.duty * self.T
         if t <= ts:
             return self._stance_channels(s, t)
@@ -584,6 +586,8 @@ class Gait:
             # Toes come flat again as a forefoot landing nears the grass.
             toe = lerp(toe, -land_pitch, smoothstep((k - 0.8) / 0.2))
             flat = max(flat, smoothstep((k - 0.8) / 0.2))
+        else:
+            toe = lerp(toe, 0.0, smoothstep((k - 0.8) / 0.2))  # and straight for a heel landing
         return {
             f"f{s}x": 0.0, f"f{s}y": 0.0, f"f{s}z": 0.0,
             f"f{s}yaw": self.yaw[s], f"f{s}pitch": self.pitch(t / self.T),
@@ -987,8 +991,9 @@ def jog_turned_clip(solver, angle, name):
     frames, duty, speed = 21, 0.30, 4.0
     hips = HIPS[angle]
     across = angle - hips
-    land, paths = steps(angle, speed, frames, duty, ahead=0.27, width=0.06, hips=hips, spread=0.035,
-                        swing=[(0.25, 0.13, 0.33), (0.5, 0.545, 0.42), (0.78, 1.14, 0.26)], out=0.02)
+    land, paths = steps(angle, speed, frames, duty, ahead=0.27, width=0.06, hips=hips,
+                        spread=0.035 + 0.02 * hips / 80.0, out=0.02,
+                        swing=[(0.25, 0.13, 0.33), (0.5, 0.545, 0.42), (0.78, 1.14, 0.26)])
     toes = hips + 0.65 * across
 
     def body(u):
@@ -1278,11 +1283,28 @@ def shield_clips(solver):
 # the root by exactly as much as the root moves and turns over it.
 
 
+class Linear:
+    """Straight lines through keys [(time, value)], held level beyond them."""
+
+    def __init__(self, keys):
+        self.keys = sorted(keys)
+
+    def __call__(self, t):
+        k = self.keys
+        if t <= k[0][0]:
+            return k[0][1]
+        for (t0, v0), (t1, v1) in zip(k, k[1:]):
+            if t <= t1:
+                return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+        return k[-1][1]
+
+
 def root_path(t, speeds, headings, travels=None, step=1.0 / 240.0):
-    """Where the engine has carried the root by time t, and which way it faces: speeds and
-    headings (degrees) are [(time, value)] curves, `travels` the direction it moves in
-    (the heading if not given). Integrated from t = 0, root at the origin facing -Y."""
-    speed, heading = Curve(speeds), Curve(headings)
+    """Where the engine has carried the root by time t, and which way it faces: `speeds`
+    is a function of time (m/s) and headings (degrees) are [(time, value)] curves,
+    `travels` the direction it moves in (the heading if not given). Integrated from
+    t = 0, root at the origin facing -Y."""
+    speed, heading = speeds, Curve(headings)
     travel = Curve(travels) if travels else heading
     if t < 0.0:  # before the clip, still running as it starts
         return heading_vector(travel(0.0)) * (speed(0.0) * t), heading(0.0)
@@ -1436,9 +1458,11 @@ def cut_clip(solver, turn=60.0, speed=6.0):
     degrees over the plant and leaves at three quarters of the pace."""
     end, contact = 0.75, 0.25
 
+    speeds = [(0.0, speed), (contact, speed), (contact + 0.16, 0.75 * speed), (end, 0.75 * speed)]
+    pace = Linear(speeds)
+
     def root(t):
-        return root_path(t, [(0.0, speed), (contact, speed), (contact + 0.16, 0.75 * speed), (end, 0.75 * speed)],
-                         [(0.0, 0.0), (contact - 0.05, 0.0), (contact + 0.25, turn), (end, turn)],
+        return root_path(t, pace, [(0.0, 0.0), (contact - 0.05, 0.0), (contact + 0.25, turn), (end, turn)],
                          [(0.0, 0.0), (contact, 0.0), (contact + 0.16, turn), (end, turn)])
 
     c = contact
@@ -1477,53 +1501,100 @@ def cut_clip(solver, turn=60.0, speed=6.0):
         p.update(feet(t))
         return p
 
-    clip = Clip("cut_L", int(round(end * FPS)), sample, loop=False, contact=contact, turn=turn)
+    clip = Clip("cut_L", int(round(end * FPS)), sample, loop=False, contact=contact, turn=turn,
+                speeds=[[round(t, 4), v] for t, v in speeds])
     clip.root = root
     return clip
 
 
-def brake_clip(solver, speed=5.0):
-    """Pulling up from a run: short braking steps planted ahead, the body sitting down and
-    back with the arms out in front, then standing. `contact` is the first braking step.
-    The feet stay planted for a root that slows evenly from `speed` to a stop."""
-    end, contact, stop = 1.25, 0.12, 1.0
+def brake_clip(solver, speed=7.5, slowing=4.0):
+    """Pulling up from a sprint: braking steps planted ahead, shortening as the body
+    slows, the body sitting down and back with the arms out in front, then settling
+    into the stance. The feet stay planted for a root that slows evenly from `speed` at
+    `slowing` m/s2, as the engine brakes, so the page can join it at the moment whose
+    speed (`speeds`) is the player's. `contact` is the first braking step."""
+    stop = speed / slowing
+    end = stop + 0.36
+    contact = 0.10
+
+    def gone(t):  # how far the root has come by time t
+        if t < 0.0:
+            return speed * t
+        t = min(t, stop)
+        return speed * t - 0.5 * slowing * t * t
 
     def root(t):
-        return root_path(t, [(0.0, speed), (stop, 0.0), (end, 0.0)], [(0.0, 0.0), (end, 0.0)])
+        return Vector((0.0, -gone(t), 0.0)), 0.0
 
-    plants = {
-        "R": [_plant(root, -0.25, -0.12, -0.06, -0.2, -5.0), _plant(root, contact, 0.3, -0.08, -0.36, -6.0),
-              _plant(root, 0.6, 0.78, -0.10, -0.30, -8.0), _plant(root, 1.04, end, -0.13, -0.01, -9.0)],
-        "L": [_plant(root, -0.05, 0.06, 0.06, -0.02, 5.0), _plant(root, 0.36, 0.55, 0.09, -0.36, 8.0),
-              _plant(root, 0.86, end, 0.13, -0.10, 9.0)],
-    }
-    pitch = {
-        "R": Curve([(0.0, -35.0), (contact - 0.02, 12.0), (contact, 16.0), (contact + 0.08, 0.0), (0.24, -6.0),
-                    (0.3, -40.0), (0.45, -20.0), (0.6, 10.0), (0.66, 0.0), (0.78, -35.0), (0.92, -10.0), (1.04, 0.0)]),
-        "L": Curve([(0.0, -15.0), (0.06, -50.0), (0.2, -30.0), (0.36, 12.0), (0.42, 0.0), (0.5, -8.0), (0.55, -38.0),
-                    (0.7, -15.0), (0.86, 0.0)]),
-    }
-    feet = Footwork(root, plants, pitch, height=0.12)
-    base = dict(READY)
+    def pace(t):
+        return max(0.0, speed - slowing * max(t, 0.0))
+
+    def lifts(land, ahead, behind):
+        """When a foot planted `ahead` of the root at `land` is `behind` it."""
+        target = gone(land) + ahead + behind
+        if gone(stop) < target:
+            return None
+        lo, hi = land, stop
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            lo, hi = (mid, hi) if gone(mid) < target else (lo, mid)
+        return hi
+
+    # Footfalls, right and left in turn, each a little later as the body slows: a
+    # foot lands ahead of the root and lifts once the root has gone past it.
+    falls = [(contact - 0.44, "R"), (contact - 0.22, "L"), (contact, "R")]
+    t, foot = contact, "R"
+    while pace(t) > 1.2:
+        t += 0.22 + 0.03 * (speed - pace(t))
+        foot = "L" if foot == "R" else "R"
+        falls.append((t, foot))
+    plants = {"L": [], "R": []}
+    pitch = {}
+    for land, foot in falls:
+        v = pace(land)
+        sign = 1.0 if foot == "L" else -1.0
+        ahead, behind = 0.10 + 0.028 * v, 0.20 + 0.028 * v
+        plants[foot].append([land, lifts(land, ahead, behind), 0.075 * sign, -ahead, 6.0 * sign])
+    # The last two steps settle into the stance where the root stops.
+    first, second = ("L", "R") if falls[-1][1] == "R" else ("R", "L")
+    settle = max(falls[-1][0] + 0.25, stop - 0.05)
+    for foot, at in ((first, settle), (second, settle + 0.24)):
+        x, y = (0.13, 0.01) if foot == "L" else (-0.13, -0.01)
+        stand = Vector((x, y - gone(stop), 0.0))
+        previous = plants[foot][-1]
+        if previous[1] is None:  # still planted: it steps from there
+            previous[1] = at - 0.2
+        plants[foot].append([at, end + 1.0, stand.x, stand.y + gone(at), 9.0 if foot == "L" else -9.0])
+    for foot in SIDES:
+        keys = []
+        for i, (land, lift, x, y, yaw) in enumerate(plants[foot]):
+            keys += [(land - 0.05, 0.0), (land, 6.0), (land + 0.06, 0.0)]
+            if lift is not None and lift < end:
+                keys += [(max(land + 0.07, lift - 0.04), -8.0), (lift, -40.0), (lift + 0.08, -32.0)]
+        pitch[foot] = Curve(sorted(keys))
+        plants[foot] = [_plant(root, land, lift if lift is not None else end + 1.0, x, y, yaw)
+                        for land, lift, x, y, yaw in plants[foot]]
+    feet = Footwork(root, plants, pitch, height=0.11)
     keys = [
-        (0.0, {"hz": -0.07, "hpitch": 6.0, "sflex": 8.0, "cflex": 3.0, "aLflex": 30.0, "aRflex": -20.0,
-               "aLelbow": 85.0, "aRelbow": 85.0, "aLabd": 14.0, "aRabd": 14.0}),
-        (contact + 0.05, {"hz": -0.13, "hy": 0.05, "hpitch": -4.0, "sflex": -2.0, "cflex": -4.0, "look_down": -2.0,
-                          "aLflex": 24.0, "aRflex": 20.0, "aLabd": 28.0, "aRabd": 28.0, "aLelbow": 80.0, "aRelbow": 80.0}),
-        (0.45, {"hz": -0.15, "hy": 0.04, "hpitch": 0.0, "sflex": 2.0, "cflex": -2.0,
-                "aLflex": 18.0, "aRflex": 24.0}),
-        (0.75, {"hz": -0.11, "hy": 0.02, "hpitch": 3.0, "sflex": 4.0, "aLflex": 15.0, "aRflex": 15.0,
-                "aLelbow": 35.0, "aRelbow": 35.0, "aLabd": 14.0, "aRabd": 14.0}),
+        (0.0, {"hz": -0.09, "hpitch": 7.0, "sflex": 10.0, "cflex": 4.0, "aLflex": 32.0, "aRflex": -22.0,
+               "aLelbow": 88.0, "aRelbow": 88.0, "aLabd": 13.0, "aRabd": 13.0}),
+        (0.30, {"hz": -0.12, "hy": 0.04, "hpitch": -3.0, "sflex": -1.0, "cflex": -4.0, "look_down": -2.0,
+                "aLflex": 14.0, "aRflex": 10.0, "aLabd": 30.0, "aRabd": 30.0, "aLelbow": 88.0, "aRelbow": 88.0}),
+        (stop - 0.25, {"hz": -0.14, "hy": 0.04, "hpitch": 0.0, "sflex": 2.0, "cflex": -2.0,
+                       "aLflex": 10.0, "aRflex": 13.0}),
+        (stop + 0.12, {"hz": -0.09, "hy": 0.01, "hpitch": 3.0, "sflex": 4.0, "aLflex": 10.0, "aRflex": 10.0,
+                       "aLelbow": 35.0, "aRelbow": 35.0, "aLabd": 14.0, "aRabd": 14.0}),
         (end, {}),
     ]
-    shot = Shot(base, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.03})
+    shot = Shot(READY, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.03})
 
     def sample(t):
         p = shot(t)
         p.update(feet(t))
         return p
 
-    clip = Clip("brake", int(round(end * FPS)), sample, loop=False, contact=contact)
+    clip = Clip("brake", int(round(end * FPS)), sample, loop=False, contact=contact,
+                speeds=[[0.0, speed], [round(stop, 4), 0.0]])
     clip.root = root
     return clip
 
@@ -1531,7 +1602,7 @@ def brake_clip(solver, speed=5.0):
 def cut_clips(solver):
     clip = cut_clip(solver)
     right = Clip("cut_R", clip.frames, lambda t: mirror(clip.sample(t)), loop=False, contact=clip.contact,
-                 turn=-clip.info["turn"])
+                 turn=-clip.info["turn"], speeds=clip.info["speeds"])
     right.root = lambda t: (Vector((-clip.root(t)[0].x, clip.root(t)[0].y, 0.0)), -clip.root(t)[1])
     return [clip, right, brake_clip(solver)]
 
@@ -1731,12 +1802,12 @@ def shot_clip(solver):
                    "hx": 0.05, "hy": -0.26, "hz": -0.09, "hyaw": 8.0, "hroll": -2.0, "hpitch": 10.0,
                    "sflex": 18.0, "cflex": 10.0, "ctwist": -8.0, "sside": 5.0, "look_down": 30.0,
                    "aLabd": 88.0, "aLflex": 32.0, "aLelbow": 28.0, "aLtwist": -10.0,
-                   "aRabd": 12.0, "aRflex": 38.0, "aRelbow": 55.0, "aRtwist": 40.0}),
+                   "aRabd": 26.0, "aRflex": 38.0, "aRelbow": 55.0, "aRtwist": 40.0}),
         (0.53, {"fRx": -0.03, "fRy": -0.78, "fRz": 0.36, "fRpitch": -52.0}),
         (0.63, {"fRx": -0.02, "fRy": -1.06, "fRz": 0.74, "fRpitch": -40.0, "fRyaw": -5.0,
                 "fLpitch": -22.0, "hy": -0.30, "hz": -0.06, "hyaw": 15.0, "hroll": -3.0,
                 "sflex": 12.0, "cflex": 6.0, "ctwist": -12.0, "look_down": 14.0,
-                "aLabd": 60.0, "aLflex": -12.0, "aLelbow": 25.0, "aRabd": 14.0, "aRflex": 45.0, "aRtwist": 45.0,
+                "aLabd": 60.0, "aLflex": -12.0, "aLelbow": 25.0, "aRabd": 28.0, "aRflex": 45.0, "aRtwist": 45.0,
                 "aRelbow": 60.0}),
         (0.84, {"fRx": -0.11, "fRy": -0.56, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": -10.0, "fRflat": 1.0, "fRtoe": 0.0,
                 "fLpitch": -30.0, "hy": -0.33, "hz": -0.06, "hx": 0.0}),

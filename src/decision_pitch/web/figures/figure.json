@@ -34,9 +34,19 @@
    "speed": 2.5
   },
   "brake": {
-   "contact": 0.12,
-   "duration": 1.2667,
-   "loop": false
+   "contact": 0.1,
+   "duration": 2.2333,
+   "loop": false,
+   "speeds": [
+    [
+     0.0,
+     7.5
+    ],
+    [
+     1.875,
+     0.0
+    ]
+   ]
   },
   "celebrate": {
    "duration": 4.0,
@@ -68,12 +78,48 @@
    "contact": 0.25,
    "duration": 0.7333,
    "loop": false,
+   "speeds": [
+    [
+     0.0,
+     6.0
+    ],
+    [
+     0.25,
+     6.0
+    ],
+    [
+     0.41,
+     4.5
+    ],
+    [
+     0.75,
+     4.5
+    ]
+   ],
    "turn": 60.0
   },
   "cut_R": {
    "contact": 0.25,
    "duration": 0.7333,
    "loop": false,
+   "speeds": [
+    [
+     0.0,
+     6.0
+    ],
+    [
+     0.25,
+     6.0
+    ],
+    [
+     0.41,
+     4.5
+    ],
+    [
+     0.75,
+     4.5
+    ]
+   ],
    "turn": -60.0
   },
   "despair": {

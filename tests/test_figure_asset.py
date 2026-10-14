@@ -222,6 +222,18 @@ def test_turns_cuts_and_the_brake_say_how_far_they_turn_and_when_they_plant(info
     assert clips["brake"]["loop"] is False and 0 < clips["brake"]["contact"] < clips["brake"]["duration"]
 
 
+def test_the_brake_and_cuts_say_what_speed_their_planted_feet_are_made_for(info):
+    # [[clip time, m/s], ...], piecewise linear: the page joins the clip where it matches.
+    for name in ("brake", "cut_L", "cut_R"):
+        meta = info["clips"][name]
+        times = [t for t, _ in meta["speeds"]]
+        assert times == sorted(times) and 0 <= times[0] and times[-1] <= meta["duration"], name
+        assert all(v >= 0 for _, v in meta["speeds"]), name
+    (start, top), (stop, rest) = info["clips"]["brake"]["speeds"]
+    assert top >= 7.5 and rest == 0, "the brake stops from a sprint"
+    assert (top - rest) / (stop - start) == pytest.approx(4.0, abs=0.1), "at the engine's deceleration"
+
+
 def test_there_are_idles_to_vary_the_standing(info):
     idles = [name for name, meta in info["clips"].items()
              if name.startswith("idle") and meta["loop"] and "speed" not in meta and "set" not in meta]
