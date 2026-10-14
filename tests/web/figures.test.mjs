@@ -410,3 +410,13 @@ test('built figure: the planted foot stays put at every speed and height', { ski
     }
   }
 });
+
+test('hair, number and coat are painted even when figure.json lists only the kit regions', () => {
+  const { scene, animations, info } = fixtureGltf();
+  info.materials.regions = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots'];
+  const made = createFigures(prepareFigure(scene, animations, info));
+  const person = made.create({ seed: 2, role: 'manager', colours: { shirt: '#1f5fbf', shorts: '#ffffff' } });
+  assert.equal(person.object.getObjectByName('coat').material.color.getHexString(), '1f5fbf');
+  const hair = person.object.getObjectByName(HAIRS[person.look.hair]);
+  assert.equal(`#${hair.material.color.getHexString()}`, figures.HAIRS[person.look.hairColour]);
+});

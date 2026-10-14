@@ -282,7 +282,8 @@ function meshesOf(object) {
 // (whole and layered) and the gait. Shared by every figure of every match.
 export function prepareFigure(scene, animations, info = {}) {
   const described = info.clips ?? {};
-  const regions = new Set(info.materials?.regions ?? DEFAULT_REGIONS);
+  // The contract's regions, and any more figure.json names.
+  const regions = new Set([...DEFAULT_REGIONS, ...(info.materials?.regions ?? [])]);
   const hairs = info.hair ?? [];
   const morphs = Object.keys(info.morphs ?? {});
   scene.updateMatrixWorld(true);
