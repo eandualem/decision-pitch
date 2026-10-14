@@ -147,9 +147,10 @@ test('the ball keeps the engine height: on the grass at rest and raised in fligh
   ui.actors.update(ground, ground, 1, 0.016, 1);
   assert.equal(ui.ball.position.y, 0.3, 'the enlarged ball sits on the grass');
   assert.deepEqual([ui.ball.position.x, ui.ball.position.z], [3, -4]);
+  const air = setup();
   const flight = snap(1 + STEP, [], { x: 3.5, y: 4, z: 2.11 });
-  ui.actors.update(flight, flight, 1, 0.016, 1.1);
-  assert.ok(Math.abs(ui.ball.position.y - 2.3) < 1e-9, 'its height above the grass is as sent');
+  air.actors.update(flight, flight, 1, 0.016, 1.1);
+  assert.ok(Math.abs(air.ball.position.y - 2.3) < 1e-9, 'its height above the grass is as sent');
 });
 
 test('a rolling ball turns by the distance over its drawn radius; in the air it keeps spinning', () => {
@@ -407,6 +408,31 @@ test('a goalkeeper running along its line turns to face the shot and dives acros
   const rest = snap(2, [player(1, 0, 1.5, { heading: Math.PI / 2 })], { x: 30, y: 0 });
   for (let i = 0; i < 90; i++) ui.actors.update(rest, rest, 1, 1 / 60, 2 + i / 60);
   assert.ok(Math.abs(ui.keeper.body.rotation.y - Math.PI) < 0.05, 'and turns back to its run');
+});
+
+test('a goalkeeper catching a ball at full reach and kicking it at once draws no jump', () => {
+  const ui = setup();
+  // The engine meets the ball 1.5 m out, pulls it to 0.6 m ahead in the same step and
+  // kicks it the next: both touches reach the page in one snapshot.
+  const t0 = 2;
+  const keeperAt = [player(1, 0, 0)];
+  const caught = { player: 1, kind: 'catch', t: t0 + 1 / 60, x: 1.5, y: 0, z: 0.11 };
+  const kicked = { player: 1, kind: 'kick', t: t0 + 2 / 60, x: 0.6, y: 0, z: 0.11 };
+  const shots = [
+    snap(t0 - STEP, keeperAt, { x: 1.5 + 10 * STEP, y: 0 }),
+    snap(t0, keeperAt, { x: 1.5, y: 0 }),
+    snap(t0 + STEP, keeperAt, { x: 0.6, y: 0.33, touches: [caught, kicked] }),
+    snap(t0 + 2 * STEP, keeperAt, { x: 0.6, y: 0.99, touches: [caught, kicked] }),
+  ];
+  let last = null;
+  let most = 0;
+  for (let time = t0 - STEP; time <= t0 + 2 * STEP + 1e-9; time += 1 / 60) {
+    const i = Math.min(shots.length - 2, Math.floor((time - shots[0].t) / STEP + 1e-9));
+    ui.actors.update(shots[i], shots[i + 1], (time - shots[i].t) / STEP, 1 / 60, time, shots.at(-1));
+    if (last) most = Math.max(most, ui.ball.position.distanceTo(last));
+    last = ui.ball.position.clone();
+  }
+  assert.ok(most < 0.45, `largest step in a 60 Hz frame: ${most}`);
 });
 
 test('a touch from before the page joined is not replayed', () => {

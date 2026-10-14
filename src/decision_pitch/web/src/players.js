@@ -16,6 +16,9 @@ const DRAWN_RADIUS = 0.3; // enlarged to read on a broadcast camera
 const STEP = 1 / 60;
 const LOOSE = 0.5; // m between a carried ball and the drawn feet beyond which it is drawn as sent
 const SETTLE = 0.15; // s for the drawn ball to settle onto a new path without a jump
+// m/s: faster than any kick. A path this fast is the engine pulling a ball it has just
+// taken to the feet within one step, and is settled onto rather than drawn as a jump.
+const SNAP = 40;
 
 // Where `keys` ([u, value] pairs, u ascending) are at `u`: eased between each pair, or
 // straight into a key marked 'linear', for a swing that does not slow through contact.
@@ -200,6 +203,7 @@ export function createPlayers(scene, teams) {
   const settle = new THREE.Vector3(); // the drawn ball's offset from a new path when it changed
   const applied = new THREE.Vector3(); // what was left of it last frame
   let settleAt = -Infinity;
+  let ballTime = -Infinity; // the drawn match's time last frame
   const travel = new THREE.Vector3();
   const spinAxis = new THREE.Vector3(1, 0, 0);
   const up = new THREE.Vector3(0, 1, 0);
@@ -396,10 +400,13 @@ export function createPlayers(scene, teams) {
       }
     }
     const y = Math.max(DRAWN_RADIUS, height - BALL_RADIUS + DRAWN_RADIUS);
-    const jump = !ballReady || reset || ballTeleport
-      || Math.hypot(x - (ball.position.x - applied.x), z - (ball.position.z - applied.z)) > 3; // from last frame's path
+    // How far the path moved since last frame's.
+    const moved = Math.hypot(x - (ball.position.x - applied.x), y - (ball.position.y - applied.y), z - (ball.position.z - applied.z));
+    const jump = !ballReady || reset || ballTeleport || moved > 3;
+    const snapped = moved > 0.3 && moved > SNAP * (time - ballTime);
+    ballTime = time;
     if (jump) settle.set(0, 0, 0);
-    else if (carrying !== carried) {
+    else if (carrying !== carried || snapped) {
       settle.set(ball.position.x - x, ball.position.y - y, ball.position.z - z);
       settleAt = time;
     }
