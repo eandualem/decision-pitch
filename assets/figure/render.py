@@ -8,12 +8,14 @@ Options:
     --views LIST        comma-separated: front, side, back, face, lineup, coat, keeper
                         (default: all of them)
     --clip NAME         pose the figure with a clip; with --frames, one still per frame
-    --frames LIST       comma-separated frame numbers of --clip (default: 0)
+    --frames LIST       comma-separated times of --clip in frames of 1/30 s (default: 0)
     --view NAME         the camera for --clip stills (default: side)
     --camera X,Y,Z,TX,TY,TZ,LENS
                         a custom camera (location, target, focal length in mm),
                         rendered as <out>/camera.png
     --dress NAME        player (default), keeper or manager, for --clip and --camera stills
+    --ball X,Y,Z        a ball of the engine's size centred there (metres, the figure's
+                        coordinates), to check where a clip meets it
     --engine NAME       eevee (default) or workbench
 
 Each still is written as <out>/<view>.png, or <out>/<clip>_<frame>_<view>.png.
@@ -75,6 +77,7 @@ def parse():
     parser.add_argument("--engine", default="eevee")
     parser.add_argument("--camera")
     parser.add_argument("--dress", default="player", choices=("player", "keeper", "manager"))
+    parser.add_argument("--ball")
     return parser.parse_args(argv)
 
 
@@ -230,7 +233,9 @@ def pose_clip(rig, name, frame):
     rig.animation_data.action = action
     if hasattr(rig.animation_data, "action_slot") and action.slots:
         rig.animation_data.action_slot = action.slots[0]
-    bpy.context.scene.frame_set(int(frame))
+    scene = bpy.context.scene
+    keyed = float(frame) * scene.render.fps / 30.0  # the clips are keyed more often than 30 a second
+    scene.frame_set(int(keyed), subframe=keyed - int(keyed))
 
 
 def shoot(cam, path, view, size=(600, 800)):
@@ -255,6 +260,14 @@ def main():
     dress(rig, {"player": LINEUP[0], "keeper": {**LINEUP[1], "kit": "keeper"},
                 "manager": {**LINEUP[0], "kit": "manager", "hair": "hair_swept", "hair_colour": 1}}[args.dress])
     print_number(rig, "17")
+    if args.ball:
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.11, location=[float(v) for v in args.ball.split(",")])
+        ball = bpy.context.active_object
+        bpy.ops.object.shade_smooth()
+        mat = bpy.data.materials.new("ball")
+        mat.use_nodes = True
+        colour(mat, (0.95, 0.95, 0.95))
+        ball.data.materials.append(mat)
     if args.camera and not args.clip:
         pass
     if args.clip:

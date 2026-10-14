@@ -108,5 +108,7 @@ The scripts remain the source of truth: a full rebuild regenerates the
 
 renders `front`, `side`, `back`, `face`, `lineup` (six variations side by
 side), `coat` and `keeper` stills of the saved figure. `--views` picks some of
-them; `--clip jog --frames 0,8 --view side` poses it with a clip;
-`--camera x,y,z,tx,ty,tz,lens` frames any detail.
+them; `--clip jog --frames 0,8 --view side` poses it with a clip, at times
+given in frames of 1/30 s (the clips are keyed 60 times a second);
+`--ball 0,-0.59,0.11` adds a ball there, to see where a dribble or a kick meets
+it; `--camera x,y,z,tx,ty,tz,lens` frames any detail.

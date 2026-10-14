@@ -186,6 +186,14 @@ def test_every_direction_has_a_loop_at_a_walk_and_at_a_jog(info):
         assert any(JOG[0] <= speed <= JOG[1] for speed in speeds), direction
 
 
+def test_the_dribble_meets_the_ball_with_the_right_boot_at_its_touch(info):
+    dribble = {name: meta for name, meta in info["clips"].items() if meta.get("set") == "dribble"}
+    forward = sorted(meta["speed"] for meta in dribble.values() if meta["direction"] == "forward")
+    assert forward[0] <= 2.5 and forward[-1] >= 7.0, "from close control to a sprint on the ball"
+    for name, meta in dribble.items():
+        assert meta["loop"] is True and 0 < meta["touch"] < 1 and 0 < meta["duty"] < 1, name
+
+
 def test_the_side_shuffles_are_jockeying(info):
     assert info["clips"]["strafe_L"]["set"] == info["clips"]["strafe_R"]["set"] == "jockey"
 

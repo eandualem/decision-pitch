@@ -58,6 +58,42 @@
    "duration": 5.5,
    "loop": false
   },
+  "dribble": {
+   "direction": "forward",
+   "duration": 0.5333,
+   "duty": 0.32,
+   "loop": true,
+   "set": "dribble",
+   "speed": 4.0,
+   "touch": 0.4
+  },
+  "dribble_fast": {
+   "direction": "forward",
+   "duration": 0.4667,
+   "duty": 0.27,
+   "loop": true,
+   "set": "dribble",
+   "speed": 6.0,
+   "touch": 0.4
+  },
+  "dribble_slow": {
+   "direction": "forward",
+   "duration": 0.7,
+   "duty": 0.4,
+   "loop": true,
+   "set": "dribble",
+   "speed": 2.0,
+   "touch": 0.4
+  },
+  "dribble_sprint": {
+   "direction": "forward",
+   "duration": 0.4667,
+   "duty": 0.22,
+   "loop": true,
+   "set": "dribble",
+   "speed": 7.5,
+   "touch": 0.4
+  },
   "header": {
    "contact": 0.56,
    "duration": 1.2667,

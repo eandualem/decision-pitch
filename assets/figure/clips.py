@@ -38,7 +38,10 @@ import math
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-FPS = 30
+import compact
+
+FPS = 30  # clips are timed in frames of 1/30 s
+KEYS = 2  # and keyed this many times a frame, so a quick foot's arc survives the linear interpolation
 
 X = Vector((1.0, 0.0, 0.0))
 Y = Vector((0.0, 1.0, 0.0))
@@ -845,7 +848,8 @@ def strafe_R_clip(solver):
 
 ANGLES = {"forward": 0.0, "forward_left": 45.0, "left": 90.0, "back_left": 135.0,
           "back": 180.0, "back_right": -135.0, "right": -90.0, "forward_right": -45.0}
-NAMES = {0.0: "forward", 45.0: "forward_left", 90.0: "left", 135.0: "back_left", 180.0: "back"}
+NAMES = {0.0: "forward", 45.0: "forward_left", 90.0: "left", 135.0: "back_left", 180.0: "back",
+         -45.0: "forward_right", -90.0: "right", -135.0: "back_right"}
 MIRRORED = {"forward_left": "forward_right", "left": "right", "back_left": "back_right"}
 HIPS = {45.0: 22.0, 90.0: 55.0, 135.0: 80.0}  # how far the pelvis opens towards the travel
 
@@ -865,8 +869,10 @@ def steps(angle, speed, frames, duty, ahead, width, hips=0.0, spread=0.0, swing=
     of that point along the travel and is carried back `speed * duty * T` on the
     grass. `swing` lists (k, along, z): at fraction k of the swing the ankle is
     `along` of the way from where it lifted to where it lands (more than 1
-    reaches past it) and `z` high; `out` takes it that much wider of the other
-    foot. Returns `land` and `swing_path` for Gait, in root space.
+    reaches past it) and `z` high, for both feet or as {side: [...]}; `out`
+    takes it that much wider of the other foot, and a fourth number moves that
+    point across the travel, to its left. Returns `land` and `swing_path` for
+    Gait, in root space.
     """
     d = heading(angle)
     n = heading(angle + 90.0)  # across the travel, to its left
@@ -880,8 +886,8 @@ def steps(angle, speed, frames, duty, ahead, width, hips=0.0, spread=0.0, swing=
         off = on - d * stance
         land[s] = (on.x, on.y)
         paths[s] = []
-        for k, along, z in swing:
-            point = off.lerp(on, along) + n * (out * across * sign)
+        for k, along, z, *aside in (swing[s] if isinstance(swing, dict) else swing):
+            point = off.lerp(on, along) + n * (out * across * sign + sum(aside))
             paths[s].append((k, (point.x, point.y, z)))
     return land, paths
 
@@ -1001,6 +1007,81 @@ def jog_B_clip(solver):
         swing_path=paths, body=body,
     )
     return Clip("jog_B", frames, gait, loop=True, speed=speed, direction="back", duty=duty)
+
+
+# --------------------------------------------------------------------------
+# Running with the ball. The page carries the ball ahead of the feet and meets it
+# with the right boot at each dribble loop's `touch`: the phase at which the right
+# toe reaches furthest ahead, low, as it swings through to plant at half the
+# cycle. The toe meets the ball about where the engine carries it.
+
+TOUCH = 0.4
+TOUCH_REACH = 0.48  # m ahead of the root the right toe reaches at the touch: the ball's back
+TOUCH_HEIGHT = 0.035  # m: the toe's height there, low behind the ball
+
+
+def dribble_clip(solver, name, speed, frames, duty, ahead, low, lean, look, arms, angle=0.0, hips=0.0,
+                 lift=0.28, aside=-0.02):
+    """Running with the ball at the feet: shorter, quicker strides than the run, knees
+    bent, the body over the ball and the eyes on it, the arms out for balance. The
+    right foot swings through low and reaches furthest ahead at TOUCH, at the back of
+    the ball (`aside` of the line the figure faces along), then pulls back a little to
+    plant at half the cycle."""
+    k = (TOUCH + 0.5 - duty) / (1.0 - duty)  # how far through its swing the right foot is at the touch
+    hold = 0.04  # of the swing: the toe holds its furthest reach this long either side of the touch
+    swing = {
+        "L": [(0.25, 0.13, lift), (0.5, 0.55, lift + 0.03), (0.78, 1.08, 0.20)],
+        "R": [(0.25, 0.13, lift), (0.55, 0.6, 0.20), (k - hold, 1.15, 0.10, 0.0), (k + hold, 1.15, 0.10, 0.0)],
+    }
+
+    def make(swing):
+        land, paths = steps(angle, speed, frames, duty, ahead=ahead, width=0.065, hips=hips, spread=0.02 if hips else 0.0,
+                            swing=swing, out=0.015)
+        across = angle - hips
+        toes = hips + 0.65 * across
+
+        def body(u):
+            p = trunk_cycle(u, duty, hz=-low, bob=0.018, run=True, sway=0.016, hyaw=5.0, hroll=4.0,
+                            hpitch=6.0, lean=lean, chest_yaw=6.0, look_down=look, flex_bob=1.2)
+            p.update(arm_swing(u, -2.0, arms[0], 84.0, 10.0, abd=arms[1], twist=-4.0))
+            return turned(p, hips, 0.5 * hips) if hips else p
+
+        return Gait(
+            solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+            yaw={"L": 6.0 + toes, "R": -6.0 + toes},
+            stance_pitch=[(0.0, 2.0), (0.15, 0.0), (0.45, 0.0), (0.75, -22.0), (1.0, -55.0)],
+            swing_pitch=[(0.2, -55.0), (0.5, -25.0), (0.8, -4.0), (0.95, 0.0)],
+            swing_path=paths, body=body,
+        )
+
+    # Aim the right toe at the back of the ball at the touch, as `aim` does for a kick.
+    tip = solver.sk.tail["toe_R"]
+    target = Vector((aside, -TOUCH_REACH, TOUCH_HEIGHT))
+    d, n = heading(angle), heading(angle + 90.0)
+    span = speed * duty * frames / FPS
+    for _ in range(4):
+        gait = make(swing)
+        err = target - solver.solve(gait(TOUCH * gait.T)).point("toe_R", tip)
+        for i in (-2, -1):
+            at, along, z, across = swing["R"][i]
+            swing["R"][i] = (at, along + err.dot(d) / span, z + err.z, across + err.dot(n))
+    gait = make(swing)
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES.get(angle, "forward"), duty=duty,
+                set="dribble", touch=TOUCH)
+
+
+def dribble_clips(solver):
+    """Close control at a jog, carrying it at a run and at pace, and the knock-on at a sprint,
+    the eyes coming up off the ball as the pace rises."""
+    return [
+        dribble_clip(solver, "dribble_slow", 2.0, 21, 0.40, ahead=0.20, low=0.11, lean=19.0, look=36.0,
+                     arms=(18.0, 22.0), lift=0.27),
+        dribble_clip(solver, "dribble", 4.0, 16, 0.32, ahead=0.22, low=0.10, lean=18.0, look=32.0, arms=(26.0, 22.0)),
+        dribble_clip(solver, "dribble_fast", 6.0, 14, 0.27, ahead=0.20, low=0.09, lean=18.0, look=22.0,
+                     arms=(34.0, 18.0), lift=0.34),
+        dribble_clip(solver, "dribble_sprint", 7.5, 14, 0.22, ahead=0.17, low=0.10, lean=19.0, look=10.0,
+                     arms=(44.0, 14.0), lift=0.42),
+    ]
 
 
 def _both_sides(make):
@@ -1647,6 +1728,7 @@ def despair_clip(solver):
 CLIP_BUILDERS = [
     idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
     walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
+    dribble_clips,
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
@@ -1658,12 +1740,23 @@ CLIP_BUILDERS = [
 
 
 def sample_clip(solver, clip):
-    """Solve every frame of a clip: [(rotations, hips location, solved pose)]."""
+    """Solve every key of a clip: [(rotations, hips location, solved pose)]."""
     out = []
-    for f in range(clip.frames + 1):
-        solved = solver.solve(clip.sample(f / FPS))
+    for f in range(clip.frames * KEYS + 1):
+        solved = solver.solve(clip.sample(f / (FPS * KEYS)))
         rotations, location = solved.basis()
         out.append((rotations, location, solved))
+    return out
+
+
+def _thin(co, tolerance=1e-4):
+    """Keyframes [f0, v0, f1, v1, ...] without those the straight line between their
+    neighbours reproduces within `tolerance`, so the .blend stays small; the exporter
+    samples every frame of the curve again."""
+    times, keys = co[0::2], [(v,) for v in co[1::2]]
+    out = []
+    for i in compact.kept(times, keys, compact.lerp, compact.distance, tolerance):
+        out += (times[i], keys[i][0])
     return out
 
 
@@ -1696,6 +1789,7 @@ def _key_action(armature, name, frames, loop):
             values[("hips", "loc")][i] += (f, location[i])
     for key, fcs in curves.items():
         for fc, co in zip(fcs, values[key]):
+            co = _thin(co)
             fc.keyframe_points.add(len(co) // 2)
             fc.keyframe_points.foreach_set("co", co)
             for point in fc.keyframe_points:
@@ -1711,7 +1805,7 @@ def _key_action(armature, name, frames, loop):
 def build_clips(armature):
     """Create one Action per clip on `armature` and return {name: metadata}."""
     scene = bpy.context.scene
-    scene.render.fps = FPS
+    scene.render.fps = FPS * KEYS
     scene.render.fps_base = 1.0
     for pose_bone in armature.pose.bones:
         pose_bone.rotation_mode = "QUATERNION"
@@ -1735,5 +1829,5 @@ def build_clips(armature):
         armature.animation_data.action = None
         meta[clip.name] = clip.meta()
     scene.frame_start = 0
-    scene.frame_end = int(round(max(m["duration"] for m in meta.values()) * FPS))
+    scene.frame_end = int(round(max(m["duration"] for m in meta.values()) * FPS * KEYS))
     return meta
