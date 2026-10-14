@@ -636,26 +636,73 @@ own left: Blender's +X, and the page's local +x before the figure turns. The
 same holds for clip names: `strafe_L` steps and `keeper_dive_L` dives to the
 figure's left.
 
-**Clips.** All clips play on that skeleton, keyed at 30 frames per second,
-with the `root` bone fixed: the engine moves the player, the clip only moves
-the body around it. `figure.json` lists each clip's duration and, for a loop,
-the speed and direction of travel (forward, back, left or right) it was made
-for, `idle` having none, or, for a one-shot, the moment of contact.
+**Clips.** All 66 clips play on that skeleton, keyed 60 times a second (at 30, a
+fast loop had one key between a touch and the landing, and the page's linear
+interpolation cut the foot's arc into the grass by up to 13 mm), with the
+`root` bone fixed: the engine moves the player, the clip only moves the body
+around it. `figure.json` describes each clip: its duration and, for a loop,
+the speed and direction of travel it was made for (one of eight: `forward`,
+`forward_left`, `left`, `back_left`, `back`, `back_right`, `right`,
+`forward_right`) and `duty`, the share of the cycle each foot is on the grass;
+a loop's `set` and a dribble loop's `touch`; for a one-shot, the moment of
+`contact`; for a turn or a cut, the degrees it turns (`turn`) and the
+`turning` window over which the root's facing turns at an even rate; for the
+cuts and the brake, `speeds`, the root's speed over clip time that their
+planted feet are made for.
 
-- Locomotion loops: `idle`, `walk`, `jog`, `sprint`, `backpedal`,
-  `strafe_L` and `strafe_R`. Each is one full cycle that starts as the left
-  foot plants and plants the right foot halfway, and the planted foot moves
-  opposite to the clip's direction of travel at exactly the clip's speed, so a
-  clip played at the ground speed over its speed (and the figure's scale)
-  keeps its feet planted.
-- Play: `pass`, `shot`, `control`, `tackle`, `header`, `throw_in` and
-  `celebrate`, kicked with the right foot. Each is made so that its upper
-  body and kicking leg also work alone over a running stride: the support leg
-  carries no part of the action.
+- Locomotion loops are one full cycle that starts as the left foot plants and
+  plants the right foot halfway, each foot on the grass for `duty` of it; the
+  planted foot moves opposite to the clip's direction of travel at exactly the
+  clip's speed, so a clip played at the ground speed over its speed (and the
+  figure's scale) keeps its feet planted. The run has a walk at 1.4 m/s and a
+  jog at 4 m/s (3.6 straight back) in every direction, with `walk`, `jog` and
+  `sprint` forwards and `backpedal`. To the side and back on a diagonal the
+  pelvis opens towards the travel (about 22, 55 and 80 degrees) and the feet
+  step across, the chest half turned and the head on the play, as a player
+  keeping its shape while watching the ball does; straight back is a backward
+  walk or a backpedal.
+- Sets the page plays instead of the run by what a player is doing: the
+  dribble, from close control at 2 m/s to the knock-on at 7.5, with shorter,
+  quicker strides and the body over the ball, the right toe reaching furthest
+  ahead, 0.48 m from the root and 7 cm off the grass, exactly at the loop's
+  `touch`, where the page meets the carried ball; jockeying, side-on and low,
+  standing or shuffling back and across at 1.2, 2.5 and 2.6 m/s without the
+  feet ever passing (the old side shuffles `strafe_L` and `strafe_R` keep
+  their names here); shielding, square and wide with the back to the opponent
+  and the arms out behind, standing or shuffling at 1 m/s. Each set has a
+  standing loop with no speed.
+- Idles: `idle`, `idle_shift` (the weight from leg to leg), `idle_hips`
+  (hands on the hips) and `idle_look` (a glance over each shoulder).
+- Play: `pass`, `pass_lofted`, `shot`, `cross`, `control`, `tackle` (the
+  slide), `tackle_standing`, `header`, `throw_in` and `celebrate`, kicked with
+  the right foot and meeting the ball where the engine carries it at their
+  `contact`. Each is made so that its upper body and kicking leg also work
+  alone over a running stride: the support leg carries no part of the action.
+- Transitions follow the engine's own movement: they are built from plants on
+  the grass and steps between them while the root moves exactly as the
+  engine moves a player, so a planted foot stays still for that motion.
+  `turn_L` and `turn_R` turn 90 degrees on the spot: both feet pivot on their
+  balls while the root turns over the `turning` window, then step round into
+  the stance. `cut_L` and `cut_R` are a runner at 4 m/s, the speed most cuts
+  are made at in play, turning 60 degrees: the facing turns at the engine's
+  rate (9 / (1 + v / 3) rad/s, 0.26 s here) while the travel follows only as
+  fast as the runner may accelerate, still 12 degrees off the old line when
+  the facing is done; the outside foot plants as the facing starts to turn.
+  `brake` is a stop at the engine's 4 m/s² from 7.5 m/s, braking steps
+  shortening as it slows, then settling into the stance, so the page joins
+  it at the clip time whose speed is the player's.
 - Goalkeeper: `keeper_dive_L`, `keeper_dive_R`, `keeper_catch` and
   `keeper_catch_high`.
 - Touchline: `instruct`, `change`, `clap`, `protest`, `cheer` and `despair`,
   the gestures the managers already make.
+
+The exported file is made smaller by `assets/figure/compact.py`, which drops
+the tracks that hold a bone at rest and the keys interpolating their
+neighbours reproduces (within 0.05 degrees or 0.3 mm), and stores rotations as
+normalised 16-bit integers, which glTF allows for animation and three.js
+reads; no bone moves more than 1.2 mm for it. With every clip above,
+`figure.glb` is 1.66 MB (it was 1.6 MB with the first 24 clips, and would be
+over 2 MB without the compaction).
 
 **On the page.** `GLTFLoader`, with `SkeletonUtils` for cloning skinned meshes
 and the `BufferGeometryUtils` it imports, is vendored from three.js 0.186.0
@@ -669,11 +716,13 @@ travel from the drawn positions, smoothed, and ignores it only below about
 Locomotion blends the loops by ground speed and by the direction of travel
 against the way the figure faces, with all loops on one shared phase, and
 plays them at the rate that matches the stride to the speed, so feet plant
-instead of sliding; a carried ball keeps time with that phase. The touches
-from the contact moments above play their clip so that its moment of contact
-lands on the touch: `kick` plays `shot` when the ball leaves fast and `pass`
-otherwise, `control`, `tackle` and `throw` play theirs, and `deflect` plays
-`control`. The engine keeps a player moving while it plays the ball, so a
+instead of sliding; a carried ball keeps time with that phase ("Natural,
+individual movement" below says how the page chooses among the loops, sets
+and moves). The touches from the contact moments above play their clip so
+that its moment of contact lands on the touch: a `kick` plays the shot, pass,
+lofted pass or cross by the ball's flight, `control` and `throw` play theirs,
+`tackle` the slide or the standing block, `deflect` plays `control`, and a
+`knock` plays no clip. The engine keeps a player moving while it plays the ball, so a
 player above a walking pace plays only the clip's upper body and kicking leg
 over its running stride; the whole clip plays only near standstill, except
 the tackle, a slide that the engine carries along the grass. A carried ball is
@@ -741,40 +790,146 @@ curves: they still slide without clips made for a stride.
 
 **Choice.** Players move in more ways than one stride, and each in a way of
 their own. The engine sends a player's facing separately from where it goes,
-so a player keeping its shape walks or jogs while it faces the ball, and can
-move sideways, backwards or diagonally against that facing. The figure gets
-the clips to show it, made with the same rig and build scripts as the rest,
-and the page chooses and blends them from what each player is doing, still
-from the snapshot alone.
+so a player keeping its shape walks or jogs while it faces the ball and moves
+sideways, backwards or diagonally against that facing, and players turn, cut,
+slow down and speed up. The figure has the clips to show it (see "Clips"
+above), made with the same rig and build scripts, and the page chooses and
+blends them from what each player is doing, read from the snapshot alone: its
+speed and acceleration, how fast it turns, the way it travels against the way
+it faces, whether it has the ball, the nearest opponent and the touches of the
+ball, plus, for a model player, its latest decision. Bots send no decisions,
+so nothing depends on them. All of it is presentation: the page never changes
+match state, and the draw loop still allocates nothing per frame.
 
-- **More directions.** Locomotion loops may travel in eight named directions
-  (the four diagonals added to forward, left, back and right) or at any stated
-  angle, at a walk and at a jog, so travel at any angle to the facing up to a
-  jog plays at a natural cadence. The page blends the loops either side of the
-  travel as it blends forward and sideways today, so the blended stride still
-  points along the travel and the planted foot stays put.
-- **Sets of loops for situations.** A loop may belong to a set that replaces
-  the ordinary run when its situation holds, on the same shared phase: a
-  dribbling run, shorter strides with the body over the ball, whose right boot
-  meets the ball at the phase where the page puts the carried ball; a
-  defender's side-on jockeying shuffle; and shielding, back to the opponent
-  with arms out over the ball. The page infers the situation from motion,
-  possession and the nearest opponent, since built-in bots send no decisions,
-  and a model player's decision refines it.
-- **Changes of pace and direction.** A turn on the spot, a cut at speed that
-  plants and pushes off, and a braking stride are one-shots the page times to
-  what it sees the player do; leaning into a curve and leaning forward to
-  accelerate are drawn by the page over the stride.
-- **More of the game.** A standing tackle beside the slide, a cross and a
-  lofted pass, chosen from the touch and the ball's flight after it, and
-  idles that shift weight, rest hands on hips or look over a shoulder.
-- **Style.** Each player's stride length and cadence, arm carriage and
-  posture lean, and its place in the cycle, are picked from its id like its
-  looks, so a player moves the same in every browser and neighbours are never
-  in step.
+**Direction and speed.** Loops may travel in eight named directions or at any
+`angle`. For a travel at any angle the page takes the two loop directions
+either side of it and shares them out so that the blended stride points along
+the travel; in each direction it blends the two loops either side of the
+speed, and it plays the shared phase at the rate that makes that stride cover
+the ground at the figure's speed, so the planted foot stays put. Below a
+shuffle (0.15 to 0.35 m/s) it steps forwards; slower than its slowest loop it
+gives that loop at least a third of the blend, so a slow drift takes fewer,
+lifted steps rather than skimming the grass at a walk's cadence. The direction
+of travel settles over 4 cm of travel, so a player turning back on itself
+steps the new way at once.
 
-The figure keeps its triangles, and the download stays close to its size.
-The page still never changes match state.
+**Footwork.** Blending loops whose feet step differently slides: a walk
+blended half and half with a side shuffle, which the first version showed at
+45 degrees off facing, slid its planted feet 37 to 48 cm a stance. So the
+run's side and back-diagonal loops step across with the hips turned, sharing
+the forward loops' footwork and timing, and neighbouring directions blend with
+6 to 8 cm of slide before the foot lock. Straight back steps backwards, and the
+jockey shuffle steps without crossing. Loops whose footwork differs are never
+blended part way: blended half and half, walking back and stepping back to the
+side slid 66 to 84 cm per stance and the feet collided. Each footwork blends
+only its own directions; a figure changes from one to another over 0.15 s once
+a direction of the other is nearer its travel by 4 degrees, and the angle the
+chosen loop misses the travel by turns the skeleton's hips, the chest and neck
+turning back against it, so the stride still runs along the travel. Moving
+slowly to the side or back (past 70 degrees off its facing, between 0.25 and
+1.7 m/s), a figure side-steps in the jockey shuffle instead of a part-blended
+crossover walk, which slid 11 to 29 cm per stance; this is what goalkeepers
+shuffling along their line do.
+
+**Loop sets.** The dribble plays for the player with the ball. Slow, with an
+opponent close behind it (or when a model decided to shield), that player
+shields. An opponent of the player on the ball, close (3 to 6 m), facing it
+and not closing in, jockeys. Each set cross-fades in over 0.18 s on the shared
+phase, its stance standing in for idle, and fills the directions and speeds it
+lacks from the run. The carried ball meets the boot at the dribble loops'
+touch phase.
+
+**The foot lock.** Blends of loops whose feet move differently still leave a
+little slide, and the page's own turns and leans add to it. While a foot is
+planted, by the shared phase and each loop's `duty`, the end of its sole that
+bears the weight (the heel as it lands, the ball of the foot as it rolls over)
+is held where it touched down, and a two-bone IK on the thigh and shin puts the
+ankle there, the knee bending its own way and the foot keeping its
+orientation. It holds from landing, lets go only once the sole lifts, and gives
+way beyond 35 cm and to clips that swing the legs. Under the figure's own moves
+(turn, cut, brake) it finds planted feet by the height of the sole instead,
+since those clips plant at their own times. A foot in the air keeps its sole at
+least 3 cm off the grass at mid-swing.
+
+**Leaning and moves.** The body leans from the feet towards its smoothed
+horizontal acceleration: into a curve, forwards speeding up, back braking
+(0.45 of the angle that would balance it, at most 0.2 rad). The figure makes
+moves of itself, when `figure.json` has the clips: a turn on the spot when it
+turns faster than 2.5 rad/s below 1 m/s, its clip time following the turn
+through the clip's `turning` window and beginning again for a longer turn; a
+cut when, from 2.5 m/s, its body turns faster than 2.5 rad/s and its run
+follows (a body turning to face the ball over a run that keeps its way is no
+cut), the clip picked up where the body has got to in its turn and following
+it through its window; and a braking step when it slows harder than 2.5 m/s²
+travelling the way it faces, its clip time where the clip's `speeds` match the
+figure's speed. A brake ends as soon as the figure stops slowing and gives way
+to a cut; a turn fades out as the figure sets off. A cut and a brake first made
+for a different motion from the engine's slid in most of their stances in a
+live match (a cut turning about 6.5 rad/s through its plant, a brake stopping
+at about 7 m/s²), which is why both are now made from the engine's own turning
+and braking and are timed by what the figure does.
+
+**Plays.** A kick plays the cross, the lofted pass, the shot or the pass from
+the ball's flight after the touch: lifted (0.3 rad or more, from how high the
+ball has risen against gravity) from a wide attacking place in towards the
+middle, the cross; lifted elsewhere, the lofted pass; along the ground, the
+shot when it leaves faster than 18 m/s. A model's decision of the last two
+seconds says instead (shoot, cross, through ball, clear). A tackle at 4.5 m/s
+or more is the slide, slower the standing block. Over a run, a kick's kicking
+leg follows the clip only from 0.3 s before contact to 0.35 s after, so its
+grounded wind-up and landing do not skate. A sprinter's knock plays no clip:
+its stride is timed (within -25% to +30% of its pace) so the boot's touch
+lands on the knock and on catching the ball up again, a moment the page
+predicts from the gap and the closing speed, since the buffer gives only
+0.1 s of warning.
+
+**Style.** Each person has its own stride, arm carriage and posture, picked
+from its id by integer hashing, so it is the same in every browser and does
+not follow its looks: a stride factor between 0.9 and 1.1 shifts where along
+the speeds the loops blend (shorter, quicker steps or longer, slower ones; the
+rate still comes from the stride, so the feet plant), the arms are held 0.03
+to 0.12 rad out and bent up to 0.3 rad more, and the back leans forwards by
+-0.02 to 0.08 rad. Each also stands in its own idle variant and changes it
+every 6 to 14 s with a cross-fade. Two neighbours running alike within a
+twentieth of a stride of each other fall out of step: the later quickens its
+stride by 8% for a moment.
+
+**Checking.** Every clip was checked through three.js as the page plays it,
+for joins where a loop repeats, knees and elbows bending the wrong way, hands
+inside the body, boots below the grass and legs through each other, and in
+close-up on the page. That found a toe that snapped 8 degrees at every heel
+strike, shins of the back diagonal jogs passing 7 cm apart and the shot's
+right hand through its thigh, all fixed. Movement is measured as well as
+watched: `tests/web/motion_replay.py` serves the page with a scripted,
+protocol-correct feed of every kind of movement, or with `--live` a real
+keyless match; `tests/web/motion-probe.mjs` measures in the page how fast each
+planted foot slips in each stance, which neighbours step in time, and each
+player's cadence, stride, lean and arm swing; and `tests/web/motion-record.mjs`
+films the evidence in `docs/media/motion/`, whose README gives the numbers.
+
+**Known limits.** A goalkeeper's dive plays its whole clip over the engine's
+dive, so its feet slide as it leaves the grass, and over a run the support
+foot under a pass or a lofted pass still slips in about half its stances.
+
+**Why.** Players read as people when they move as people do: facing the play
+while moving across it, changing pace and direction with a plant and a push,
+and each with a gait of its own. Making the transitions from the engine's own
+movement and holding planted feet with a lock, rather than trusting a blend,
+keeps the feet on the grass where the clips and the engine disagree.
+
+**Rejected.** A side shuffle in the run: it cannot blend with a walking step,
+and at a jog reads as a drill; it is jockeying footwork, so it went to that
+set. Dribbling diagonals: with the ball on the line the player faces, the
+touching foot swept 0.3 m sideways in 40 ms to plant; the run's diagonals
+stand in. Blending the back and back-diagonal loops in proportion to the angle
+(66 to 84 cm of slide per stance), and idle into the hips-turned walk below
+walking pace (11 to 29 cm). Locking the ankle rather than the end of the sole
+that bears the weight: the heel slides as the foot rolls, worse than no lock
+at a walk. Cuts and a brake made at one speed and played faster or slower to
+fit: a 6 m/s cut slowed to the 2.5 to 4 m/s most cuts start at plays in slow
+motion and its turn cannot match the engine's, and no fixed playback matches
+a stop at a different deceleration. A cut on any fast turn of the body at a
+run: cuts took 13% of all stances live, half of them sliding.
 
 ## 7. References and licences
 
