@@ -155,6 +155,18 @@ def test_a_shot_out_of_range_is_dribbled_into_range_first():
         assert isinstance(actions.command(match, p, "shoot"), kind)
 
 
+def test_a_shot_out_of_range_is_passed_when_pressed():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    p.x, p.y = match.attack(p.team) * 10.0, 0.0
+    match.ball.place(p.x, p.y)
+    presser = next(q for q in match.players if q.team != p.team and q.position != "GK")
+    presser.x, presser.y = p.x + 1.0, p.y
+    command = actions.command(match, p, "shoot")
+    assert isinstance(command, KickTo) and abs(command.x) != 52.5  # a pass, not a shot
+
+
 def test_at_a_restart_only_the_taker_goes_to_the_ball():
     match = Match()
     match._restart("throw_in", 0, 10.0, 34.0)

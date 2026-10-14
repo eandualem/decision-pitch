@@ -160,7 +160,7 @@ A model chooses one of eight actions, each described to it in a few words:
 | `mark` | stays goal-side of the nearest opponent |
 | `dribble` | runs with the ball towards the opponents' goal |
 | `pass` | passes to the best-placed open teammate, or clears if none is open |
-| `shoot` | shoots inside the post further from the goalkeeper; from 24 m or more, dribbles into range first |
+| `shoot` | shoots inside the post further from the goalkeeper; from 24 m or more, plays the ball as the built-in bot does (dribbles into range, passes when pressed) |
 | `clear` | kicks the ball long upfield |
 
 The action is turned into an engine command on every physics step, with the
@@ -176,7 +176,11 @@ sensible football, the same rules for both teams:
 
 - **On the ball**, `press`, `hold`, `support` and `mark` keep playing it as
   the built-in bot does (dribble, pass when pressed, shoot in range), instead
-  of standing on it.
+  of standing on it. So does `shoot` out of range, instead of dribbling into
+  a tackle. Laya answers `shoot` almost every time; with every outfielder
+  answering it, the ball changed hands by a tackle about 590 times a bot
+  match of two 180 s halves, and now about 16 (bots alone: 10), with passes
+  made under pressure again.
 - **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
   built-in bot does: the one player who can reach the ball first goes for it
   and the others keep their places, instead of every one of them running at it.
