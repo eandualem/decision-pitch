@@ -328,12 +328,13 @@ class Figure:
         flare = _keep_before(Cone(THIGH.at(0.12, out=0.004), THIGH.at(0.60, out=0.004, front=-0.002), 0.090, 0.081),
                              "shorts", -0.004)
         seat = Loft(SHORTS, power=2.3, cap=0.025)
-        shorts = _below(Shell(Union([trunk, seat] + _both([_below(flare, SHIRT_HEM - 0.01)]), k=0.03), 0.004),
-                        SHIRT_HEM + 0.03)
+        self.shorts = Union([trunk, seat] + _both([_below(flare, SHIRT_HEM - 0.01)]), k=0.03)
+        shorts = _below(Shell(self.shorts, 0.004), SHIRT_HEM + 0.03)
         # Socks over shin pads, with a turned-down cuff at the top; boots below.
         padded = Union([leg, SHIN.muscle(0.48, (0.034, 0.012, 0.100), front=0.036)], k=0.012)
         sock = Shell(_keep_after(padded, "sock", 0.003), 0.003)
         cuff = Shell(_keep_before(_keep_after(padded, "sock", 0.008), "sock", 0.032), 0.008)
+        self.leg = leg
         shoe = _keep_after(boot(), "boot", 0.0)
         self.shape = Union([figure, self.shirt, shorts] + _both([sock, cuff, shoe]), k=0.003)
 
@@ -568,42 +569,54 @@ def build_number(body, collection):
 
 # Coat ------------------------------------------------------------------------------
 
-# A manager's coat: sections as for the trunk, hanging straight from the chest to
-# mid-thigh around both legs.
-COAT = [
-    (0.70, 0.196, 0.116, 0.122, 0.018),
-    (0.85, 0.190, 0.114, 0.118, 0.020),
-    (1.00, 0.177, 0.112, 0.110, 0.020),
-    (1.12, 0.175, 0.124, 0.106, 0.022),
-    (1.24, 0.180, 0.132, 0.106, 0.024),
-    (1.34, 0.180, 0.128, 0.106, 0.027),
-    (1.42, 0.165, 0.100, 0.094, 0.030),
-    (1.48, 0.122, 0.062, 0.072, 0.032),
-    (1.52, 0.075, 0.045, 0.055, 0.032),
+# A manager's coat is a zip-up track jacket to the hips over track trousers, one
+# mesh with the material `coat`. The jacket's sections, as for the trunk:
+JACKET = [
+    (0.88, 0.172, 0.112, 0.118, 0.020),
+    (0.96, 0.170, 0.114, 0.114, 0.020),
+    (1.04, 0.165, 0.118, 0.106, 0.020),
+    (1.12, 0.168, 0.126, 0.106, 0.022),
+    (1.24, 0.178, 0.134, 0.112, 0.024),
+    (1.34, 0.180, 0.130, 0.114, 0.027),
+    (1.42, 0.165, 0.104, 0.100, 0.030),
+    (1.48, 0.124, 0.066, 0.076, 0.032),
+    (1.52, 0.075, 0.047, 0.057, 0.032),
 ]
-COAT_HEM = 0.71
-COAT_TRIANGLES = 3400
+JACKET_HEM = 0.90
+COAT_TRIANGLES = 3800
 
 
 def build_coat(figure, collection):
-    """A coat to mid-thigh with a stand-up collar, over trousers to the shoes."""
-    sleeves = _both([_keep_before(figure.arm, "wrist", -0.04)])
-    core = Union([Loft(COAT, power=2.3, cap=0.02)] + _both(shoulders()) + sleeves, k=0.03)
-    outer = _above(Shell(core, 0.022), COAT_HEM)
+    """A track jacket with a stand collar, a zip, a waistband and cuffs, over trousers."""
+    arm = figure.arm
+    sleeves = _both([_keep_before(arm, "wrist", -0.03)])
+    core = Union([Loft(JACKET, power=2.4, cap=0.02), figure.trunk, figure.shorts, Loft(DRAPE, power=2.4)]
+                 + _both(shoulders()) + sleeves, k=0.03)
+    jacket = _above(Shell(core, 0.020), JACKET_HEM)
+    waistband = Within(_above(Shell(core, 0.024), JACKET_HEM), Plane((0, 0, JACKET_HEM + 0.035), (0, 0, 1),
+                                                                      core.lo - 0.1, core.hi + 0.1))
+    cuffs = _both([Shell(_keep_after(_keep_before(arm, "wrist", -0.03), "wrist", -0.065), 0.024)])
     point, normal = COLLAR
-    band = Shell(NECK, 0.020)
+    band = Shell(NECK, 0.016)
     box = (band.lo - 0.1, band.hi + 0.1)
-    collar = Within(Within(band, Plane(point + normal * 0.045, normal, *box)), Plane(point - normal * 0.03, -normal, *box))
-    leg = Union([Cone(THIGH.at(0.0, out=0.008), THIGH.at(1.0), 0.090, 0.064), Cone(SHIN.at(0.0), SHIN.at(1.0), 0.064, 0.056),
-                 Shell(leg_core(), 0.012)], k=0.03)
-    trousers = _keep_before(leg, "boot", -0.012)
-    coat = Union([outer, collar] + _both([trousers]), k=0.006)
+    collar = Within(Within(band, Plane(point + normal * 0.05, normal, *box)), Plane(point - normal * 0.015, -normal, *box))
+    # Hollow below the chest, so the hem and the cuffs are open like cloth.
+    top = Cut(Union([jacket, waistband, collar] + cuffs, k=0.004), _below(Shell(core, 0.011), 1.30))
+    # The zip: a shallow groove down the middle of the front, through the collar.
+    slab = Box((0.0, -0.25, 1.25), (0.0025, 0.13, 0.40))
+    top = Cut(top, Cut(slab, Shell(core, 0.015)), k=0.002)
+    # Straight legs, just wide enough over the shorts' hem and the socks' cuffs.
+    leg = Union([Cone(THIGH.at(0.0, out=0.008), THIGH.at(1.0), 0.094, 0.068),
+                 Cone(THIGH.at(0.10, out=0.006), THIGH.at(0.62, out=0.004, front=-0.002), 0.101, 0.098),
+                 Cone(SHIN.at(0.0), SHIN.at(1.0), 0.072, 0.058), Shell(figure.leg, 0.014)], k=0.03)
+    seat = _below(Shell(figure.shorts, 0.013), 0.99)
+    trousers = Union([seat] + _both([_keep_before(leg, "boot", -0.012)]), k=0.03)
+    coat = Union([top, trousers], k=0.006)
+    figure.jacket_core, figure.trousers = core, trousers
     verts, quads = S.mesh_field(coat, STEP)
-    # Open the coat where its caps cross the body: at the hem, the cuffs and the neck.
-    keep = (core.at(verts) > -0.002) | (verts[:, 2] < COAT_HEM - 0.03)
-    keep &= NECK.at(verts) > 0.004
-    verts, quads = keep_vertices(verts, quads, keep)
-    obj = mesh_object("coat", smooth(verts, quads, 2), quads, collection)
+    # Open the collar where it closes over the neck.
+    verts, quads = keep_vertices(verts, quads, NECK.at(verts) > 0.004)
+    obj = mesh_object("coat", smooth(verts, quads, 1), quads, collection)
     collapse(obj, COAT_TRIANGLES)
     obj.data.materials.append(material("coat"))
     for poly in obj.data.polygons:
