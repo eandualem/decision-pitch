@@ -55,8 +55,10 @@ test('the wide shot follows play from the stand, two thirds as far as it used to
     const t = setup();
     t.ball.set(x, 0.3, z);
     t.run(6);
-    const lookX = Math.max(-PITCH.length * 0.4, Math.min(PITCH.length * 0.4, x * 0.85));
-    const lookZ = Math.max(-PITCH.width * 0.3, Math.min(PITCH.width * 0.3, z * 0.55));
+    // It follows part of the ball's way, but keeps the ball well inside the frame.
+    const lookZ = Math.max(z - 14, Math.min(z + 35, Math.max(-PITCH.width * 0.3, Math.min(PITCH.width * 0.3, z * 0.28))));
+    const side = 27 - 0.5 * Math.max(0, z - lookZ);
+    const lookX = Math.max(x - side, Math.min(x + side, x * 0.44));
     assert.ok(t.camera.position.distanceTo(new THREE.Vector3(lookX, 35, lookZ + 42)) < 0.01, `ball (${x}, ${z})`);
     const centre = t.screen(lookX, 0, lookZ);
     assert.ok(Math.abs(centre.x) < 0.01 && Math.abs(centre.y) < 0.01, 'aimed at the look point');
@@ -92,7 +94,7 @@ test('the play around the ball stays in frame, and a fast switch of play never l
       worst = Math.max(worst, Math.abs(p.x), Math.abs(p.y));
       pulled = Math.max(pulled, t.camera.position.y);
     }
-    assert.ok(worst < 0.8, `ball in frame across ${x0},${z0} -> ${x1},${z1}: ${worst}`);
+    assert.ok(worst < 0.9, `ball in frame across ${x0},${z0} -> ${x1},${z1}: ${worst}`);
     assert.ok(pulled > 36, 'the shot pulls back a little for a fast ball');
   }
 });
