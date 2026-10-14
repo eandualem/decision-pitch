@@ -326,13 +326,14 @@ class Match:
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
-            if self.penalty_live and self.elapsed >= self.half_length:
-                self._end_half()  # this touch completes the penalty the half waited for
+            deflects = self.owner is None and self._deflects(nearest)
+            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and nearest.position == "GK"):
+                self._end_half()  # this touch completes the penalty the half waited for; a parry does not
                 return
             if nearest.id in self.offside:
                 self._offside(nearest)
                 return
-            if self.owner is None and self._deflects(nearest):
+            if deflects:
                 self._deflect(nearest)
                 return
             self.offside = set()  # someone onside played it
@@ -368,7 +369,8 @@ class Match:
         b.vy = p.vy + ny * speed * DEFLECT_PUSH + (vy - along * ny) * DEFLECT_KEEP
         b.vz *= DEFLECT_KEEP
         self.offside = self._offside_positions(p) | {q for q in self.offside if self.player(q).team != p.team}
-        self.penalty_live = False
+        if p.position != "GK":
+            self.penalty_live = False  # a goalkeeper's save does not complete a penalty
         if p.id != self.indirect:
             self.indirect = None
         self.last_touch = p.team
