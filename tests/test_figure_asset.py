@@ -194,6 +194,20 @@ def test_the_dribble_meets_the_ball_with_the_right_boot_at_its_touch(info):
         assert meta["loop"] is True and 0 < meta["touch"] < 1 and 0 < meta["duty"] < 1, name
 
 
+@pytest.mark.parametrize("name, directions", [
+    ("jockey", ["back", "back_left", "back_right", "left", "right"]),
+    ("shield", ["back", "left", "right"]),
+])
+def test_the_defending_and_shielding_sets_stand_and_shuffle(info, name, directions):
+    loops = [meta for meta in info["clips"].values() if meta.get("set") == name]
+    assert [meta for meta in loops if "speed" not in meta], f"{name} has a stance"
+    for direction in directions:
+        assert any(meta.get("direction") == direction for meta in loops), (name, direction)
+    for meta in loops:
+        assert meta["loop"] is True
+        assert "speed" not in meta or 0 < meta["duty"] < 1
+
+
 def test_the_side_shuffles_are_jockeying(info):
     assert info["clips"]["strafe_L"]["set"] == info["clips"]["strafe_R"]["set"] == "jockey"
 

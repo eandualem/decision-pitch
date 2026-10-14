@@ -107,6 +107,75 @@
    "duration": 2.8,
    "loop": false
   },
+  "jockey": {
+   "duration": 1.2,
+   "loop": true,
+   "set": "jockey"
+  },
+  "jockey_B": {
+   "direction": "back",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_BL": {
+   "direction": "back_left",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_BR": {
+   "direction": "back_right",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_L": {
+   "direction": "left",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_R": {
+   "direction": "right",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_run_B": {
+   "direction": "back",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
+  "jockey_run_BL": {
+   "direction": "back_left",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
+  "jockey_run_BR": {
+   "direction": "back_right",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
   "jog": {
    "direction": "forward",
    "duration": 0.7333,
@@ -191,6 +260,35 @@
   "protest": {
    "duration": 2.6,
    "loop": false
+  },
+  "shield": {
+   "duration": 2.4,
+   "loop": true,
+   "set": "shield"
+  },
+  "shield_B": {
+   "direction": "back",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
+  },
+  "shield_L": {
+   "direction": "left",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
+  },
+  "shield_R": {
+   "direction": "right",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
   },
   "shot": {
    "contact": 0.45,

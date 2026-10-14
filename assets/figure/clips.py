@@ -784,48 +784,10 @@ def backpedal_clip(solver):
 
 
 def strafe_clip(solver, side):
-    """A side-step towards `side`, the leading foot reaching out and the other closing."""
-    lead, trail = ("L", "R") if side == "L" else ("R", "L")
-    m = 1.0 if side == "L" else -1.0  # +X is the figure's left
-    land = {lead: (0.38 * m, -0.01), trail: (-0.08 * m, 0.01)}
-    paths = {
-        lead: [(0.25, (0.10 * m, 0.0, 0.19)), (0.55, (0.25 * m, -0.02, 0.23)), (0.85, (0.36 * m, -0.01, 0.17))],
-        trail: [(0.25, (-0.44 * m, 0.0, 0.19)), (0.55, (-0.28 * m, 0.02, 0.23)), (0.85, (-0.12 * m, 0.01, 0.17))],
-    }
-    # The left foot always lands at phase 0: when it trails, the body's cycle is offset.
-    shift = 0.0
-
-    def body(u):
-        v = (u + shift) % 1.0
-        p = trunk_cycle(v, 0.30, hz=-0.115, bob=0.012, run=True, sway=0.0, hyaw=2.0, hroll=2.0,
-                        hpitch=6.0, lean=8.0, chest_yaw=3.0, look_down=0.0, flex_bob=0.8)
-        p["hx"] = 0.02 * m
-        p["kLout"] = p["kRout"] = 12.0
-        p["sside"] += 2.0 * m
-        p["look_yaw"] = 0.0
-        for s, sign in (("L", 1.0), ("R", -1.0)):
-            p.update({
-                f"a{s}flex": 14.0 + wave2(v, 0.15, 3.0),
-                f"a{s}abd": 22.0 + wave2(v, 0.1, 6.0) * (1.0 if s == lead else -0.5),
-                f"a{s}elbow": 72.0 + wave2(v, 0.2, 6.0),
-                f"a{s}twist": 8.0,
-                f"a{s}pron": 25.0,
-                f"a{s}wrist": 6.0,
-            })
-        return p
-
-    gait = Gait(
-        solver, frames=16, speed=2.5, direction=X * m, duty=0.30,
-        land=land,
-        yaw={"L": 6.0, "R": -6.0},
-        stance_pitch=[(0.0, -8.0), (0.25, 0.0), (0.6, 0.0), (1.0, -24.0)],
-        swing_pitch=[(0.3, -20.0), (0.6, -12.0), (0.85, -9.0)],
-        swing_path=paths,
-        body=body,
-    )
-    # A side shuffle is the footwork of a defender jockeying; running to the side opens the hips.
-    return Clip(f"strafe_{side}", gait.frames, gait, loop=True, speed=gait.speed,
-                direction="left" if side == "L" else "right", duty=gait.duty, set="jockey")
+    """A quick side shuffle towards `side` in the jockeying stance, the leading foot reaching
+    out and the other closing up to it: footwork for defending, so it is in that set."""
+    return JOCKEY.shuffle(solver, f"strafe_{side}", "jockey", 90.0 if side == "L" else -90.0, 2.5, 16, 0.30,
+                          height=0.19)
 
 
 def strafe_L_clip(solver):
@@ -1082,6 +1044,149 @@ def dribble_clips(solver):
         dribble_clip(solver, "dribble_sprint", 7.5, 14, 0.22, ahead=0.17, low=0.10, lean=19.0, look=10.0,
                      arms=(44.0, 14.0), lift=0.42),
     ]
+
+
+# --------------------------------------------------------------------------
+# Defending and shielding: low, wide stances that shuffle, the feet keeping their
+# places rather than passing each other. Each set has a stance loop with no speed
+# that the page plays when the player stands, and moving loops on the same feet.
+
+
+def shuffle_steps(angle, speed, frames, duty, feet, swing, clear=0.14):
+    """Landing points and swing paths of a shuffle travelling at `angle` from a stance
+    with its feet at `feet` ({side: (x, y)}): the foot nearer the travel leads and the
+    other follows, each on its own stretch of the travel, never passing (they are moved
+    apart along the travel as far as that needs, with `clear` to spare). `swing` lists
+    (k, along, z) as for `steps`."""
+    d = heading(angle)
+    stance = speed * duty * frames / FPS
+    along = {s: Vector((*feet[s], 0.0)).dot(d) for s in SIDES}
+    lead, trail = ("L", "R") if along["L"] >= along["R"] else ("R", "L")
+    short = max(0.0, stance + clear - (along[lead] - along[trail]))
+    land, paths = {}, {}
+    for s in SIDES:
+        centre = Vector((*feet[s], 0.0)) + d * (short / 2.0 if s == lead else -short / 2.0)
+        on, off = centre + d * (stance / 2.0), centre - d * (stance / 2.0)
+        land[s] = (on.x, on.y)
+        paths[s] = [(k, (off.lerp(on, a).x, off.lerp(on, a).y, z)) for k, a, z in swing]
+    return land, paths
+
+
+class Stance:
+    """A low stance: where the feet stand, how the body is held over them, and how it
+    bounces on the balls of the feet. `body(u, p)` adds the arms and head."""
+
+    def __init__(self, feet, yaw, hips, chest, hz, hy, lean, hpitch, knees, body):
+        self.feet, self.yaw, self.hips, self.chest = feet, yaw, hips, chest
+        self.hz, self.hy, self.lean, self.hpitch, self.knees = hz, hy, lean, hpitch, knees
+        self.body = body
+
+    def trunk(self, u, duty, bob, sway=0.0):
+        p = trunk_cycle(u, duty, hz=self.hz, bob=bob, run=True, sway=sway, hyaw=2.0, hroll=2.0,
+                        hpitch=self.hpitch, lean=self.lean, chest_yaw=2.0, look_down=0.0, flex_bob=0.8)
+        p["hy"] += self.hy
+        p["kLout"] = p["kRout"] = self.knees
+        p = turned(p, self.hips, self.chest)
+        self.body(u, p)
+        return p
+
+    def loop(self, solver, name, set_name, frames=36):
+        """The stance itself, bouncing lightly and shifting its weight."""
+        T = frames / FPS
+
+        def sample(t):
+            u = t / T
+            p = dict(NEUTRAL)
+            p.update(self.trunk(u, 0.5, 0.0))
+            p["hz"] += wave2(u, 0.0, 0.008) + wave(u, 0.3, 0.004)
+            p["hx"] += wave(u, 0.2, 0.025)
+            p["hroll"] += wave(u, 0.2, 2.0)
+            p["sside"] -= wave(u, 0.22, 1.2)
+            for side in SIDES:
+                x, y = self.feet[side]
+                p.update({f"f{side}x": x, f"f{side}y": y, f"f{side}yaw": self.yaw[side],
+                          f"f{side}pitch": -10.0 + wave2(u, 0.05, 3.0), f"f{side}flat": 1.0})
+            return p
+
+        return Clip(name, frames, sample, loop=True, set=set_name)
+
+    def shuffle(self, solver, name, set_name, angle, speed, frames, duty, height=0.16):
+        """The stance shuffling at `angle` and `speed`, without the feet passing."""
+        land, paths = shuffle_steps(angle, speed, frames, duty, self.feet,
+                                    [(0.25, 0.22, height), (0.55, 0.62, height + 0.02), (0.85, 0.95, height - 0.02)])
+        gait = Gait(
+            solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land, yaw=self.yaw,
+            stance_pitch=[(0.0, -10.0), (0.3, -5.0), (0.7, -5.0), (1.0, -18.0)],
+            swing_pitch=[(0.3, -10.0), (0.6, -2.0), (0.9, -6.0)],
+            swing_path=paths, body=lambda u: self.trunk(u, duty, 0.012),
+        )
+        return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty, set=set_name)
+
+
+def _jockey_arms(u, p):
+    """Arms low and out for balance, the head on the ball at the attacker's feet."""
+    for side, sign in (("L", 1.0), ("R", -1.0)):
+        p.update({f"a{side}flex": 22.0 + wave2(u, 0.1, 2.0), f"a{side}abd": 26.0 + wave2(u, 0.15, 3.0) * sign,
+                  f"a{side}elbow": 48.0, f"a{side}twist": 12.0, f"a{side}pron": 30.0, f"a{side}wrist": 10.0})
+    p["look_down"] = 14.0
+    p["look_yaw"] = 0.0
+
+
+# Side-on: the left foot forward, the pelvis turned to the right, showing the attacker
+# the outside.
+JOCKEY = Stance(
+    feet={"L": (0.12, -0.15), "R": (-0.17, 0.12)}, yaw={"L": -12.0, "R": -40.0},
+    hips=-32.0, chest=-14.0, hz=-0.17, hy=0.03, lean=18.0, hpitch=10.0, knees=24.0, body=_jockey_arms,
+)
+
+
+def jockey_clips(solver):
+    """Jockeying: standing side-on, backing off and sliding across in front of the ball,
+    at a walk and at a run. The quick side shuffles keep their old names."""
+    clips = [JOCKEY.loop(solver, "jockey", "jockey")]
+    for angle, way in ((180.0, "B"), (135.0, "BL"), (-135.0, "BR"), (90.0, "L"), (-90.0, "R")):
+        clips.append(JOCKEY.shuffle(solver, f"jockey_{way}", "jockey", angle, 1.2, 16, 0.45))
+    for angle, way in ((180.0, "B"), (135.0, "BL"), (-135.0, "BR")):
+        clips.append(JOCKEY.shuffle(solver, f"jockey_run_{way}", "jockey", angle, 2.6, 14, 0.32, height=0.19))
+    return clips
+
+
+def _shield_arms(u, p):
+    """Arms out wide and back to feel the opponent behind, the eyes on the ball and now and
+    then over a shoulder."""
+    for side, sign in (("L", 1.0), ("R", -1.0)):
+        p.update({f"a{side}flex": -18.0 + wave(u, 0.3, 3.0), f"a{side}abd": 48.0 + wave(u, 0.1, 4.0) * sign,
+                  f"a{side}elbow": 30.0, f"a{side}twist": -6.0, f"a{side}pron": 10.0, f"a{side}wrist": 5.0})
+    p["look_down"] = 28.0
+    p["look_yaw"] = 0.0
+
+
+# Square and wide, the backside out into the opponent behind, over the ball.
+SHIELD = Stance(
+    feet={"L": (0.21, -0.02), "R": (-0.21, 0.02)}, yaw={"L": 14.0, "R": -14.0},
+    hips=0.0, chest=0.0, hz=-0.19, hy=0.07, lean=24.0, hpitch=14.0, knees=12.0, body=_shield_arms,
+)
+
+
+def shield_clips(solver):
+    """Shielding: holding the ball with the back to the opponent, backing in and sliding
+    to either side."""
+    stand = SHIELD.loop(solver, "shield", "shield", frames=72)
+    sample = stand.sample
+
+    def looking(t):  # a glance back over each shoulder in turn
+        p = sample(t)
+        u = t / (stand.frames / FPS)
+        glance = smoothstep(1.0 - abs(u - 0.3) / 0.12) - smoothstep(1.0 - abs(u - 0.75) / 0.12)
+        p["look_yaw"] += 55.0 * glance
+        p["look_down"] -= 14.0 * abs(glance)
+        return p
+
+    stand.sample = looking
+    clips = [stand]
+    for angle, way in ((180.0, "B"), (90.0, "L"), (-90.0, "R")):
+        clips.append(SHIELD.shuffle(solver, f"shield_{way}", "shield", angle, 1.0, 18, 0.5))
+    return clips
 
 
 def _both_sides(make):
@@ -1728,7 +1833,7 @@ def despair_clip(solver):
 CLIP_BUILDERS = [
     idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
     walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
-    dribble_clips,
+    dribble_clips, jockey_clips, shield_clips,
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
