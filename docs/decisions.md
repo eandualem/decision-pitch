@@ -508,9 +508,12 @@ runs them in order and exports. One command rebuilds everything:
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python assets/figure/build.py
 ```
 
-It writes `assets/figure/figure.blend`, so a person can restyle the figure in
-Blender, and `src/decision_pitch/web/figures/figure.glb` with
-`figure.json` beside it, which describes the clips for the page. No
+It writes `assets/figure/figure.blend` and `src/decision_pitch/web/figures/figure.glb`
+with `figure.json` beside it, which describes the clips for the page. The
+scripts are the source of truth: a full rebuild regenerates the `.blend`. A
+person who restyles the figure by hand in the `.blend` exports it with the same
+script's export-only mode, which leaves the `.blend` as it is, and carries the
+change into the scripts if it should survive the next rebuild. No
 third-party model, motion capture, texture or asset pack is used; colours are
 plain materials, so the `.glb` stays small.
 
@@ -541,20 +544,27 @@ an outfit is editing a material or a mesh.
 **The skeleton.** One armature whose bone names have no dots, since three.js
 drops dots from animation track names: `root`, `hips`, `spine`, `chest`,
 `neck`, `head`, and `shoulder`, `upper_arm`, `forearm`, `hand`, `thigh`,
-`shin`, `foot` and `toe`, each with `_L` and `_R`.
+`shin`, `foot` and `toe`, each with `_L` and `_R`. `_L` is always the figure's
+own left: Blender's +X, and the page's local +x before the figure turns. The
+same holds for clip names: `strafe_L` steps and `keeper_dive_L` dives to the
+figure's left.
 
 **Clips.** All clips play on that skeleton, keyed at 30 frames per second,
 with the `root` bone fixed: the engine moves the player, the clip only moves
 the body around it. `figure.json` lists each clip's duration and, for a loop,
-the speed it was made for, or, for a one-shot, the moment of contact.
+the speed and direction of travel (forward, back, left or right) it was made
+for, `idle` having none, or, for a one-shot, the moment of contact.
 
 - Locomotion loops: `idle`, `walk`, `jog`, `sprint`, `backpedal`,
   `strafe_L` and `strafe_R`. Each is one full cycle that starts as the left
   foot plants and plants the right foot halfway, and the planted foot moves
-  backwards at exactly the clip's speed, so a clip played at the ground speed
-  over its speed (and the figure's scale) keeps its feet planted.
+  opposite to the clip's direction of travel at exactly the clip's speed, so a
+  clip played at the ground speed over its speed (and the figure's scale)
+  keeps its feet planted.
 - Play: `pass`, `shot`, `control`, `tackle`, `header`, `throw_in` and
-  `celebrate`, kicked with the right foot.
+  `celebrate`, kicked with the right foot. Each is made so that its upper
+  body and kicking leg also work alone over a running stride: the support leg
+  carries no part of the action.
 - Goalkeeper: `keeper_dive_L`, `keeper_dive_R`, `keeper_catch` and
   `keeper_catch_high`.
 - Touchline: `instruct`, `change`, `clap`, `protest`, `cheer` and `despair`,
@@ -565,17 +575,26 @@ and the `BufferGeometryUtils` it imports, is vendored from three.js 0.186.0
 under `vendor/three/addons/` with its notice. The page loads the figure once,
 before the first match is built, and clones it per player and per touchline
 figure; geometry and clips are shared, and materials are shared per team and
-per skin or hair tone. Each figure has an animation mixer. Locomotion blends
-the loops by ground speed and by the direction of travel against the way the
-figure faces, with all loops on one shared phase, and plays them at the rate
-that matches the stride to the speed, so feet plant instead of sliding. The
-touches from section 6's contact moments play their clip so that its moment
-of contact lands on the touch: `kick` plays `shot` when the ball leaves fast
-and `pass` otherwise, `control`, `tackle`, `throw` play theirs, and a
-goalkeeper's `save` and `catch` play a dive across its facing or a catch at
-the ball's height. Goals play `celebrate`; managers play their gesture clips.
-The ball keeps its contrast and its shadow to stay readable on the broadcast
-camera at its real size. The engine is unchanged: headers stay unplayed until
+per skin or hair tone. Each figure has an animation mixer. The snapshot sends a
+player's heading and speed but not the direction it travels, so the page takes
+travel from the drawn positions, ignoring it at a walk's pace or less.
+Locomotion blends the loops by ground speed and by the direction of travel
+against the way the figure faces, with all loops on one shared phase, and
+plays them at the rate that matches the stride to the speed, so feet plant
+instead of sliding; a carried ball keeps time with that phase. The touches
+from the contact moments above play their clip so that its moment of contact
+lands on the touch: `kick` plays `shot` when the ball leaves fast and `pass`
+otherwise, `control`, `tackle` and `throw` play theirs, and `deflect` plays
+`control`. The engine keeps a player moving while it plays the ball, so a
+player above a walking pace plays only the clip's upper body and kicking leg
+over its running stride; the whole clip plays only near standstill. A
+goalkeeper starts its dive, to its left or right by its travel against its
+facing, when the snapshot first marks it diving, whether or not it reaches the
+ball; a `save` or `catch` then times the dive's full stretch to the touch, and
+a catch with no dive plays `keeper_catch` or `keeper_catch_high` by the ball's
+height. Goals play `celebrate`; managers play their gesture clips on the upper
+body over their walk. The ball keeps its contrast and its shadow to stay
+readable on the broadcast camera at its real size. The engine is unchanged: headers stay unplayed until
 the engine has them, and the `header` clip is ready for that.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
