@@ -62,6 +62,22 @@ def test_two_built_in_managers_play_a_full_match_with_substitutions():
     assert {(m["off"], m["on"]) for m in made} <= {(m["off"], m["on"]) for m in asked}
 
 
+def test_the_half_time_and_full_time_whistles_carry_the_score():
+    staff = staffed(match=Match(half_length=60.0, seed=3))
+    staff.match.score = [2, 1]  # a score to carry even if the bots score no goals
+    sent = play(staff)
+    events = [m for m in sent if m["type"] == "event"]
+    whistle = {m["kind"]: m for m in events if m["kind"] in ("half_time", "full_time")}
+    goals = [m for m in events if m["kind"] == "goal"]
+
+    def score(at: float) -> list[int]:
+        return [[2, 1][team] + sum(g["team"] == team and g["t"] <= at for g in goals) for team in (0, 1)]
+
+    # each whistle carries the score at that moment, not a later one
+    assert whistle["half_time"]["score"] == score(whistle["half_time"]["t"])
+    assert whistle["full_time"]["score"] == score(whistle["full_time"]["t"]) == list(staff.match.score)
+
+
 def test_the_built_in_line_up_puts_no_more_on_a_local_model_than_it_answers_quickly():
     laya = Fake("Laya")
     staff = staffed(options=({"bot": None, "laya": laya}, {"bot": None}))
@@ -264,8 +280,39 @@ def test_the_page_is_told_each_team_s_manager_and_models(monkeypatch):
     asyncio.run(staff.line_up())
     teams = hello(staff.match, staff.squad, staff)["teams"]
     assert [team["manager"] for team in teams] == ["Built-in", "Built-in"]
+    assert [team["assistants"] for team in teams] == [[], []]
     assert {p["model"] for p in teams[0]["players"]} == {"Laya"}
     assert {p["model"] for p in teams[1]["players"]} == {None}
+
+
+def test_the_page_is_told_each_manager_s_assistant_models(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    helped = LanguageModel(assistants=2, transport=httpx.MockTransport(Recorded()))
+    alone = LanguageModel(transport=httpx.MockTransport(Recorded()))
+    for away, expected in ((alone, []), (BuiltIn(), [])):
+        staff = staffed(helped, away)
+        teams = hello(staff.match, staff.squad, staff)["teams"]
+        assert teams[0]["manager"] == managers.DEFAULT_MODEL
+        assert teams[0]["assistants"] == [managers.ASSISTANT_MODEL, managers.ASSISTANT_MODEL]
+        assert teams[1]["assistants"] == expected
+    asyncio.run(helped.aclose())
+    asyncio.run(alone.aclose())
+
+
+def test_a_claude_manager_tells_the_page_its_own_assistant_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+
+    def client():
+        return DefaultAsyncHttpxClient(transport=httpx2.MockTransport(RecordedClaude()))
+
+    helped, alone = Claude(assistants=2, http_client=client()), Claude(http_client=client())
+    staff = staffed(helped, alone)
+    teams = hello(staff.match, staff.squad, staff)["teams"]
+    assert [team["manager"] for team in teams] == [managers.CLAUDE_MODEL] * 2
+    assert teams[0]["assistants"] == [managers.CLAUDE_MODEL, managers.CLAUDE_MODEL]
+    assert teams[1]["assistants"] == []
+    asyncio.run(helped.aclose())
+    asyncio.run(alone.aclose())
 
 
 @pytest.mark.parametrize("manager, key", [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])

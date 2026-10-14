@@ -51,6 +51,7 @@ def hello(match: Match, squad: Players | None = None, staff: Staff | None = None
     if staff:
         for team, manager in zip(teams, staff.managers, strict=True):
             team["manager"] = manager.name
+            team["assistants"] = list(manager.assistants)
     return {"type": "hello", "version": VERSION, "pitch": PITCH, "teams": teams}
 
 
@@ -73,9 +74,7 @@ async def run(match: Match, send, squad: Players | None = None, staff: Staff | N
             if staff:
                 staff.observe(events)
             for message in [*events, *squad.drain_decisions(), *(staff.drain() if staff else [])]:
-                if message.get("kind") == "substitution" and message["type"] == "event":
-                    message["model"] = squad.model_name(message["on"])
-                await send(message)
+                await send(_detailed(message, match, squad))
             if steps % SNAPSHOT_EVERY == 0 or match.phase == "full_time":
                 await send(match.snapshot())
             due += STEP
@@ -84,6 +83,17 @@ async def run(match: Match, send, squad: Players | None = None, staff: Staff | N
         asking.cancel()
         if managing:
             managing.cancel()
+
+
+def _detailed(message: dict, match: Match, squad: Players) -> dict:
+    """`message` with what the page shows beyond the engine's event: the incoming player's
+    model at a substitution, and the score at the half-time and full-time whistles."""
+    if message["type"] == "event":
+        if message["kind"] == "substitution":
+            message["model"] = squad.model_name(message["on"])
+        elif message["kind"] in ("half_time", "full_time"):
+            message["score"] = list(match.score)
+    return message
 
 
 def seat(match: Match, home: Model | None, away: Model | None) -> Players:
@@ -304,9 +314,7 @@ async def fast(match: Match, send, squad: Players, staff: Staff) -> None:
             if staff.due(team):
                 await staff.consult(team)
         for message in [*events, *staff.drain()]:
-            if message.get("kind") == "substitution" and message["type"] == "event":
-                message["model"] = squad.model_name(message["on"])
-            await send(message)
+            await send(_detailed(message, match, squad))
 
 
 def _open_when_listening(server: uvicorn.Server, url: str) -> None:

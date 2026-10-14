@@ -31,6 +31,7 @@ Sent once when the page connects.
       "name": "Harbour",
       "colours": {"shirt": "#1f5fbf", "shorts": "#ffffff", "keeper": "#f2c230"},
       "manager": "Built-in",
+      "assistants": [],
       "players": [
         {"id": 1, "number": 1, "name": "Vale", "position": "GK", "model": "Laya"}
       ]
@@ -44,7 +45,10 @@ start in `players` and its substitutes in `bench`, in the same shape. `id` is
 unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
 player's decision model, or `null` for the built-in bot; a substitute's is
 `null` until its manager chooses one. `manager` is the team's manager:
-`Built-in`, or the language model's name.
+`Built-in`, or the language model's name. `assistants` lists the model of
+each assistant helping the team's manager, one entry per assistant (for
+example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
+manager and for a language-model manager with none.
 
 ### `snapshot`
 
@@ -58,9 +62,11 @@ The state of play, about 30 times a second.
   "clock": "12:14",
   "phase": "play",
   "score": [1, 0],
-  "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7},
+  "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7,
+           "touches": [{"player": 7, "kind": "control", "t": 734.183, "x": 11.8, "y": -3.0, "z": 0.11}]},
   "players": [
-    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"}
+    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
+    {"id": 1, "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
   ]
 }
 ```
@@ -69,8 +75,25 @@ The state of play, about 30 times a second.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
   `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
+- `ball.touches`: the touches of the ball in the last 0.1 s, oldest first, or
+  `[]`. Each touch is repeated in the snapshots of that tenth of a second, so
+  none falls between two snapshots. `player` touched it; `t` is the match time
+  of the engine step it happened in; `x`, `y` and `z` are where the ball was
+  as that step began, before the touch moved it. A player who takes the ball
+  and kicks it in the same step makes one touch, the kick. `kind` is one of:
+  `kick` (a pass, shot or clearance, or the kick that takes a restart; a pass
+  and a shot are not told apart), `throw` (the kick that takes a throw-in),
+  `control` (a player takes a loose ball, or a teammate's, in play), `tackle`
+  (a player takes the ball from an opponent who has it, in play), `deflect`
+  (the ball comes too fast to control and bounces off the player), `save`
+  (such a deflection off the goalkeeper defending the goal the ball is at, in
+  its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
+  area in play, even a slow ball from a teammate). There are no headers:
+  outfield players play the ball only up to 0.9 m high.
 - `action`: the engine command the player is carrying out: `hold`, `move` or
   `kick`. The decision model's own choice is in `decision` messages.
+- `dive`: on a player, `true` while it is a goalkeeper diving across its goal
+  at a ball heading in (docs/decisions.md, section 2); absent otherwise.
 - `players`: only players on the pitch; a substituted or sent-off player
   disappears from it, and a substitute appears in it once it comes on.
 
@@ -96,7 +119,7 @@ restart, unless the list says otherwise, and is `null` for `half_time` and
 | `offside` | `player`: the player caught offside. `team` is the defending team |
 | `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
 | `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
-| `half_time`, `full_time` | none |
+| `half_time`, `full_time` | `score`: the score at the whistle, home first, as in the snapshot |
 
 A foul is followed by any card it earns, then the `free_kick` or `penalty`; an
 offside by its `free_kick`. A second yellow card sends `yellow` then `red`. A

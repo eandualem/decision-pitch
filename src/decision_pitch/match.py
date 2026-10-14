@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
 
 from decision_pitch import pitch
@@ -77,6 +78,7 @@ GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-s
 SUBSTITUTES = 5  # substitutions a team may make
 WINDOWS = 3  # stoppages it may make them in, half time not counted
 FEWEST = 7  # players a team needs to play on
+RECENT_TOUCHES = 0.1  # s of touches each snapshot repeats, so none falls between two of them
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -149,6 +151,8 @@ class Match:
         self.window_at: list[int | None] = [None, None]  # the stoppage of each team's latest
         self.stoppage = 0  # counts the restarts
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
+        self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
+        self.diving: set[int] = set()  # goalkeepers diving across their goal this step
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -190,19 +194,28 @@ class Match:
             "clock": self.clock(),
             "phase": self.phase,
             "score": list(self.score),
-            "ball": {"x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3), "owner": self.owner},
-            "players": [
-                {
-                    "id": p.id,
-                    "x": round(p.x, 3),
-                    "y": round(p.y, 3),
-                    "heading": round(p.heading, 3),
-                    "speed": round(p.speed, 2),
-                    "action": type(self.commands[p.id]).__name__.lower().removesuffix("to"),
-                }
-                for p in self.players
-            ],
+            "ball": {
+                "x": round(b.x, 3),
+                "y": round(b.y, 3),
+                "z": round(b.z, 3),
+                "owner": self.owner,
+                "touches": [dict(touch) for touch in self.touches if touch["t"] >= self.t - RECENT_TOUCHES],
+            },
+            "players": [self._player_snapshot(p) for p in self.players],
         }
+
+    def _player_snapshot(self, p: Player) -> dict:
+        entry = {
+            "id": p.id,
+            "x": round(p.x, 3),
+            "y": round(p.y, 3),
+            "heading": round(p.heading, 3),
+            "speed": round(p.speed, 2),
+            "action": type(self.commands[p.id]).__name__.lower().removesuffix("to"),
+        }
+        if p.id in self.diving:
+            entry["dive"] = True
+        return entry
 
     def drain_events(self) -> list[dict]:
         events, self.events = self.events, []
@@ -233,6 +246,7 @@ class Match:
         if self.phase == "full_time":
             return
         self.t += STEP
+        self.diving.clear()
         if self.phase == "half_time":
             self._substitute()
             self.since_restart += STEP
@@ -292,7 +306,10 @@ class Match:
             # the laws ask it to retreat, whatever it was told
             step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
         elif isinstance(command, MoveTo):
-            step_player(p, command.x, command.y, command.speed, dive=self._dives(p))
+            dive = self._dives(p)
+            if dive:
+                self.diving.add(p.id)
+            step_player(p, command.x, command.y, command.speed, dive=dive)
         elif isinstance(command, KickTo) and self.owner != p.id:
             # run at the ball from behind, so the kick goes the right way
             angle = math.atan2(command.y - self.ball.y, command.x - self.ball.x)
@@ -354,7 +371,18 @@ class Match:
             if nearest.id != self.indirect:
                 self.indirect = None
             self.last_touch = nearest.team
+            if nearest.id != self.owner:
+                self._touched(nearest, self._possession_kind(nearest))
         self.owner = nearest.id
+
+    def _possession_kind(self, p: Player) -> str:
+        """How `p` came to have the ball in play: a goalkeeper's catch in its own area, a
+        tackle off an opponent, or a first touch."""
+        if self._saves(p):
+            return "catch"
+        if self.owner is not None and self.player(self.owner).team != p.team:
+            return "tackle"
+        return "control"
 
     def _deflects(self, p: Player) -> bool:
         """Whether the loose ball comes at `p` too fast to control, or reaches a goalkeeper
@@ -372,6 +400,7 @@ class Match:
     def _deflect(self, p: Player) -> None:
         """The ball bounces off `p`: outwards from where it touched, keeping a little of its
         speed along the body. It counts as `p` playing it, except for the opponents' offside."""
+        self._touched(p, "save" if self._saves(p) else "deflect")
         b = self.ball
         vx, vy = b.vx - p.vx, b.vy - p.vy
         speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
@@ -406,6 +435,7 @@ class Match:
         return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
+        self._touched(p, "throw" if self.phase == "throw_in" else "kick")
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
         loft = max(command.loft, 0.3) if self.phase == "throw_in" else command.loft
         speed = max(0.0, min(command.speed, cap))
@@ -425,6 +455,17 @@ class Match:
         self.commands[p.id] = Hold()
         if self.phase != "play":
             self.phase, self.restart_team = "play", None
+
+    def _touched(self, p: Player, kind: str) -> None:
+        """Record `p`'s touch of the ball, where the ball is as it touches it, for the page
+        to show (docs/protocol.md). A kick straight after taking the ball, in the same step,
+        replaces the touch it follows. It changes nothing in play."""
+        b = self.ball
+        touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
+                 "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
+        if self.touches and (self.touches[-1]["t"], self.touches[-1]["player"]) == (touch["t"], p.id):
+            self.touches.pop()
+        self.touches.append(touch)
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:
         return self._in_own_penalty_area(self.ball.x, self.ball.y, team)

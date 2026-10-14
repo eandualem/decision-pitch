@@ -89,6 +89,7 @@ class Situation:
 
 class Manager(Protocol):
     name: str
+    assistants: tuple[str, ...]  # the model of each assistant helping it, for the page
 
     async def lineup(self, situation: Situation) -> dict[int, str]: ...
 
@@ -108,6 +109,7 @@ class BuiltIn:
     """Picks models by their stated answer times and substitutes by simple rules."""
 
     name = "Built-in"
+    assistants: tuple[str, ...] = ()
     SCHEDULE = (55, 65, 75)  # minutes at which the slowest outfield player is replaced
     BOOKED_FROM = 60  # minute from which a player on a yellow card is replaced
     FAILING = 3  # failed answers in the last five that get a player replaced
@@ -241,6 +243,11 @@ class LanguageModel:
     a JSON schema. The key comes from the environment only and is never shown."""
 
     assistant = ASSISTANT_MODEL
+
+    @property
+    def assistants(self) -> tuple[str, ...]:
+        """The model of each assistant helping it, for the page: a subclass's own."""
+        return (self.assistant,) * len(self._assistants)
 
     def __init__(
         self,

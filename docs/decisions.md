@@ -422,6 +422,74 @@ This keeps the engine authoritative and the page usable offline, while shared
 geometry, capped pixel density and one shadow-casting light limit GPU work for
 smooth laptop recording. It replaces the scaffold's cylinders and fixed camera.
 
+### Managers on the touchline, smooth motion and contact
+
+**Managers.** Each team's manager stands in a technical area on the touchline
+nearest the broadcast camera, beside the halfway line: home to its left, away
+to its right, and they stay there after half time. A touchline module builds
+each manager as a low-poly figure in a coat of the team's shirt colour with a
+name label, walks it along its area to follow the ball and turns it towards
+play. It gestures when its team's `manager` message arrives (pointing towards
+the player it instructs, or signalling a change when it asks for a
+substitution) and when the `substitution` event is made, celebrates its team's
+goals and holds its head at the other team's. The `hello` message lists each
+team's assistant models; one assistant figure stands behind the manager per
+assistant model, and none when there are none. There is no crowd. The wide
+shot stays on the match, at the same size as before, so the managers are in it
+when play comes near their touchline. While the ball is dead the camera cuts
+briefly to a manager: after the scorer's close-up, at a card, at a
+substitution, at half time and full time, when a manager gives advice
+during a stoppage and, at most about once in 25 seconds, at a goal kick,
+corner or free kick. Throw-ins are taken too quickly for a cut, in about a
+second, so nothing cuts away at one. It never cuts away during open play.
+
+**Buffered interpolation.** The page renders a fixed delay, about 100 ms,
+behind the newest snapshot instead of chasing the last two. A timeline module
+maps the server's `t` to the page's clock with an offset that absorbs uneven
+arrival, keeps a short buffer of snapshots and samples the pair that brackets
+the render time. The offset follows the least-delayed arrivals of the last
+half second and the server's measured drift, so a server running slower than
+real time, as a loaded laptop with a local model may, is followed without
+held frames. It never interpolates across a change of phase or period or a
+clock that goes back, so restarts that place players still do not sweep them
+across the pitch; the one exception is a restart kicked into play, where the
+engine places no one, and a player who still jumps more than 8 m is drawn
+there at once. It holds the last state when the buffer runs dry and drops the
+backlog after a stall. Events carry `t` and are released on the same
+timeline, so a goal banner, a celebration or a contact pose appears when the
+drawn ball gets there. `decision` and `manager` messages stay immediate.
+Animation runs on the browser's frame timestamp, and the draw loop allocates
+nothing per frame.
+
+**The ball and contact.** While a player has the ball, the page draws it at
+that player's drawn feet, where the engine carries it, so it cannot slide or
+jump against them. The ball spins with the distance it travels and keeps its
+height from the engine, so it sits on the grass and arcs as sent. The snapshot
+carries the touches of the ball in the last moment, with who made each, what
+kind it was and when, read from state the engine records where the touch
+happens; it changes no rule or physics. A list rather than only the latest
+touch keeps a kick that is blocked within the same snapshot interval from
+losing its swing. The page plays the matching pose at that moment: a leg swing
+for a kick, first touch or tackle, a throw, and a dive or reach for a
+goalkeeper's save or catch, without restarting a pose when two close players
+trade the ball. Seeing a touch in the buffer before it is drawn gives each
+pose a short wind-up. Only kinds the engine can tell apart are sent: a pass
+and a shot are both a kick, and a goalkeeper taking a teammate's slow ball in
+its area is a catch. Headers are not implemented: the engine lets outfield
+players play the ball only up to 0.9 m, so there is no header to show yet.
+
+Two engine properties are handled in the drawing only. A kick leaves in any
+direction relative to the kicker's heading (a median 84 degrees off it in bot
+matches, and backwards almost half the time), so the kicker turns into the
+kick during the wind-up and a carried ball turns with it. A goalkeeper diving
+or saving often faces away from the ball, so it turns to face the ball and
+leans and reaches across that facing.
+
+The delay costs a tenth of a second of latency, which nobody watching can see,
+and buys motion that stays even when the connection does not. Drawing from the
+engine's touches rather than guessing from the ball's path keeps the page a
+renderer of the match, not a second engine.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules

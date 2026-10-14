@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { technicalArea } from './touchline.js';
+
+const DUGOUT = { gap: 3.3, depth: 1.4, width: 8, height: 1.8 }; // m behind a manager's spot
 
 // All dimensions are metres. Stadium details are shared or instanced so they
 // cost a fixed number of draw calls, independent of the number of seats.
@@ -122,6 +125,18 @@ export function createStadium(scene, renderer, pitch) {
       arc(side * hl, end * hw, 1, start, start + Math.PI / 2);
     }
   }
+  // Each technical area: a dashed box from a metre off the touchline to its dugout.
+  for (const team of [0, 1]) {
+    const area = technicalArea(pitch, team);
+    const front = hw + 1;
+    const back = area.z + DUGOUT.gap;
+    const left = area.minX - 0.5;
+    const right = area.maxX + 0.5;
+    for (let x = left; x < right; x += 0.85) segment(x, front, Math.min(x + 0.5, right), front, 0.1);
+    for (const x of [left, right]) {
+      for (let z = front; z < back; z += 0.85) segment(x, z, x, Math.min(z + 0.5, back), 0.1);
+    }
+  }
   const paintGeometry = geometry(new THREE.BufferGeometry());
   paintGeometry.setAttribute('position', new THREE.Float32BufferAttribute(paint, 3));
   const markings = new THREE.Mesh(paintGeometry,
@@ -218,6 +233,23 @@ export function createStadium(scene, renderer, pitch) {
       }
     }
   }
+  // Dugouts behind the technical areas: low enough that the camera sees over them
+  // to the figures in front, one instanced mesh, no shadows.
+  const dugouts = [];
+  for (const team of [0, 1]) {
+    const { x, z } = technicalArea(pitch, team);
+    const front = z + DUGOUT.gap;
+    const depth = DUGOUT.depth;
+    const half = DUGOUT.width / 2;
+    dugouts.push([x, DUGOUT.height / 2, front + depth, DUGOUT.width, DUGOUT.height, 0.14, 0x1b2b35]);
+    dugouts.push([x, DUGOUT.height, front + depth / 2, DUGOUT.width + 0.3, 0.1, depth + 0.3, 0x2f4553]);
+    for (const end of [-1, 1]) {
+      dugouts.push([x + end * half, DUGOUT.height / 2, front + depth / 2, 0.12, DUGOUT.height, depth, 0x1b2b35]);
+    }
+    dugouts.push([x, 0.45, front + depth - 0.45, DUGOUT.width - 0.4, 0.1, 0.5, 0x3a4c57]);
+    dugouts.push([x, 0.75, front + depth - 0.16, DUGOUT.width - 0.4, 0.5, 0.08, 0x3a4c57]);
+  }
+  instances(dugouts, lambert(0xffffff));
   instances(poles, concrete);
   instances(lamps, material(new THREE.MeshBasicMaterial({ color: 0xfff2d5 })));
   const flagMaterial = lambert(0xf1ca59);
