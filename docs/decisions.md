@@ -825,7 +825,10 @@ side slid 66 to 84 cm per stance and the feet collided. Each footwork blends
 only its own directions; a figure changes from one to another over 0.15 s once
 a direction of the other is nearer its travel by 4 degrees, and the angle the
 chosen loop misses the travel by turns the skeleton's hips, the chest and neck
-turning back against it, so the stride still runs along the travel. Moving
+turning back against it, so the stride still runs along the travel. That turn
+eases to its target over 0.2 s and stops at 40 degrees, the foot lock taking
+up the rest: set at once, it twisted the hips and chest in a single frame
+whenever the footwork changed, about twice a second across a live match. Moving
 slowly to the side or back (past 70 degrees off its facing, between 0.25 and
 1.7 m/s), a figure side-steps in the jockey shuffle instead of a part-blended
 crossover walk, which slid 11 to 29 cm per stance; this is what goalkeepers
@@ -849,7 +852,10 @@ orientation. It holds from landing, lets go only once the sole lifts, and gives
 way beyond 35 cm and to clips that swing the legs. Under the figure's own moves
 (turn, cut, brake) it finds planted feet by the height of the sole instead,
 since those clips plant at their own times. A foot in the air keeps its sole at
-least 3 cm off the grass at mid-swing.
+least 3 cm off the grass at mid-swing. The page's turns of the bones start each
+frame from what the clips last gave them, not from the rest pose: three.js's
+mixer writes a bone only when its blended value changes, so a reset to rest
+outlived a blend that had settled.
 
 **Leaning and moves.** The body leans from the feet towards its smoothed
 horizontal acceleration: into a curve, forwards speeding up, back braking
