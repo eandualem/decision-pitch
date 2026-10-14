@@ -1061,7 +1061,7 @@ def jog_B_clip(solver):
 
 TOUCH = 0.4
 TOUCH_REACH = 0.48  # m ahead of the root the right toe reaches at the touch: the ball's back
-TOUCH_HEIGHT = 0.035  # m: the toe's height there, low behind the ball
+TOUCH_HEIGHT = 0.07  # m: the toe's height there, on the back of the ball and clear of the grass
 
 
 def dribble_clip(solver, name, speed, frames, duty, ahead, low, lean, look, arms, angle=0.0, hips=0.0,
@@ -1095,7 +1095,7 @@ def dribble_clip(solver, name, speed, frames, duty, ahead, low, lean, look, arms
             yaw={"L": 6.0 + toes, "R": -6.0 + toes},
             stance_pitch=[(0.0, 2.0), (0.15, 0.0), (0.45, 0.0), (0.75, -22.0), (1.0, -55.0)],
             swing_pitch=[(0.2, -55.0), (0.5, -25.0), (0.8, -4.0), (0.95, 0.0)],
-            swing_path=paths, body=body,
+            swing_path=paths, body=body, drop=1.2,  # the feet come down steeply, not skimming in
         )
 
     # Aim the right toe at the back of the ball at the touch, as `aim` does for a kick.
