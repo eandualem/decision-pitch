@@ -16,34 +16,39 @@ export const LOOPS = {
   strafe_L: { duration: 0.8, speed: 2, direction: 'left' },
   strafe_R: { duration: 0.8, speed: 2, direction: 'right' },
 };
-// Diagonal and faster loops, loop sets (with a speed-less stance) and idle variants.
+// Loops in eight directions (the run set's sideways and backwards ones step with the hips
+// turned), loop sets with their stances, and idle variants. The side shuffle joins the
+// jockey set. `duty` is the share of the cycle each foot is planted.
 export const MORE_LOOPS = {
-  walk_FL: { duration: 1, speed: 1.5, direction: 'forward_left' },
-  walk_FR: { duration: 1, speed: 1.5, direction: 'forward_right' },
-  jog_FL: { duration: 0.72, speed: 3.5, direction: 'forward_left' },
-  jog_FR: { duration: 0.72, speed: 3.5, direction: 'forward_right' },
-  strafe_run_L: { duration: 0.7, speed: 4, direction: 'left' },
-  strafe_run_R: { duration: 0.7, speed: 4, direction: 'right' },
-  walk_BL: { duration: 0.9, speed: 1.4, direction: 'back_left' },
-  walk_BR: { duration: 0.9, speed: 1.4, direction: 'back_right' },
-  jog_BL: { duration: 0.7, speed: 3, direction: 'back_left' },
-  jog_BR: { duration: 0.7, speed: 3, direction: 'back_right' },
-  backpedal_run: { duration: 0.6, speed: 3.5, direction: 'back' },
-  dribble_slow: { duration: 0.8, speed: 2.5, direction: 'forward', set: 'dribble', touch: 0.4 },
-  dribble: { duration: 0.6, speed: 4.5, direction: 'forward', set: 'dribble', touch: 0.4 },
-  dribble_sprint: { duration: 0.5, speed: 7.5, direction: 'forward', set: 'dribble', touch: 0.4 },
-  dribble_FL: { duration: 0.62, speed: 4, direction: 'forward_left', set: 'dribble', touch: 0.4 },
-  dribble_FR: { duration: 0.62, speed: 4, direction: 'forward_right', set: 'dribble', touch: 0.4 },
+  walk_FL: { duration: 1, speed: 1.5, direction: 'forward_left', duty: 0.6 },
+  walk_FR: { duration: 1, speed: 1.5, direction: 'forward_right', duty: 0.6 },
+  jog_FL: { duration: 0.7, speed: 4, direction: 'forward_left', duty: 0.4 },
+  jog_FR: { duration: 0.7, speed: 4, direction: 'forward_right', duty: 0.4 },
+  walk_L: { duration: 0.9, speed: 1.4, direction: 'left', duty: 0.6 },
+  walk_R: { duration: 0.9, speed: 1.4, direction: 'right', duty: 0.6 },
+  jog_L: { duration: 0.6, speed: 4, direction: 'left', duty: 0.4 },
+  jog_R: { duration: 0.6, speed: 4, direction: 'right', duty: 0.4 },
+  walk_BL: { duration: 0.9, speed: 1.4, direction: 'back_left', duty: 0.6 },
+  walk_BR: { duration: 0.9, speed: 1.4, direction: 'back_right', duty: 0.6 },
+  jog_BL: { duration: 0.6, speed: 3.6, direction: 'back_left', duty: 0.4 },
+  jog_BR: { duration: 0.6, speed: 3.6, direction: 'back_right', duty: 0.4 },
+  walk_B: { duration: 0.8, speed: 1.4, direction: 'back', duty: 0.6 },
+  jog_B: { duration: 0.5, speed: 3.6, direction: 'back', duty: 0.4 },
+  strafe_L: { duration: 0.8, speed: 2, direction: 'left', set: 'jockey', duty: 0.5 },
+  strafe_R: { duration: 0.8, speed: 2, direction: 'right', set: 'jockey', duty: 0.5 },
+  dribble_slow: { duration: 0.8, speed: 2.5, direction: 'forward', set: 'dribble', touch: 0.4, duty: 0.5 },
+  dribble: { duration: 0.6, speed: 4.5, direction: 'forward', set: 'dribble', touch: 0.4, duty: 0.4 },
+  dribble_sprint: { duration: 0.5, speed: 7.5, direction: 'forward', set: 'dribble', touch: 0.4, duty: 0.35 },
+  dribble_FL: { duration: 0.62, speed: 4, direction: 'forward_left', set: 'dribble', touch: 0.4, duty: 0.4 },
+  dribble_FR: { duration: 0.62, speed: 4, direction: 'forward_right', set: 'dribble', touch: 0.4, duty: 0.4 },
   jockey: { duration: 1.2, set: 'jockey' },
-  jockey_B: { duration: 0.7, speed: 1.5, direction: 'back', set: 'jockey' },
-  jockey_BL: { duration: 0.7, speed: 1.5, direction: 'back_left', set: 'jockey' },
-  jockey_BR: { duration: 0.7, speed: 1.5, direction: 'back_right', set: 'jockey' },
-  jockey_L: { duration: 0.7, speed: 2, direction: 'left', set: 'jockey' },
-  jockey_R: { duration: 0.7, speed: 2, direction: 'right', set: 'jockey' },
+  jockey_B: { duration: 0.7, speed: 1.5, direction: 'back', set: 'jockey', duty: 0.55 },
+  jockey_BL: { duration: 0.7, speed: 1.5, direction: 'back_left', set: 'jockey', duty: 0.55 },
+  jockey_BR: { duration: 0.7, speed: 1.5, direction: 'back_right', set: 'jockey', duty: 0.55 },
   shield: { duration: 1.5, set: 'shield' },
-  shield_B: { duration: 1, speed: 0.8, direction: 'back', set: 'shield' },
-  shield_L: { duration: 0.9, speed: 1, direction: 'left', set: 'shield' },
-  shield_R: { duration: 0.9, speed: 1, direction: 'right', set: 'shield' },
+  shield_B: { duration: 1, speed: 0.8, direction: 'back', set: 'shield', duty: 0.6 },
+  shield_L: { duration: 0.9, speed: 1, direction: 'left', set: 'shield', duty: 0.6 },
+  shield_R: { duration: 0.9, speed: 1, direction: 'right', set: 'shield', duty: 0.6 },
   idle_shift: { duration: 4 },
   idle_hips: { duration: 5 },
   idle_look: { duration: 3.5 },
@@ -78,8 +83,8 @@ for (const [side, x] of [['L', 1], ['R', -1]]) {
     [`foot_${side}`, `shin_${side}`, [0, -0.43, 0]], [`toe_${side}`, `foot_${side}`, [0, -0.05, 0.14]],
   );
 }
-export const CODES = Object.fromEntries([...Object.keys(LOOPS), ...Object.keys(ONE_SHOTS), ...Object.keys(MORE_LOOPS),
-  ...Object.keys(MORE_ONE_SHOTS)].map((name, i) => [name, i + 1]));
+export const CODES = Object.fromEntries([...new Set([...Object.keys(LOOPS), ...Object.keys(ONE_SHOTS), ...Object.keys(MORE_LOOPS),
+  ...Object.keys(MORE_ONE_SHOTS)])].map((name, i) => [name, i + 1]));
 export const MARKERS = ['hand_L', 'thigh_R', 'foot_L'];
 
 function clip(name, duration) {

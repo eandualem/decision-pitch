@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { continuous } from './timeline.js';
-import { createFigures, contactTime, envelope } from './figures.js';
+import { createFigures, contactTime, envelope, TOUCH_PHASE } from './figures.js';
 
 // Figures face local +z. Match headings turn anticlockwise from match +x.
 const mix = (a, b, t) => a + (b - a) * t;
@@ -8,6 +8,7 @@ const angle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const NONE = [];
 const smooth = (t) => t * t * (3 - 2 * t);
+const ramp = (value, low, high) => smooth(clamp((value - low) / (high - low), 0, 1));
 
 export const DRIBBLE = 0.6; // m ahead of a player's centre that the engine carries the ball
 const BALL_RADIUS = 0.11; // the engine's ball
@@ -27,9 +28,10 @@ const GAIT = 0.08; // s over which the drawn velocity that drives the stride set
 // so the jitter of a player barely moving cannot swing its steps from side to side.
 const TURNING = 0.15;
 const FADE = 0.12; // s a pose cut short by the next one takes to fade out
-// The phase of the stride at which a dribbler's right foot meets the ball, just before
+// A dribbler's right foot meets the ball at its stride's touch (figures.js), just before
 // it plants at 0.5: the ball runs ahead from there and the runner catches it up.
-const TOUCH_PHASE = 0.4;
+// How long a model player's latest decision colours what its figure shows, s.
+const DECIDED = 2;
 const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper leaves its feet
 const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
 const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
@@ -129,6 +131,8 @@ export function createPlayers(scene, teams, figure) {
         vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
         celebrateAt: -Infinity,
+        // The loop sets the figure shows (figures.js) and the model's latest decision.
+        sets: { dribble: 0, jockey: 0, shield: 0 }, decision: null, decidedAt: -Infinity,
       });
     });
   });
@@ -337,6 +341,45 @@ export function createPlayers(scene, teams, figure) {
     }
   }
 
+  // Which loop sets a player's figure shows, from the snapshot: the dribble on the ball,
+  // shielding it when slow with an opponent close behind, and jockeying the opponent who
+  // has it, close, facing it and not closing in. Bots send no decisions, so this is all
+  // read from the play; a model player's decision to shield adds to it.
+  function readSets(actor, player, carrier, players, now) {
+    const { sets } = actor;
+    sets.dribble = sets.jockey = sets.shield = 0;
+    if (!carrier) return;
+    const cos = Math.cos(actor.facing);
+    const sin = Math.sin(actor.facing);
+    if (carrier === player) {
+      let nearest = Infinity;
+      let behind = 0;
+      for (const other of players) {
+        if (actors.get(other.id)?.team === actor.team) continue;
+        const dx = other.x - player.x;
+        const dy = other.y - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < nearest) {
+          nearest = d;
+          behind = d > 1e-6 ? -(dx * cos + dy * sin) / d : 0;
+        }
+      }
+      let shield = (1 - ramp(nearest, 1.6, 2.6)) * ramp(behind, 0.2, 0.6) * (1 - ramp(actor.speed, 1.6, 2.6));
+      if (actor.decision === 'shield' && now - actor.decidedAt < DECIDED) shield = Math.max(shield, 1 - ramp(actor.speed, 2.6, 3.6));
+      sets.shield = shield;
+      sets.dribble = 1 - shield;
+      return;
+    }
+    if (actors.get(carrier.id)?.team === actor.team) return;
+    const dx = carrier.x - player.x;
+    const dy = carrier.y - player.y;
+    const d = Math.hypot(dx, dy);
+    if (!(d > 1e-6) || d > 6) return;
+    const facing = (dx * cos + dy * sin) / d;
+    const closing = (actor.vx * dx + actor.vy * dy) / d;
+    sets.jockey = (1 - ramp(d, 3, 6)) * ramp(facing, 0.5, 0.85) * (1 - ramp(closing, 1.5, 3.5)) * (1 - ramp(actor.speed, 3.5, 5));
+  }
+
   function update(before, after, alpha, dt, now, latest = after) {
     if (!after) return;
     const from = before || after;
@@ -377,6 +420,10 @@ export function createPlayers(scene, teams, figure) {
     }
     thrower = null;
     keeping = null;
+    let onBall = null; // the snapshot's player on the ball in open play
+    if (!stopped && !reset && from.phase === 'play' && after.phase === 'play' && after.ball.owner != null) {
+      for (const player of after.players) if (player.id === after.ball.owner) onBall = player;
+    }
     for (const player of after.players) {
       const actor = actors.get(player.id);
       if (!actor) continue;
@@ -459,8 +506,9 @@ export function createPlayers(scene, teams, figure) {
       if (actor.speed > 1e-6) {
         actor.way = angle(actor.way, Math.atan2(actor.vy, actor.vx), 1 - Math.exp(-actor.speed * step / TURNING));
       }
+      readSets(actor, player, onBall, after.players, now);
       person.object.rotation.y = actor.facing + Math.PI / 2;
-      person.update(step, actor.speed, actor.way - actor.facing);
+      person.update(step, actor.speed, actor.way - actor.facing, actor.sets);
     }
 
     // The ball as the engine sends it, through the point of each touch at its moment.
@@ -504,7 +552,7 @@ export function createPlayers(scene, teams, figure) {
         // The boot meets the back of the ball at the touch, at the toe's reach in the stride
         // shown, and it runs on from there.
         let ahead = carrier.person.reach() + BALL_RADIUS
-          + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * (carrier.person.phase - TOUCH_PHASE)));
+          + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * (carrier.person.phase - carrier.person.touch(TOUCH_PHASE))));
         if (kicking) {
           // Winding up a kick, it comes back to where the engine kicks it from, which is
           // where the kick clips meet it.
@@ -598,6 +646,14 @@ export function createPlayers(scene, teams, figure) {
     forEachPlayerPosition(visit) {
       for (const [id, actor] of actors) if (actor.group.visible) visit(id, actor.group.position);
     },
+    // A model player's decision (a `decision` message), which colours what its figure shows
+    // for a moment: the kick it plays, or shielding the ball. Bots send none.
+    handleDecision(message, now) {
+      const actor = actors.get(message.player);
+      if (!actor || typeof message.action !== 'string') return;
+      actor.decision = message.action;
+      actor.decidedAt = now;
+    },
     // An event left behind by a stall (`late`) still says who takes the next throw-in,
     // but its celebration has passed.
     handleEvent(event, now, late = false) {
@@ -610,7 +666,7 @@ export function createPlayers(scene, teams, figure) {
     // What a player's figure shows and which way it faces, for tests and debugging.
     inspect(id) {
       const actor = actors.get(id);
-      return actor && { ...actor.person.state(), facing: actor.facing, scale: actor.person.scale, visible: actor.group.visible };
+      return actor && { ...actor.person.state(), facing: actor.facing, scale: actor.person.scale, visible: actor.group.visible, context: { ...actor.sets } };
     },
     dispose() {
       root.removeFromParent();

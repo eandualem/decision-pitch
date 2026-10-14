@@ -14,6 +14,8 @@ const TALLEST = 1.95;
 // steps forwards; the direction comes in over this range of speeds.
 const SHUFFLE = [0.15, 0.35];
 const STILL = 0.4; // m/s below which a one-shot plays with its whole body
+const SET_BLEND = 0.18; // s over which a set (dribble, jockey, shield) comes in or goes
+export const TOUCH_PHASE = 0.4; // where a loop without a `touch` meets a carried ball
 const MOST = 0.999; // the largest share of a bone a one-shot takes from the loops
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -84,8 +86,9 @@ function angleOf(name, clip) {
 // ("dribble", "jockey", "shield"), each with its stance (a loop of the set that does not
 // travel), or idle, as its `rest`. A set's `dirs` are the directions it travels in, by
 // angle, each with its loops from slowest to fastest, the rest first. A set fills what it
-// lacks from "run": its directions, and in each the speeds below and above its own. A
-// direction "run" has no loops in borrows forward's, so the figure always steps somewhere.
+// lacks from "run": its directions, and in each the speeds above its own, and below them
+// too unless it has a stance. A direction "run" has no loops in borrows forward's, so the
+// figure always steps somewhere.
 export function gait(clips) {
   const loops = [{ name: 'idle', duration: clips.idle?.duration || 1, speed: 0, angle: 0, stride: 0, set: 'run', touch: null }];
   const idles = [];
@@ -140,7 +143,7 @@ export function gait(clips) {
     sorted(run);
   }
   const sets = [{ name: 'run', rest: 0, dirs: run }];
-  for (const [name, indices] of moving) {
+  for (const [name, indices] of [...moving].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (name === 'run') continue;
     const rest = rests.get(name) ?? 0;
     const own = byAngle(indices);
@@ -149,7 +152,8 @@ export function gait(clips) {
       if (!mine) return { angle, ladder: [rest, ...ladder.slice(1)] };
       const slowest = loops[mine.own[0]].speed;
       const fastest = loops[mine.own.at(-1)].speed;
-      const before = ladder.slice(1).filter(i => loops[i].speed < slowest);
+      // With a stance of its own, the set covers the speeds up to its slowest loop itself.
+      const before = rests.has(name) ? [] : ladder.slice(1).filter(i => loops[i].speed < slowest);
       const after = ladder.slice(1).filter(i => loops[i].speed > fastest);
       return { angle, ladder: [rest, ...before, ...mine.own, ...after] };
     });
@@ -454,10 +458,10 @@ export const REACH = 0.6; // m: the toe's reach when a clip cannot tell, at scal
 const TOE = 0.07; // m from the ball of the foot to the tip of the toes
 const REACH_LIMITS = [0.3, 0.8];
 
-// How far ahead of the root each loop's right toe reaches as it swings through, before it
-// plants at half the cycle (where a dribbler meets the ball), at scale 1. Measured on a
-// copy of the figure, so the template keeps its rest pose. Idle reaches as the slowest
-// forward loop does.
+// How far ahead of the root each loop's right toe reaches as it swings through to meet a
+// carried ball, at its `touch` or just before it plants at half the cycle, at scale 1.
+// Measured on a copy of the figure, so the template keeps its rest pose. Idle and the
+// stances reach as the slowest forward loop does.
 function measureReach(scene, clips, steps) {
   const copy = cloneScene(scene);
   const toe = copy.getObjectByName('toe_R');
@@ -466,12 +470,13 @@ function measureReach(scene, clips, steps) {
   for (const loop of steps.loops) {
     loop.reach = REACH;
     const clip = clips.get(loop.name);
-    if (!toe || !clip || loop.name === 'idle') continue;
+    if (!toe || !clip || !(loop.speed > 0)) continue;
     const action = mixer.clipAction(clip);
     action.play();
+    const touch = loop.touch ?? TOUCH_PHASE;
     let most = -Infinity;
-    for (let phase = 0.25; phase <= 0.5 + 1e-9; phase += 0.01) {
-      action.time = phase * clip.duration;
+    for (let phase = touch - 0.15; phase <= touch + 0.1 + 1e-9; phase += 0.01) {
+      action.time = fract(phase) * clip.duration;
       mixer.update(0);
       copy.updateMatrixWorld(true);
       most = Math.max(most, toe.localToWorld(tip.set(0, TOE, 0)).z);
@@ -480,7 +485,7 @@ function measureReach(scene, clips, steps) {
     if (Number.isFinite(most)) loop.reach = clamp(most, ...REACH_LIMITS);
   }
   const forward = steps.sets[0].dirs[steps.sets[0].ahead]?.ladder;
-  if (forward?.length > 1) steps.loops[0].reach = steps.loops[forward[1]].reach;
+  if (forward?.length > 1) for (const loop of steps.loops) if (!(loop.speed > 0)) loop.reach = steps.loops[forward[1]].reach;
 }
 
 // The clip `name` with only the tracks of `layer`'s bones, made once per figure.
@@ -604,6 +609,7 @@ export function createFigures(template) {
       return action;
     });
     const weights = new Float32Array(loops.length);
+    const mix = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
     const slots = Array.from({ length: SLOTS }, () => ({ name: null, time: 0, share: 0, layer: 'play' }));
     let acting = 0;
     // One-shot actions by clip, each with the last frame it showed in; those that showed
@@ -649,6 +655,13 @@ export function createFigures(template) {
         for (let i = 0; i < weights.length; i++) sum += weights[i] * steps.loops[i].reach;
         return sum * scale;
       },
+      // The phase of the stride shown at which the right boot meets a carried ball: each
+      // loop's `touch` by its weight, `fallback` for loops without one.
+      touch(fallback = TOUCH_PHASE) {
+        let sum = 0;
+        for (let i = 0; i < weights.length; i++) if (weights[i] > 0) sum += weights[i] * (steps.loops[i].touch ?? fallback);
+        return sum;
+      },
       // Clip `name`'s description from figure.json: duration, contact, loop, speed.
       clip: (name) => template.described[name] ?? null,
       // Writes into `target` the point between the palms, in world space, as last posed.
@@ -676,17 +689,26 @@ export function createFigures(template) {
       },
       // Advances the loops by `dt` s for a figure moving over the ground at `speed` m/s,
       // travelling `travel` radians from the way it faces (anticlockwise), and poses it.
-      update(dt, speed, travel) {
+      // `sets` (optional) gives each loop set by name ({ dribble, jockey, shield }) the
+      // share, 0 to 1, it should have: each comes in and goes over a fraction of a second.
+      update(dt, speed, travel, sets = null) {
         lastSpeed = speed;
         lastTravel = travel;
-        rate = blendLoops(steps, speed, travel, scale, weights);
-        phase = fract(phase + rate * Math.max(0, dt));
-        idle = (idle + Math.max(0, dt)) % steps.loops[0].duration;
+        const step = Math.max(0, dt);
+        const follow = 1 - Math.exp(-step / SET_BLEND);
+        for (let s = 1; s < mix.length; s++) {
+          const target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
+          mix[s] += (target - mix[s]) * follow;
+        }
+        rate = blendLoops(steps, speed, travel, scale, weights, mix);
+        phase = fract(phase + rate * step);
+        idle += step; // the clock of the loops that do not travel
         for (let i = 0; i < loops.length; i++) {
           const loop = loops[i];
           if (!loop) continue;
+          const { duration, speed: made } = steps.loops[i];
           loop.weight = weights[i];
-          loop.time = i === 0 ? idle : phase * steps.loops[i].duration;
+          loop.time = made > 0 ? phase * duration : idle % duration;
         }
         // Over the loops, which sum to one, a weight of s / (1 - s) takes a share s.
         frame++;
@@ -720,7 +742,9 @@ export function createFigures(template) {
         const blend = {};
         steps.loops.forEach((loop, i) => { if (weights[i] > 0) blend[loop.name] = weights[i]; });
         const acts = shown.map(({ action: a }) => ({ name: a.getClip().name, time: a.time, weight: a.weight }));
-        return { speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, acts, reach: person.reach() };
+        const shares = {};
+        steps.sets.forEach((set, s) => { if (s > 0 && mix[s] > 0) shares[set.name] = mix[s]; });
+        return { speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach() };
       },
     };
     return person;

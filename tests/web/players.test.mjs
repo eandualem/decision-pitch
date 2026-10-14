@@ -3,7 +3,7 @@ import './three-resolve.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
-import { fixtureGltf, ONE_SHOTS } from './figure-fixture.mjs';
+import { fixtureGltf, ONE_SHOTS, MORE_ONE_SHOTS } from './figure-fixture.mjs';
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const { prepareFigure } = await import('../../src/decision_pitch/web/src/figures.js');
@@ -13,6 +13,29 @@ const figure = (() => {
   const { scene, animations, info } = fixtureGltf();
   return prepareFigure(scene, animations, info);
 })();
+// The figure with the clips of natural movement (loop sets, turns, cuts, new plays).
+const figureMore = (() => {
+  const { scene, animations, info } = fixtureGltf({ more: true });
+  return prepareFigure(scene, animations, info);
+})();
+
+// Two teams of two, home 1 and 2, away 3 and 4, drawn with `template`.
+function match(template = figureMore) {
+  const scene = new THREE.Scene();
+  const actors = createPlayers(scene, [
+    { colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' }, players: [{ id: 1, number: 9, position: 'FW' }, { id: 2, number: 8, position: 'MF' }] },
+    { colours: { shirt: '#654321', shorts: '#000000', keeper: '#00ccff' }, players: [{ id: 3, number: 4, position: 'DF' }, { id: 4, number: 5, position: 'DF' }] },
+  ], template);
+  // Plays `seconds` of snapshots from `at(t)` (the players and the ball at match time t).
+  const play = (at, seconds = 1, start = 1) => {
+    for (let i = 0; i < seconds / STEP; i++) {
+      const t = start + i * STEP;
+      const [a, b] = [at(t), at(t + STEP)];
+      for (let f = 0; f < 2; f++) actors.update(snap(t, ...a), snap(t + STEP, ...b), f / 2, STEP / 2, t + f * STEP / 2);
+    }
+  };
+  return { actors, play, scene };
+}
 
 function setup() {
   const scene = new THREE.Scene();
@@ -609,6 +632,54 @@ test('the stride follows the drawn movement: speed and the direction against the
   side.actors.update(gone, gone, 1, STEP, 3.1);
   assert.equal(hidden.visible, false);
   assert.deepEqual(side.forward.state(), hidden);
+});
+
+test('a player on the ball dribbles; slow, with an opponent close behind, it shields the ball', () => {
+  const { actors, play } = match();
+  // Player 1 runs along +x with the ball; 3 is far away.
+  play((t) => [[player(1, t * 4.5, 0, { speed: 4.5 }), player(2, 0, 20), player(3, 30, 20), player(4, -30, -20)], { x: t * 4.5 + 0.6, y: 0, owner: 1 }]);
+  let state = actors.inspect(1);
+  assert.equal(state.context.dribble, 1);
+  assert.ok(state.sets.dribble > 0.95, `dribbling: ${JSON.stringify(state.sets)}`);
+  assert.ok(state.loops.dribble > 0.9, `the dribble loop: ${JSON.stringify(state.loops)}`);
+  assert.deepEqual(actors.inspect(2).sets, {}, 'a teammate off the ball runs');
+  // Slowly, with 3 a metre behind it.
+  play((t) => [[player(1, 10 + t * 0.5, 0, { speed: 0.5 }), player(2, 0, 20), player(3, 9 + t * 0.5, 0.2), player(4, -30, -20)], { x: 10.6 + t * 0.5, y: 0, owner: 1 }], 1, 3);
+  state = actors.inspect(1);
+  assert.ok(state.context.shield > 0.9, `shielding: ${JSON.stringify(state.context)}`);
+  assert.ok(state.sets.shield > 0.9 && !(state.sets.dribble > 0.1), JSON.stringify(state.sets));
+  // The same with the opponent in front of it is no shield.
+  play((t) => [[player(1, 20 + t * 0.5, 0, { speed: 0.5 }), player(2, 0, 20), player(3, 21.5 + t * 0.5, 0), player(4, -30, -20)], { x: 20.6 + t * 0.5, y: 0, owner: 1 }], 1, 5);
+  assert.ok(actors.inspect(1).context.shield < 0.05, 'not with the opponent in front');
+  // A model player that decides to shield does, whoever is near.
+  actors.handleDecision({ type: 'decision', player: 1, model: 'Laya', action: 'shield', ms: 120 }, 7);
+  play((t) => [[player(1, 30 + t, 0, { speed: 1 }), player(2, 0, 20), player(3, 0, -20), player(4, -30, -20)], { x: 30.6 + t, y: 0, owner: 1 }], 1, 7);
+  assert.ok(actors.inspect(1).context.shield > 0.9, 'the decision to shield shows');
+  play((t) => [[player(1, 40 + t, 0, { speed: 1 }), player(2, 0, 20), player(3, 0, -20), player(4, -30, -20)], { x: 40.6 + t, y: 0, owner: 1 }], 1, 10);
+  assert.ok(actors.inspect(1).context.shield < 0.05, 'until it is a couple of seconds old');
+  actors.dispose();
+});
+
+test('a defender close to the player on the ball, facing it and not closing in, jockeys', () => {
+  const { actors, play } = match();
+  // 1 has the ball at x = t, heading +x; 3 backs off ahead of it facing it, 4 sprints in
+  // at it from its right, from 8.5 m to 2.5 m away.
+  const closing = (t) => (8.5 - 6 * (t - 1)) / Math.SQRT2;
+  play((t) => [[
+    player(1, t, 0, { speed: 1 }), player(2, -10, 10),
+    player(3, 3.5 + t * 0.8, 0.5, { heading: Math.PI, speed: 0.8 }),
+    player(4, t + closing(t), -closing(t), { heading: 3 * Math.PI / 4, speed: 6 }),
+  ], { x: t + 0.6, y: 0, owner: 1 }], 1);
+  const defender = actors.inspect(3);
+  assert.ok(defender.context.jockey > 0.9, `jockeying: ${JSON.stringify(defender.context)}`);
+  assert.ok(defender.sets.jockey > 0.9);
+  assert.ok(Object.keys(defender.loops).some(name => name.startsWith('jockey')), JSON.stringify(defender.loops));
+  assert.equal(actors.inspect(4).context.jockey, 0, 'one sprinting in to press does not');
+  assert.equal(actors.inspect(2).context.jockey, 0, 'nor does a teammate');
+  // Facing away from the player on the ball, it does not jockey.
+  play((t) => [[player(1, t, 0, { speed: 1 }), player(2, -10, 10), player(3, t + 3, 0.5, { heading: 0, speed: 1 }), player(4, 30, 30)], { x: t + 0.6, y: 0, owner: 1 }], 1, 3);
+  assert.equal(actors.inspect(3).context.jockey, 0);
+  actors.dispose();
 });
 
 test('a goal: the scoring team celebrates, the other does not', () => {

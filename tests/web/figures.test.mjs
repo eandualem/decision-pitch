@@ -175,6 +175,7 @@ test('with loops in eight directions, feet stay planted at any angle and speed, 
   assert.deepEqual(names(weights), ['jog_BL']);
   assert.ok(near(rate * MORE_LOOPS.jog_BL.duration, 1));
   blendLoops(steps, 2.5, 5 * Math.PI / 8, 1, weights);
+  assert.ok(!names(weights).includes('strafe_L'), 'the side shuffle is the jockey\'s, not the run\'s');
   const angles = new Set(steps.loops.filter((loop, i) => weights[i] > 1e-9 && loop.speed > 0).map(loop => Math.round(loop.angle * 4 / Math.PI)));
   assert.deepEqual([...angles].sort(), [2, 3], `left and back-left only: ${names(weights)}`);
 });
@@ -205,6 +206,85 @@ test('a shorter stride takes quicker steps over the same ground, a longer one sl
   const long = blendLoops(steps, speed, 0, 1, weights, null, 1.1);
   assert.ok(footSlip(steps, weights, long, 1, speed, 0) < 1e-6);
   assert.ok(short > usual * 1.02 && long < usual * 0.98, `cadence ${short} / ${usual} / ${long}`);
+});
+
+test('a loop set takes its share of the blend, fills what it lacks from the run, and keeps the feet planted', () => {
+  const steps = gait(describeMore());
+  const weights = new Float32Array(steps.loops.length);
+  const mix = new Float32Array(steps.sets.length);
+  const index = (name) => steps.loops.findIndex(loop => loop.name === name);
+  const shown = () => steps.loops.filter((_, i) => weights[i] > 1e-9).map(loop => loop.name).sort();
+  assert.deepEqual(steps.sets.map(set => set.name), ['run', 'dribble', 'jockey', 'shield']);
+  const { dribble, jockey, shield } = steps.set;
+  mix[dribble] = 1;
+  let rate = blendLoops(steps, MORE_LOOPS.dribble.speed, 0, 1, weights, mix);
+  assert.deepEqual(shown(), ['dribble'], 'a dribble at its speed');
+  assert.ok(near(rate * MORE_LOOPS.dribble.duration, 1));
+  blendLoops(steps, 1, 0, 1, weights, mix);
+  assert.deepEqual(shown(), ['idle', 'walk'], 'slower than its slowest, the run walks with the ball');
+  blendLoops(steps, 3, Math.PI, 1, weights, mix);
+  assert.deepEqual(shown(), ['backpedal', 'jog_B'], 'a direction it has no loops for comes from the run');
+  mix[dribble] = 0;
+  mix[jockey] = 1;
+  blendLoops(steps, 0, 0, 1, weights, mix);
+  assert.deepEqual(shown(), ['jockey'], 'standing, the set stands in its stance');
+  blendLoops(steps, 1, Math.PI, 1, weights, mix);
+  assert.deepEqual(shown(), ['jockey', 'jockey_B'], 'backing off slowly, from the stance');
+  blendLoops(steps, 2, Math.PI / 2, 1, weights, mix);
+  assert.deepEqual(shown(), ['strafe_L'], 'side-stepping, it shuffles');
+  blendLoops(steps, 5, Math.PI, 1, weights, mix);
+  assert.deepEqual(shown(), ['jog_B'], 'faster than its fastest, the run takes over');
+  mix[jockey] = 0;
+  mix[shield] = 1;
+  blendLoops(steps, 0.8, Math.PI, 1, weights, mix);
+  assert.deepEqual(shown(), ['shield_B']);
+  // Cross-fading between sets, at any speed and angle, the feet stay planted.
+  for (const share of [0.25, 0.5, 0.8]) {
+    mix.fill(0);
+    mix[dribble] = share;
+    mix[jockey] = (1 - share) / 2;
+    for (let speed = 0.4; speed < 8; speed += 0.3) {
+      for (let travel = -Math.PI; travel < Math.PI; travel += 0.2) {
+        rate = blendLoops(steps, speed, travel, 1.02, weights, mix);
+        assert.ok(near(weights.reduce((x, y) => x + y, 0), 1, 1e-6));
+        assert.ok(footSlip(steps, weights, rate, 1.02, speed, travel) < 1e-6 * speed, `planted at ${speed} m/s, ${travel} rad`);
+      }
+    }
+  }
+  // Shares over one between them are scaled down to one, and the run gives way.
+  mix.fill(0);
+  mix[dribble] = 1;
+  mix[shield] = 1;
+  blendLoops(steps, 0.8, 0, 1, weights, mix);
+  assert.ok(near(weights.reduce((x, y) => x + y, 0), 1, 1e-6));
+  assert.equal(weights[index('walk')] > 0 && weights[index('dribble_slow')] === 0, true);
+});
+
+test('a figure fades a loop set in and out, keeps the stances on their own clock, and meets the ball at the touch', () => {
+  const { scene, animations, info } = fixtureGltf({ more: true });
+  for (const name of ['dribble_slow', 'dribble', 'dribble_sprint']) info.clips[name].touch = 0.3;
+  const made = createFigures(prepareFigure(scene, animations, info));
+  const person = made.create({ seed: 3 });
+  const sets = { dribble: 1, jockey: 0, shield: 0 };
+  person.update(1 / 60, 4.5 * person.scale, 0, sets);
+  assert.ok(person.state().sets.dribble > 0 && person.state().sets.dribble < 0.15, 'it comes in, not at once');
+  for (let i = 0; i < 60; i++) person.update(1 / 60, 4.5 * person.scale, 0, sets);
+  assert.ok(person.state().sets.dribble > 0.99, 'and is all there a second later');
+  assert.ok(person.state().loops.dribble > 0.99, `dribbling: ${JSON.stringify(person.state().loops)}`);
+  assert.ok(near(person.touch(), 0.3, 0.005), 'the dribble meets the ball at its touch');
+  person.update(1 / 60, 3.5 * person.scale, 0, sets);
+  sets.dribble = 0;
+  for (let i = 0; i < 60; i++) person.update(1 / 60, 3.5 * person.scale, 0, sets);
+  assert.ok(near(person.touch(), 0.4, 0.005), 'a loop without a touch meets it at 0.4');
+  assert.ok(near(person.touch(0.45), 0.45, 0.005), 'or where the page says');
+  sets.jockey = 1;
+  for (let i = 0; i < 90; i++) person.update(1 / 60, 0, 0, sets);
+  const foot = person.object.getObjectByName('foot_L').position;
+  assert.ok(near(foot.x, CODES.jockey, 0.05), 'standing in the jockey stance');
+  const at = foot.y;
+  person.update(0.3, 0, 0, sets);
+  assert.ok(near(foot.y, (at + 0.3) % MORE_LOOPS.jockey.duration, 0.01), `which runs on its own clock while the stride stands still: ${at} -> ${foot.y}`);
+  made.dispose();
 });
 
 test('a late-seen wind-up plays faster, at most twice, and contact lands on the touch', () => {
