@@ -13,6 +13,7 @@ measures foot sliding and lockstep (tests/web/motion-probe.mjs).
     uv run python tests/web/motion_replay.py               # scripted play, port 8796
     uv run python tests/web/motion_replay.py --decisions   # as model players, with decisions
     uv run python tests/web/motion_replay.py --live        # a real keyless match, with the probe
+    uv run python tests/web/motion_replay.py --live --home laya,bot  # model players: a local model
     uv run python tests/web/motion_replay.py --ref develop # the page as committed there, to compare
 
 Open http://127.0.0.1:8796/ and press h for the probe's keys. Every page that connects
@@ -843,9 +844,10 @@ async def play(websocket: WebSocket, decisions: bool) -> None:
         feeding.cancel()
 
 
-def page(live: bool, decisions: bool, ref: str | None = None) -> Starlette:
-    """The page, with the probe added, over the scripted feed or a real keyless match. With
-    `ref`, the page's files are served as committed at that git revision."""
+def page(live: bool, decisions: bool, ref: str | None = None, teams: tuple = (("bot",), ("bot",))) -> Starlette:
+    """The page, with the probe added, over the scripted feed or a real keyless match whose
+    teams' managers choose from `teams` (bots or local models). With `ref`, the page's files
+    are served as committed at that git revision."""
 
     def read(path: str) -> bytes:
         if ref is None:
@@ -881,9 +883,13 @@ def page(live: bool, decisions: bool, ref: str | None = None) -> Starlette:
         Route("/__motion/stations", stations),
     ]
     if live:
-        from decision_pitch import server  # the engine's own socket: bots on both teams, no keys
+        from decision_pitch import players, server  # the engine's own socket, no keys
 
-        socket = next(r for r in server.app().routes if isinstance(r, WebSocketRoute))
+        # One local model server per team, as the command starts them; None is the bot.
+        options = tuple(
+            {name: None if name == players.BOT else players.start(name) for name in names} for names in teams
+        )
+        socket = next(r for r in server.app(options=options).routes if isinstance(r, WebSocketRoute))
         routes.append(socket)
     else:
 
@@ -926,15 +932,29 @@ def main() -> None:
     parser.add_argument("--live", action="store_true", help="a real keyless match (bots) instead of the script")
     parser.add_argument("--decisions", action="store_true", help="play as model players, sending decisions")
     parser.add_argument("--ref", help="serve the page as committed at this git revision, such as develop")
+    for team in ("home", "away"):
+        parser.add_argument(
+            f"--{team}",
+            default="bot",
+            metavar="MODELS",
+            help=f"with --live, the models the {team} manager may choose from, separated by commas: bot or "
+            "a local model (no keys, so nothing is paid for)",
+        )
     parser.add_argument("--stations", action="store_true", help="print the stations and exit")
     args = parser.parse_args()
     if args.stations:
         for s in World().stations_info():
             print(f"{s['name']:13} players {s['players']}: {s['shows']}")
         return
+    from decision_pitch import players
+
+    teams = tuple(tuple(name.strip() for name in spec.split(",") if name.strip()) for spec in (args.home, args.away))
+    for names in teams:
+        if not names or any(name != players.BOT and name not in players.LOCAL for name in names):
+            parser.error(f"--home and --away take bot or local models: {', '.join((players.BOT, *players.LOCAL))}")
     what = ("live match" if args.live else "scripted") + (f", page at {args.ref}" if args.ref else "")
     print(f"Motion replay ({what}) at http://127.0.0.1:{args.port}/", flush=True)
-    uvicorn.run(page(args.live, args.decisions, args.ref), host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run(page(args.live, args.decisions, args.ref, teams), host="127.0.0.1", port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
