@@ -8,7 +8,8 @@
 //   [ ] closer or further        m measure 10 s      h the panel
 //
 // URL: ?view=overview | station:NAME | follow:ID | follow:play, &side=fixed|side|front|behind,
-// &hud=0. From a browser tool: `await __motion.measure(10)` returns the numbers below.
+// &hud=0. From a browser tool: `await __motion.measure(10)` returns the numbers below, with
+// the page's frame rate over the same frames.
 //
 // Foot sliding, per stance (and in `acts`, by the one-shot showing through the stance): a stance is a run of 4 frames or more in which the ball of the
 // foot (the toe bone's joint) stays within 2.5 cm of the lowest it has been over the last
@@ -91,7 +92,7 @@ const v = new THREE.Vector3();
 const w = new THREE.Vector3();
 let record = null;
 function newRecord(seconds) {
-  return { until: performance.now() / 1000 + seconds, seconds, players: new Map(), pairs: new Map(), frames: 0 };
+  return { until: performance.now() / 1000 + seconds, seconds, players: new Map(), pairs: new Map(), frames: 0, gaps: [] };
 }
 function stats(id) {
   let s = record.players.get(id);
@@ -234,6 +235,17 @@ const quantile = (list, q) => {
 const share = (list) => (list.length ? +(list.filter(x => x.slip > VISIBLE).length / list.length).toFixed(3) : null);
 const mean = (list) => (list.length ? +(list.reduce((a, b) => a + b, 0) / list.length).toFixed(3) : null);
 
+// The page's frame rate over the measurement, from the time between the frames it drew
+// (ms). Gaps of a quarter second or more are a hidden page, not slow frames.
+function frameRate(gaps) {
+  const shown = gaps.filter(g => g < 250);
+  if (!shown.length) return null;
+  return {
+    fps: +(shown.length / (shown.reduce((a, b) => a + b, 0) / 1000)).toFixed(1),
+    medianMs: quantile(shown, 0.5), p95Ms: quantile(shown, 0.95), p99Ms: quantile(shown, 0.99), worstMs: quantile(shown, 1),
+  };
+}
+
 // Stances by the one-shot showing through them: which clips the sliding comes from.
 function byAct(list) {
   const acts = {};
@@ -281,7 +293,8 @@ function report(rec) {
     if (list.length) groups[s.name] = { ...feet(list), acts: byAct(list) };
   }
   return {
-    seconds: rec.seconds, frames: rec.frames, all: feet([...rec.players.values()]), acts: byAct([...rec.players.values()]),
+    seconds: rec.seconds, frames: rec.frames, frameRate: frameRate(rec.gaps),
+    all: feet([...rec.players.values()]), acts: byAct([...rec.players.values()]),
     stations: groups, pairs, players,
   };
 }
@@ -427,6 +440,7 @@ const render = pitch.renderer.render.bind(pitch.renderer);
 let last = performance.now() / 1000;
 pitch.renderer.render = (scene, camera) => {
   const now = performance.now() / 1000;
+  if (record) record.gaps.push((now - last) * 1000);
   const dt = Math.min(0.1, now - last);
   last = now;
   if (dt > 0) fps += (1 / dt - fps) * 0.05;
@@ -457,5 +471,11 @@ window.__motion = {
     camYaw = null;
   },
   stations: () => stations,
+  // The player the follow camera is on and what its figure shows, for picking stills.
+  followed: () => {
+    const id = view.mode !== 'follow' ? null : view.id === 'play' ? playId : view.id;
+    const state = id != null ? pitch.actors?.inspect(id) : null;
+    return state && { id, speed: state.speed, travel: state.travel, sets: state.sets, acts: (state.acts ?? []).filter(a => a.weight > 0.2).map(a => a.name) };
+  },
   state: (id) => pitch.actors?.inspect(id),
 };
