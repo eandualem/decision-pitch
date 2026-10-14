@@ -107,6 +107,9 @@ await send('Page.stopScreencast');
 const measured = await measuring;
 writeFileSync(`${out}/measure.json`, measured.result?.result?.value ?? JSON.stringify({ error: measured.error ?? measured.result }));
 writeFileSync(`${out}/followed.json`, JSON.stringify(followed));
+// Screencast frames can arrive out of the order they were drawn in: list them by their time,
+// so no frame gets a negative duration.
+frames.sort((a, b) => a[1] - b[1]);
 writeFileSync(`${out}/times.json`, JSON.stringify(frames));
 let list = 'ffconcat version 1.0\n';
 for (let i = 0; i < frames.length; i++) {
