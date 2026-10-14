@@ -81,8 +81,10 @@ The state of play, about 30 times a second.
   of the engine step it happened in; `x`, `y` and `z` are where the ball was
   as that step began, before the touch moved it. A player who takes the ball
   and kicks it in the same step makes one touch, the kick. `kind` is one of:
-  `kick` (a pass, shot or clearance, or the kick that takes a restart; a pass
-  and a shot are not told apart), `throw` (the kick that takes a throw-in),
+  `kick` (a pass, through ball, cross, shot or clearance, or the kick that
+  takes a restart; these are not told apart), `knock` (a sprinting player
+  knocks the ball a few metres ahead to run on to it), `throw` (the kick that
+  takes a throw-in),
   `control` (a player takes a loose ball, or a teammate's, in play), `tackle`
   (a player takes the ball from an opponent who has it, in play), `deflect`
   (the ball comes too fast to control and bounces off the player), `save`
@@ -90,6 +92,9 @@ The state of play, about 30 times a second.
   its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
   area in play, even a slow ball from a teammate). There are no headers:
   outfield players play the ball only up to 0.9 m high.
+- `heading`: the way the player faces, in radians anticlockwise from +x. It
+  can differ from the way it moves: a player keeping its place faces the
+  ball while it side-steps, backs off or moves diagonally.
 - `action`: the engine command the player is carrying out: `hold`, `move` or
   `kick`. The decision model's own choice is in `decision` messages.
 - `dive`: on a player, `true` while it is a goalkeeper diving across its goal
@@ -137,8 +142,9 @@ send none.
 
 A failed answer has `"error"` in place of `"action"`. `ms` is the time from
 asking to the answer, including any wait for a local model's turn. `action`
-is one of `press`, `hold`, `support`, `mark`, `dribble`, `pass`, `shoot` and
-`clear` (see `docs/decisions.md`, section 4).
+is one of `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
+`cross`, `shoot`, `clear`, `press`, `tackle`, `hold`, `support`, `mark` and
+`run_behind` (see `docs/decisions.md`, section 4).
 
 ### `manager`
 

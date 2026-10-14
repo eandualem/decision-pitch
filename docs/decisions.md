@@ -48,6 +48,25 @@ a test or from the command line without a browser.
   until it is replaced: hold, run to a point, or kick the ball towards a
   point. A player told to kick runs to the ball and kicks it as soon as it
   can play it. The decision layer turns each model's action into a command.
+- **Movement.** A player's facing is separate from the way it goes. A run to
+  a point can name a point to keep facing, usually the ball. A player moving
+  at up to 4 m/s, or within 60° of it, keeps facing it and side-steps, backs
+  off or moves diagonally; the further it faces from the way it goes, the
+  slower it can move, down to 4 m/s sideways or backwards. A faster move
+  turns the player to run, at its turning rate, and it turns back to the ball
+  once it has slowed to 3 m/s. Players keeping
+  the team's shape walk or jog by how far their place is: fast enough to get
+  there in 2 s, or 1.2 s while the other team has the ball, between 1.5 and
+  5 m/s. Chasing the ball, pressing, tackling, running in behind and getting
+  back out of place at a restart are run at full speed (7.5 m/s). A
+  goalkeeper keeps facing the ball as it moves along its line. Every move off
+  the ball used to be a 5 m/s run facing the way the player went, so walks,
+  side-steps and backward steps never happened.
+- **Dribbling.** A player carrying the ball picks one of five lanes, straight
+  on towards their goal or 25° or 50° to either side, by the room that the
+  point 6 m along it leaves from the nearest opponent, and keeps its lane
+  unless another has clearly more room. It cuts inside or goes wide instead
+  of running straight at a defender. The built-in bot dribbles the same way.
 - **Possession.** The nearest player within reach of a low ball has it and
   carries it as it runs. A goalkeeper reaches further and higher in its own
   penalty area. Kicks get a small aim error that grows with their power,
@@ -184,23 +203,41 @@ story the game tells.
 
 ### The action set and the state text
 
-A model chooses one of eight actions, each described to it in a few words:
+A model chooses one of fifteen actions, each described to it in a few words,
+and is asked only the ones that apply: one set on the ball, one off it, and
+one at a restart. Each action that gains something has a downside the engine
+plays out, the same for both teams.
 
-| Action | What the player does until the next answer |
-|---|---|
-| `press` | runs at the ball to win it or collect it; supports a teammate who has it |
-| `hold` | keeps its place in the team's shape (a goalkeeper guards its goal) |
-| `support` | moves into space ahead to offer a pass |
-| `mark` | stays goal-side of the nearest opponent |
-| `dribble` | runs with the ball towards the opponents' goal |
-| `pass` | passes to the best-placed open teammate, or clears if none is open |
-| `shoot` | shoots inside the post further from the goalkeeper; from 16 m or more with no opponent within 2.5 m, or from 24 m or more, plays the ball as the built-in bot does (dribbles closer, passes when pressed out of range) |
-| `clear` | kicks the ball long upfield |
+| Action | Asked | What the player does until the next answer | Its downside |
+|---|---|---|---|
+| `dribble` | on the ball | carries the ball at 6 m/s towards their goal, in the lane with the most room (section 2) | slower than a pass |
+| `sprint` | on the ball | knocks the ball ahead and runs on to it at full speed, 7.5 m/s | between touches the ball is loose, and a nearby opponent can take it |
+| `take_on` | on the ball, an opponent ahead within 10 m | runs at the nearest opponent ahead, then cuts past it diagonally on the side with more room | the defender can take the ball, and running into it is a foul only if it came from behind |
+| `shield` | on the ball, an opponent within 5 m | turns its back on the nearest opponent, keeping the ball on the far side, at walking pace, and lays it off to a teammate open within 12 m | slow, and a second opponent can get round |
+| `pass` | on the ball, and the taker | passes to the best-placed open teammate, or clears if none is open | |
+| `through_ball` | on the ball with a teammate ahead, and the taker | passes into the space ahead of the teammate ahead with the most room, leading its run | it can run too far or be cut out, and the receiver can be offside |
+| `cross` | on the ball wide in the final third, and the taker there | lifts the ball into the penalty area, to the teammate there with the most room or the penalty mark | a goalkeeper reaches higher, and there are no headers yet |
+| `shoot` | on the ball within 30 m of goal, and the taker of a penalty or a free kick in range | shoots inside the post further from the goalkeeper; from 16 m or more with no opponent within 2.5 m, or from 24 m or more, plays the ball as the built-in bot does (dribbles closer, passes when pressed out of range) | |
+| `clear` | on the ball, and the taker | kicks the ball long upfield | |
+| `press` | off the ball | runs at the ball at full speed to win it or collect it, coming round a carrier rather than into its back; supports a teammate who has it | |
+| `tackle` | off the ball | runs straight at the ball to win it now, from any side | running into the carrier from behind, or without reaching the ball, is a foul, with any card it earns |
+| `hold` | off the ball, and at a restart | keeps its place in the team's shape (a goalkeeper guards its goal) | |
+| `support` | off the ball, and at a restart | moves into space ahead to offer a pass | |
+| `mark` | off the ball, and at a restart | stays goal-side of the nearest opponent | |
+| `run_behind` | off the ball within 20 m of the offside line, and at a restart there | from onside, with a teammate on the ball ready to pass (unpressed and facing upfield), sprints to 6 m beyond the offside line, and goes for the through ball if it reaches it first; beyond the line with no pass played, it checks back; otherwise it keeps its place, no further up than onside | offside, if a teammate kicks the ball while it is beyond the line and it then plays it |
+
+A goalkeeper is asked a smaller set: `pass`, `through_ball` and `clear` on the
+ball, `hold` and `press` off it. "Wide in the final third" is at least 14 m from
+the centre line and within 36 m of their goal line. The sets keep a model from
+answering an action that cannot apply, such as `shoot` without the ball, which
+Laya used to answer nearly every time.
 
 The action is turned into an engine command on every physics step, with the
 built-in bot's rules for where "its place" is and whom to pass to, so a player
-keeps acting sensibly while its next answer is on the way. Once a pass, shot or
-clearance is made, the player holds its place until the next answer.
+keeps acting sensibly while its next answer is on the way. Once a pass, through
+ball, cross, shot or clearance is made, the player holds its place until the
+next answer. A sprint's knock ahead is not spent: the player runs on to the
+ball and knocks it again.
 
 Each action is carried out as the moment allows, because a model may give the
 same answer for a long time: a slow model's answer is seconds old, and a small
@@ -208,30 +245,59 @@ model often repeats the action its state says it is doing (Laya repeated its
 previous answer in 98% of a recorded match). So a repeated answer still plays
 sensible football, the same rules for both teams:
 
-- **On the ball**, `press`, `hold`, `support` and `mark` keep playing it as
-  the built-in bot does (dribble, pass when pressed, shoot in range), instead
+- **On the ball**, `press`, `tackle`, `hold`, `support`, `mark` and
+  `run_behind` keep playing it as the built-in bot does (dribble, pass when pressed, shoot in range), instead
   of standing on it. So does `shoot` out of range, instead of dribbling into
   a tackle, and `shoot` from 16-24 m with no opponent within 2.5 m, which
   carries the ball closer before shooting, as the bot does. Laya answers
   `shoot` almost every time; with every outfielder answering it, the ball
   changed hands by a tackle about 590 times a bot match of two 180 s halves,
   and now about 16 (bots alone: 10), with passes made under pressure again.
-- **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
-  built-in bot does: the one player who can reach the ball first goes for it
-  and the others keep their places, instead of every one of them running at it.
+- **An action that needs a moment that has passed** falls back to the
+  nearest one that applies: `take_on` with no opponent ahead within 10 m
+  dribbles; `shield` with no opponent within 5 m plays as the bot does;
+  `through_ball` with no teammate ahead passes; `cross` from inside carries
+  the ball towards the touchline and their goal line until it is wide.
+- **Off the ball**, `dribble`, `take_on`, `shield`, `pass`, `through_ball`,
+  `cross`, `shoot` and `clear` play as the built-in bot does: the one player
+  who can reach the ball first goes for it and the others keep their places,
+  instead of every one of them running at it. `sprint` runs at the ball at
+  full speed, as `press` does, so a sprinting dribbler runs on to its own
+  knock, and chases the ball if an opponent takes it. A player keeping its
+  place (`hold`, `support`, `mark` or `run_behind`) still goes for a loose
+  ball it can reach first, as a player keeping its shape collects a ball
+  that comes to it; pressing an opponent on the ball stays a choice. Asked
+  from these sets in a keyless match of two 90 s halves, Laya answered `hold`
+  64% of 1,848 times, `run_behind` 23% (nearly every time it was offered),
+  `mark` 9% and `press` 2%. Holding, its players left loose balls that came
+  to them, and the ball was loose 65% of play.
 - **A goalkeeper** off the ball whose action is `press` or `mark` plays as the
   bot keeper does: it gets across to a shot, comes for a loose ball in its own
   area when it is the nearest, and otherwise keeps its line. Without this, a
   keeper answering `mark` spent 93% of play more than 20 m off its line.
 - **At a restart** only the taker goes to the ball. A taker whose action is a
-  pass, shot or clearance takes the restart that way; any other action takes
-  it as its bot would, so a model that never chooses a kick cannot stall the
-  match.
+  pass, through ball, cross, shot or clearance takes the restart that way; any
+  other action takes it as its bot would, so a model that never chooses a kick
+  cannot stall the match. The others keep their places, `run_behind` no
+  further up than onside.
 
 Measured on a Laya against Laya match of two 60 s halves, before and after
 these rules: three or more teammates within 6 m of the ball fell from 14% of
 play to 0.3%, a carrier standing still on the ball from 15% to 1%, and the
 free-kick phase from 10% of the match to 2%.
+
+With the fifteen actions, over 32 headless matches of two 180 s halves with
+models on the live server's positions answering as Laya does (in range on
+the ball mostly `shoot`, otherwise mostly `take_on`), against develop's eight
+actions answered as Laya did there: shots 12.6 a match (develop 12.0), goals
+0.81 (1.28), the ball loose 54% of play (66%), fouls 2.7 (0.5), offsides 1.6
+(0.4), throw-ins 2.9 (4.0), corners 1.3 (1.0). Without the loose-ball rule
+above, shots fell to 8.5 and the ball was loose 65% of play. Fouls rise
+because `take_on` runs at a defender, which fouls when it cannot reach the
+ball; offsides because `run_behind` goes beyond the line before the pass.
+With bots only, the movement of section 2 raised shots from 16.3 to 18.9 a
+match and goals from 0.69 to 1.00, and cut the ball's loose share from 60% to
+53%, fouls from 0.75 to 0.19 and throw-ins from 3.3 to 2.0.
 
 The state is short, because a local model answers a shorter question faster
 (Laya: about 0.2 s for 300 characters, 0.5 s for 700). It is told from the
@@ -244,10 +310,13 @@ example:
 > support; their goal 62 m. Ball: 2 m behind 8 m right, loose, 12 m/s.
 > Teammates: Finch 3 m behind 9 m right; Pike 9 m ahead 3 m right; Ash 2 m
 > ahead 13 m left open. Opponents: Drake 9 m right; Cliff 10 m ahead; Frost
-> 11 m behind 1 m right. Manager: Stay wide. Your answers take 2.0 s.
+> 11 m behind 1 m right. Their last defender 30 m ahead. Manager: Stay wide.
+> Your answers take 2.0 s.
 
 The manager line appears once managers can give instructions; the answer time
-appears after the player's first answer.
+appears after the player's first answer. The last defender is the opponents'
+second-last player, the one that sets the offside line, told to every outfield
+player in play so it can judge a run in behind.
 
 ### Local models answer one question at a time
 

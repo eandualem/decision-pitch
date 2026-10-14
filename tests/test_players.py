@@ -9,7 +9,7 @@ import pytest
 from decision_pitch import actions, bots, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
-from decision_pitch.bots import DRIBBLE_SPEED, _goal_line_spot, _home, _save_spot, _taker
+from decision_pitch.bots import DRIBBLE_SPEED, _goal_line_spot, _home, _save_spot, _shape, _taker
 from decision_pitch.match import TEAMS, Hold, KickTo, Match, MoveTo, Team
 from decision_pitch.players import FAILURE_WAIT, Players
 from decision_pitch.server import main, run, seat
@@ -48,14 +48,14 @@ def in_play(match):
 def test_an_answer_is_checked_against_the_soccer_actions():
     def handle(request):
         criteria = json.loads(request.content)["questions"]["move"]["criteria"]
-        assert tuple(criteria) == tuple(actions.ACTIONS)
-        probabilities = {a: 0.3 if a == "pass" else 0.1 for a in criteria}
-        return httpx.Response(200, json={"answers": {"move": {"choice": "pass", "probabilities": probabilities}}})
+        assert tuple(criteria) == tuple(actions.options(match, match.player(7)))
+        probabilities = {a: (2 if a == "support" else 1) / (len(criteria) + 1) for a in criteria}
+        return httpx.Response(200, json={"answers": {"move": {"choice": "support", "probabilities": probabilities}}})
 
     model = apis.DecisionAPI("Test", "https://example.test/v1", "m", KEY, transport=httpx.MockTransport(handle))
     match = Match()
     answer = asyncio.run(model.decide(actions.question(match, match.player(7), "hold", None)))
-    assert answer.move == "pass"
+    assert answer.move == "support"
 
 
 def test_an_answer_with_the_runner_moves_is_unusable():
@@ -122,9 +122,9 @@ def test_without_the_ball_only_the_nearest_goes_for_it_to_kick_it():
     match = in_play(Match())
     nearest, other = match.player(7), match.player(8)
     match.ball.place(nearest.x + 2, nearest.y)
-    for action in ("dribble", "pass", "shoot", "clear"):
-        assert actions.command(match, nearest, action) != actions.command(match, nearest, "hold")
-        assert actions.command(match, other, action) == MoveTo(*_home(match, other), 5.0)
+    for action in ("dribble", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear"):
+        assert actions.command(match, nearest, action) == bots.command(match, nearest)  # goes for it
+        assert actions.command(match, other, action) == _shape(match, other, _home(match, other))
 
 
 def test_a_model_goalkeeper_gets_across_to_a_shot_as_the_bot_does():
@@ -133,7 +133,7 @@ def test_a_model_goalkeeper_gets_across_to_a_shot_as_the_bot_does():
     match.ball.place(keeper.x + 20, keeper.y)
     match.ball.vx, match.ball.vy = -22.0, -3.0
     for action in ("hold", "support"):
-        assert actions.command(match, keeper, action) == MoveTo(keeper.x, _save_spot(match, keeper)[1])
+        assert actions.command(match, keeper, action) == MoveTo(keeper.x, _save_spot(match, keeper)[1], face=(-30.0, 0.0))
 
 
 def test_a_model_goalkeeper_presses_and_marks_from_its_goal():
@@ -141,7 +141,7 @@ def test_a_model_goalkeeper_presses_and_marks_from_its_goal():
     keeper = match.player(1)
     match.ball.place(0.0, 0.0)
     for action in ("press", "mark"):
-        assert actions.command(match, keeper, action) == MoveTo(*_goal_line_spot(match, keeper))
+        assert actions.command(match, keeper, action) == MoveTo(*_goal_line_spot(match, keeper), face=(0.0, 0.0))
 
 
 def test_a_presser_does_not_chase_its_own_teammate_on_the_ball():

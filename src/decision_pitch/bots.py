@@ -19,7 +19,15 @@ WALL_DISTANCE = 9.5  # m from the ball, just beyond the 9.15 the laws require
 PRESSURE = 4.0  # m: a teammate with no opponent this close is open for a pass
 PRESSED = 2.5  # m: an opponent this close makes the player on the ball pass
 DRIBBLE_SPEED = 6.0
-JOG = 5.0
+WALK = 1.5  # m/s: the slowest a player keeping the team's shape moves to its place
+JOG = 5.0  # m/s: the fastest
+PACE = 2.0  # s a player keeping the team's shape gives itself to reach its place
+PACE_DEFENDING = 1.2  # s, while the other team has the ball
+LANES = (0.0, 25.0, -25.0, 50.0, -50.0)  # degrees from straight on that a dribbler may carry the ball
+LANE_LOOK = 6.0  # m along a lane at which its room from the nearest opponent is judged
+LANE_ROOM = 8.0  # m of room beyond which more makes no difference
+LANE_KEEP = 2.0  # m more room another lane needs before a dribbler leaves its own
+DRIBBLE_AHEAD = 10.0  # m along its lane that a dribbler aims
 ROUND_WIDE = 2.0  # m to the side that a challenger from behind passes the carrier at
 ROUND_AHEAD = 1.5  # m ahead of the carrier it aims for once out wide, so it gets in front
 ROUND_LEAD = 1.0  # s of the carrier's run it aims further ahead by
@@ -56,24 +64,34 @@ def command(m: Match, p: Player) -> Command:
         if m.restart_team == p.team and p.id == _taker(m, p.team).id:
             return _take_restart(m, p)
         wall = _wall_spot(m, p)
-        return MoveTo(*(wall or _home(m, p)), JOG)
+        return _shape(m, p, wall or _home(m, p))
     if m.owner == p.id:
         return _on_the_ball(m, p)
     if m.owner is not None and m.player(m.owner).team == p.team:
-        return MoveTo(*_home(m, p, attacking=True), JOG)
+        return _shape(m, p, _home(m, p, attacking=True))
     if p.position == "GK":
         if spot := _save_spot(m, p):
-            return MoveTo(*spot)
+            return MoveTo(*spot, face=(m.ball.x, m.ball.y))
         if _ball_in_own_area(m, p) and p.id == _nearest(m, p.team).id:
             return MoveTo(m.ball.x, m.ball.y)
-        return MoveTo(*_goal_line_spot(m, p))
+        return MoveTo(*_goal_line_spot(m, p), face=(m.ball.x, m.ball.y))
     if m.owner is None:
         chaser, spot = _chase(m, p.team)
         if p.id == chaser.id:
             return MoveTo(*_run_through(m, p, spot))
     elif p.id == _nearest(m, p.team, outfield=True).id:
         return MoveTo(*_press_spot(m, p))
-    return MoveTo(*_home(m, p), JOG)
+    return _shape(m, p, _home(m, p))
+
+
+def _shape(m: Match, p: Player, spot: tuple[float, float]) -> MoveTo:
+    """`p`'s move to `spot` in the team's shape: walking or jogging by how far it is, and
+    sooner while the other team has the ball, facing the ball (docs/decisions.md,
+    section 2)."""
+    defending = m.owner is not None and m.player(m.owner).team != p.team
+    dist = math.hypot(spot[0] - p.x, spot[1] - p.y)
+    speed = min(JOG, max(WALK, dist / (PACE_DEFENDING if defending else PACE)))
+    return MoveTo(*spot, speed, face=(m.ball.x, m.ball.y))
 
 
 _chases: tuple[tuple, dict[int, tuple[Player, tuple[float, float]]]] = ((), {})
@@ -174,7 +192,27 @@ def _on_the_ball(m: Match, p: Player) -> Command:
         return _shot(m, p)
     if p.position == "GK" or _pressed(m, p):
         return _pass_or_clear(m, p)
-    return MoveTo(goal_x, p.y * 0.8, DRIBBLE_SPEED)
+    return MoveTo(*_dribble_spot(m, p), DRIBBLE_SPEED)
+
+
+def _dribble_spot(m: Match, p: Player) -> tuple[float, float]:
+    """Where `p` carries the ball: along the lane towards their goal with the most room
+    from the nearest opponent, keeping its own lane unless another has clearly more
+    (docs/decisions.md, section 2)."""
+    straight = math.atan2(-0.2 * p.y, m.attack(p.team) * pitch.HALF_LENGTH - p.x)
+    opponents = [q for q in m.players if q.team != p.team]
+    best, best_score = straight, -math.inf
+    for lane in LANES:
+        angle = straight + math.radians(lane)
+        x, y = p.x + math.cos(angle) * LANE_LOOK, p.y + math.sin(angle) * LANE_LOOK
+        if abs(y) > pitch.HALF_WIDTH - 2:
+            continue  # it would carry the ball out
+        room = min([LANE_ROOM] + [math.hypot(q.x - x, q.y - y) for q in opponents])
+        own = math.cos(angle - p.heading) > math.cos(math.radians(LANES[1] / 2))  # the lane it is in
+        score = room + (LANE_KEEP if own else 0.0)
+        if score > best_score:
+            best, best_score = angle, score
+    return p.x + math.cos(best) * DRIBBLE_AHEAD, p.y + math.sin(best) * DRIBBLE_AHEAD
 
 
 def _shot(m: Match, p: Player, loft: float = 0.06) -> Command:
@@ -228,6 +266,11 @@ def _pass_or_clear(m: Match, p: Player) -> Command:
             best, best_score = q, score
     if best is None:
         return KickTo(p.x + direction * 40, p.y * 0.5, 26.0, 0.5)
+    return _pass_to(m, p, best)
+
+
+def _pass_to(m: Match, p: Player, best: Player) -> KickTo:
+    """`p`'s pass to teammate `best`."""
     dist = math.hypot(best.x - p.x, best.y - p.y)
     # long balls go in the air
     if dist > 25:

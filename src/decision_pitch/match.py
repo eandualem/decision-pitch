@@ -36,6 +36,7 @@ class MoveTo:
     x: float
     y: float
     speed: float = TOP_SPEED
+    face: tuple[float, float] | None = None  # a point to keep facing, such as the ball
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class KickTo:
     y: float
     speed: float  # m/s off the boot
     loft: float = 0.0  # radians above the ground
+    touch: str = "kick"  # how the page is told of it: "kick", or "knock" for a sprint's knock ahead
 
 
 Command = Hold | MoveTo | KickTo
@@ -309,7 +311,7 @@ class Match:
             dive = self._dives(p)
             if dive:
                 self.diving.add(p.id)
-            step_player(p, command.x, command.y, command.speed, dive=dive)
+            step_player(p, command.x, command.y, command.speed, dive=dive, face=command.face)
         elif isinstance(command, KickTo) and self.owner != p.id:
             # run at the ball from behind, so the kick goes the right way
             angle = math.atan2(command.y - self.ball.y, command.x - self.ball.x)
@@ -435,7 +437,7 @@ class Match:
         return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
-        self._touched(p, "throw" if self.phase == "throw_in" else "kick")
+        self._touched(p, "throw" if self.phase == "throw_in" else command.touch)
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
         loft = max(command.loft, 0.3) if self.phase == "throw_in" else command.loft
         speed = max(0.0, min(command.speed, cap))

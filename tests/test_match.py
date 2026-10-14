@@ -160,7 +160,7 @@ def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
     passer.x, passer.y = 0.0, 0.0
     receiver.x, receiver.y = 15.0, 3.0
     m.recovering[passer.id] = 0.25  # as the engine does once it kicks
-    assert bots.command(m, passer) == MoveTo(*bots._home(m, passer), bots.JOG)
+    assert bots.command(m, passer) == bots._shape(m, passer, bots._home(m, passer))
     goes = bots.command(m, receiver)
     assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
 
@@ -190,9 +190,9 @@ def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():
     m.owner = 10  # a home forward has the ball in the opponents' half
     keeper = m.player(1)
     assert keeper.position == "GK"
-    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), bots.JOG)
+    assert bots.command(m, keeper) == bots._shape(m, keeper, bots._goal_line_spot(m, keeper))
     m.phase, m.restart_team = "throw_in", 0
-    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), bots.JOG)
+    assert bots.command(m, keeper) == bots._shape(m, keeper, bots._goal_line_spot(m, keeper))
 
 
 def test_the_goalkeeper_gets_across_to_a_shot_but_lets_a_wide_one_go():
@@ -202,7 +202,7 @@ def test_the_goalkeeper_gets_across_to_a_shot_but_lets_a_wide_one_go():
     goes = bots.command(m, keeper)
     assert goes.x == -51.0 and goes.y == pytest.approx(-3.0 * 21 / 22)
     m.ball.vy = -6.0  # 6 m off centre at the line: wide
-    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper))
+    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), face=(m.ball.x, m.ball.y))
 
 
 @pytest.mark.parametrize("dives", [True, False])
@@ -226,7 +226,8 @@ def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
     carrier.x, carrier.y = 0.0, 0.0
     m.owner = carrier.id
     opponent.x, opponent.y = 3.0, 2.0  # 3.6 m away: it keeps dribbling
-    assert bots.command(m, carrier) == MoveTo(52.5, 0.0, bots.DRIBBLE_SPEED)
+    command = bots.command(m, carrier)
+    assert isinstance(command, MoveTo) and command.speed == bots.DRIBBLE_SPEED
     opponent.x, opponent.y = 2.0, 1.0
     assert isinstance(bots.command(m, carrier), KickTo)
 
