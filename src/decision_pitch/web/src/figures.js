@@ -64,10 +64,16 @@ const around = (a) => a - TAU * Math.floor(a / TAU); // into [0, 2 pi)
 // kicking (right) leg over a running stride, a gesture only the upper body over a walk.
 const ARMS = ['spine', 'chest', 'neck', 'head', 'shoulder_L', 'shoulder_R', 'upper_arm_L', 'upper_arm_R',
   'forearm_L', 'forearm_R', 'hand_L', 'hand_R'];
+const KICKING_LEG = ['thigh_R', 'shin_R', 'foot_R', 'toe_R'];
 const LAYERS = {
-  play: new Set([...ARMS, 'thigh_R', 'shin_R', 'foot_R', 'toe_R']),
+  play: new Set([...ARMS, ...KICKING_LEG]),
   gesture: new Set(ARMS),
+  kick: new Set(KICKING_LEG),
 };
+// Over a run a play's kicking leg follows the clip only around its contact, from KICK[0]
+// to KICK[3] s about it, coming in and going over the first and last parts: before and
+// after, the clip has that foot on the ground, which would skate under a running body.
+const KICK = [-0.3, -0.15, 0.2, 0.35];
 
 // Skin tones, lightest first, and the hair colours that go with each. Grey (the last
 // colour) is kept for the staff on the touchline.
@@ -630,7 +636,7 @@ export function prepareFigure(scene, animations, info = {}) {
   return {
     scene, info, clips, described, hairs, morphs, soles, axes,
     gait: steps,
-    layered: { play: new Map(), gesture: new Map() }, // clips with only that layer's tracks
+    layered: Object.fromEntries(Object.keys(LAYERS).map(layer => [layer, new Map()])), // clips with only that layer's tracks
     twins: new Map(),
     parts: { body: info.body ?? 'body', coat: info.coat ?? 'coat', number: info.number ?? 'number' },
   };
@@ -947,7 +953,7 @@ export function createFigures(template, { footLock = true } = {}) {
       thigh: object.getObjectByName(`thigh_${side}`), shin: object.getObjectByName(`shin_${side}`),
       foot: object.getObjectByName(`foot_${side}`), start: i * 0.5, ...template.soles[i],
       // Where the end of the sole that bears the weight (0 the heel, 1 the ball) is held.
-      contact: new THREE.Vector3(), bearing: 0, down: false, slack: false, held: 0,
+      contact: new THREE.Vector3(), bearing: 0, down: false, slack: false, held: 0, byFoot: false,
     }));
     const lockable = footLock && legs.every(leg => leg.thigh?.parent && leg.shin && leg.foot);
     // The bone the whole skeleton turns about, the hips' parent, and the way up in its
@@ -1071,6 +1077,11 @@ export function createFigures(template, { footLock = true } = {}) {
       let updated = null;
       for (let i = 0; i < 2; i++) {
         const leg = legs[i];
+        // Changing how it finds the feet that are down, it takes hold of them afresh.
+        if (leg.byFoot !== byFoot) {
+          leg.byFoot = byFoot;
+          leg.down = leg.slack = false;
+        }
         const cycle = fract(phase - leg.start);
         const into = byFoot ? 0 : cycle / duty; // how far through its stance
         // Held in full once the stride is a fair part of the blend, so a figure drifting
@@ -1430,6 +1441,8 @@ export function createFigures(template, { footLock = true } = {}) {
         standIdle(step, weights[0]);
         clock += step;
         moves(step, speed, travel);
+        // Braking, the hips turn to the run, the way the brake's feet go.
+        if (move.kind === 'brake') hips += (wrap(travel) - hips) * Math.min(1, move.share / MOVE_SHARE.brake);
         // Over the loops, which sum to one, a weight of s / (1 - s) takes a share s.
         frame++;
         const still = 1 - ramp(speed, STILL, steps.walk);
@@ -1441,19 +1454,28 @@ export function createFigures(template, { footLock = true } = {}) {
           const clip = template.clips.get(name);
           const at = clamp(time, 0, clip.duration);
           const wholeShare = layer === 'whole' ? share : share * still;
+          const contact = template.described[name]?.contact;
+          const legShare = layer !== 'play' ? wholeShare
+            : Math.max(wholeShare, Number.isFinite(contact) ? share * ramp(at - contact, KICK[0], KICK[1]) * (1 - ramp(at - contact, KICK[2], KICK[3])) : share);
           if (!planted) {
             takenLeft = Math.max(takenLeft, wholeShare);
-            takenRight = Math.max(takenRight, layer === 'play' ? share : wholeShare);
+            takenRight = Math.max(takenRight, legShare);
           } else ownMove += share;
+          const wholeWeight = wholeShare > 0 ? wholeShare / (1 - wholeShare) : 0;
           if (wholeShare > 0) {
             const whole = action(clip);
             whole.time = at;
-            whole.weight = wholeShare / (1 - wholeShare);
+            whole.weight = wholeWeight;
           }
           if (layer !== 'whole' && wholeShare < share) {
-            const part = action(layeredClip(template, name, layer));
+            const part = action(layeredClip(template, name, layer === 'play' ? 'gesture' : layer));
             part.time = at;
-            part.weight = share / (1 - share) - (wholeShare > 0 ? wholeShare / (1 - wholeShare) : 0);
+            part.weight = share / (1 - share) - wholeWeight;
+            if (layer === 'play' && legShare > wholeShare) {
+              const leg = action(layeredClip(template, name, 'kick'));
+              leg.time = at;
+              leg.weight = legShare / (1 - legShare) - wholeWeight;
+            }
           }
         }
         for (let i = 0; i < shown.length; i++) if (shown[i].frame !== frame) shown[i].action.stop();

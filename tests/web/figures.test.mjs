@@ -770,6 +770,36 @@ test('a one-shot plays whole near a standstill and only its upper body and kicki
   assert.ok(near(marker('foot_L').x, (CODES.pass + CODES.idle) / 2, 0.02), `a share blends with the loops: ${marker('foot_L').x}`);
 });
 
+test('over a run, a kick\'s kicking leg follows the clip only around its contact', () => {
+  const made = createFigures(fixture());
+  const person = made.create({ seed: 2 });
+  const thigh = person.object.getObjectByName('thigh_R').position;
+  const arm = person.object.getObjectByName('hand_L').position;
+  for (let i = 0; i < 30; i++) person.update(1 / 60, 5, 0);
+  const contact = 0.4; // the fixture's pass
+  for (const [time, kicking] of [[contact, true], [contact - 0.05, true], [contact + 0.15, true], [0, false], [contact + 0.5, false]]) {
+    person.act('pass', time, 1);
+    person.update(1 / 60, 5, 0);
+    const loops = Object.entries(person.state().loops).reduce((sum, [name, w]) => sum + w * CODES[name], 0);
+    assert.ok(near(arm.x, CODES.pass, 0.02), `the arms play the pass at ${time}`);
+    assert.ok(kicking ? near(thigh.x, CODES.pass, 0.02) : near(thigh.x, loops, 1e-6), `the kicking leg ${kicking ? 'kicks' : 'runs'} at ${time}: ${thigh.x}`);
+  }
+  made.dispose();
+});
+
+test('braking with its run off its facing, a figure turns its hips to the run', () => {
+  const made = createFigures(fixtureMore());
+  const person = made.create({ seed: 5 });
+  const off = 0.4; // rad to the left of its facing
+  for (let i = 0; i < 30; i++) person.update(1 / 60, 6, off);
+  let speed = 6;
+  for (let i = 0; i < 30 && person.state().move?.name !== 'brake'; i++) person.update(1 / 60, speed -= 4 / 60, off);
+  for (let i = 0; i < 20; i++) person.update(1 / 60, speed -= 4 / 60, off);
+  assert.equal(person.state().move?.name, 'brake');
+  assert.ok(Math.abs(person.state().hips - off) < 0.05, `the hips turn to the run: ${person.state().hips}`);
+  made.dispose();
+});
+
 test('the loops advance on one shared phase at the rate that plants the feet', () => {
   const made = createFigures(fixture());
   const person = made.create({ seed: 5 });
@@ -939,6 +969,41 @@ test('built figure: the foot lock holds a planted foot that the stride alone wou
   for (let i = 0; i < 30; i++) person.update(1 / 60, 0, 0);
   assert.deepEqual(person.state().feet, [0, 0], 'nor standing');
   made.dispose();
+});
+
+test('built figure: after a turn on the spot the legs go back to the clips\' own bend, and drifting on there is no crouch', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  const bends = (footLock) => {
+    const made = createFigures(template, { footLock });
+    const person = made.create({ seed: 3 });
+    const group = new THREE.Group();
+    group.add(person.object);
+    const at = (name) => new THREE.Vector3().setFromMatrixPosition(person.object.getObjectByName(name).matrixWorld);
+    const knee = (side) => {
+      const [hip, knee, ankle] = [`thigh_${side}`, `shin_${side}`, `foot_${side}`].map(at);
+      return hip.sub(knee).angleTo(ankle.sub(knee));
+    };
+    const standing = [];
+    const drifting = [];
+    for (let i = 0; i < 240; i++) {
+      const t = i / 60;
+      person.object.rotation.y = t < 0.5 ? 0 : Math.min(2.1, (t - 0.5) * 9);
+      const speed = t > 2.5 ? 0.2 : 0; // standing once the turn is done, then drifting
+      group.position.z += speed / 60;
+      person.update(1 / 60, speed, 0);
+      group.updateMatrixWorld(true);
+      if (t > 1.8 && t < 2.5) standing.push(knee('L'), knee('R'));
+      if (t > 2.6) drifting.push(knee('L'), knee('R'));
+    }
+    made.dispose();
+    return { standing, drifting };
+  };
+  const [held, own] = [bends(true), bends(false)];
+  const most = Math.max(...held.standing.map((a, i) => Math.abs(a - own.standing[i])));
+  assert.ok(most < 0.02, `standing, the clips' own knees: ${(most * 180 / Math.PI).toFixed(1)} degrees off`);
+  // The knee's inside angle: 180 degrees straight; under 110, a deep crouch.
+  const deepest = Math.min(...held.drifting);
+  assert.ok(deepest > 110 * Math.PI / 180, `no crouch drifting on: ${(deepest * 180 / Math.PI).toFixed(0)} degrees`);
 });
 
 test('a leg bends to put the ankle on a target, the knee bending its own way and the foot keeping its turn', () => {
