@@ -189,10 +189,10 @@ test('a kick: the leg winds up, meets the ball as it leaves and follows through'
   assert.equal(ui.forward.limbs[1].rotation.x + 0, 0, 'standing, before the wind-up');
   ui.actors.update(z, a, 0.6, 1 / 60, 0.94, b);
   assert.ok(ui.forward.limbs[1].rotation.x > 0.3, `leg drawn back: ${ui.forward.limbs[1].rotation.x}`);
-  const contact = touch.t - 1 / 120;
+  const contact = touch.t - 1 / 60;
   const at = (time) => {
     const alpha = (time - a.t) / STEP;
-    ui.actors.update(alpha <= 1 ? a : b, alpha <= 1 ? b : c, alpha <= 1 ? alpha : alpha - 1, 1 / 120, time, c);
+    ui.actors.update(alpha <= 1 ? a : b, alpha <= 1 ? b : c, alpha <= 1 ? alpha : alpha - 1, 1 / 60, time, c);
     return { leg: ui.forward.limbs[1].rotation.x, ball: ui.ball.position.x };
   };
   const early = at(contact - 0.01);
@@ -203,6 +203,62 @@ test('a kick: the leg winds up, meets the ball as it leaves and follows through'
   const gone = at(contact + 0.01);
   assert.ok(gone.ball > 0.6, 'the ball leaves on contact');
   assert.ok(gone.leg < met.leg, 'the leg follows through');
+});
+
+// A dribbler running along +x passes at `direction` (radians): the drawn match from 0.1 s
+// before the kick, with the snapshot after the kick already in hand, as the page has it.
+function pass(ui, direction, speed = 18) {
+  const t0 = 2;
+  const touch = { player: 2, kind: 'kick', t: t0 + STEP, x: 0.6, y: 0, z: 0.11 };
+  const runner = (t) => player(2, (t - t0) * 6, 0, { speed: 6 });
+  const away = (t) => ({ x: 0.6 + Math.cos(direction) * speed * (t - touch.t + 1 / 60), y: Math.sin(direction) * speed * (t - touch.t + 1 / 60) });
+  const shots = [
+    snap(t0 - 3 * STEP, [runner(t0 - 3 * STEP)], { x: 0, y: 0, owner: 2 }),
+    snap(t0 - 2 * STEP, [runner(t0 - 2 * STEP)], { x: 0.2, y: 0, owner: 2 }),
+    snap(t0 - STEP, [runner(t0 - STEP)], { x: 0.4, y: 0, owner: 2 }),
+    snap(t0, [runner(t0)], { x: 0.6, y: 0, owner: 2 }),
+    snap(touch.t, [runner(touch.t)], { ...away(touch.t), touches: [touch] }),
+    snap(t0 + 2 * STEP, [runner(t0 + 2 * STEP)], { ...away(t0 + 2 * STEP), touches: [touch] }),
+    snap(t0 + 3 * STEP, [runner(t0 + 3 * STEP)], { ...away(t0 + 3 * STEP), touches: [touch] }),
+  ];
+  const frames = [];
+  // The page draws 0.1 s behind the newest snapshot, so it sees the kick that far ahead.
+  for (let time = t0 - 3 * STEP; time <= t0 + 3 * STEP + 1e-9; time += 1 / 240) {
+    const i = Math.min(shots.length - 2, Math.floor((time - shots[0].t) / STEP + 1e-9));
+    const latest = shots.findLast(s => s.t <= time + 0.1);
+    ui.actors.update(shots[i], shots[i + 1], (time - shots[i].t) / STEP, 1 / 240, time, latest);
+    frames.push({
+      time, contact: touch.t - 1 / 60,
+      facing: ui.forward.body.rotation.y - Math.PI / 2,
+      ball: ui.ball.position.clone(), feet: ui.forward.group.position.clone(),
+    });
+  }
+  return frames;
+}
+const turnBetween = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+
+test('a dribbler passing backwards turns into the pass with the ball and kicks it away', () => {
+  const ui = setup();
+  const frames = pass(ui, Math.PI);
+  const contact = frames.find(f => f.time >= f.contact);
+  assert.ok(turnBetween(contact.facing, Math.PI) < 0.2, `faces the pass at contact: ${contact.facing}`);
+  const dx = contact.ball.x - contact.feet.x;
+  const dz = contact.ball.z - contact.feet.z;
+  const ahead = dx * Math.cos(contact.facing) - dz * Math.sin(contact.facing);
+  assert.ok(ahead > 0.45, `the ball is in front of the turned kicker: ${ahead}`);
+  const after = frames.filter(f => f.time >= contact.time);
+  for (let i = 1; i < after.length; i++) {
+    assert.ok(after[i].ball.x < after[i - 1].ball.x + 1e-9, `the ball only goes the way it was kicked, frame ${i}`);
+  }
+  for (let i = 1; i < frames.length; i++) {
+    assert.ok(frames[i].ball.distanceTo(frames[i - 1].ball) < 0.25, `no jump at frame ${i}`);
+  }
+  assert.ok(turnBetween(frames.at(-1).facing, Math.PI) < turnBetween(0, Math.PI), 'turning back to its run afterwards');
+});
+
+test('a pass along the run needs no turn', () => {
+  const ui = setup();
+  for (const frame of pass(ui, 0.1)) assert.ok(turnBetween(frame.facing, 0) < 0.11);
 });
 
 test('control, tackle and deflection each move the toucher at the moment of contact', () => {
@@ -231,7 +287,7 @@ test('a throw-in swings both arms over the head', () => {
   ui.actors.update(waiting, waiting, 1, 1 / 60, 1, thrown);
   ui.actors.update(waiting, waiting, 1, 1 / 60, 1.1, thrown);
   // 0.02 s before the ball leaves the hands
-  const alpha = (2 - 1 / 120 - 0.02 - 1.9) / 0.1;
+  const alpha = (2 - 1 / 60 - 0.02 - 1.9) / 0.1;
   ui.actors.update({ ...waiting, phase: 'play' }, thrown, alpha, 1 / 60, 1.17, thrown);
   assert.ok(ui.forward.limbs[2].rotation.x < -1.5 && ui.forward.limbs[3].rotation.x < -1.5, 'both arms high');
 });
@@ -243,7 +299,7 @@ function keeperTouch(ui, touch, keeperAt, ball) {
   const later = snap(touch.t + 1.5, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touches: [touch] });
   ui.actors.update(before, before, 1, 1 / 60, 1, after);
   return (since) => {
-    const time = touch.t - 1 / 120 + since;
+    const time = touch.t - 1 / 60 + since;
     if (time <= touch.t) ui.actors.update(before, after, (time - before.t) / 0.1, 1 / 60, 1 + since, later);
     else ui.actors.update(after, later, (time - touch.t) / 1.5, 1 / 60, 1 + since, later);
   };
@@ -329,8 +385,8 @@ test('a kick blocked within one snapshot shows the swing and the ball meets both
     return ui.ball.position.x;
   };
   ballAt(a.t);
-  assert.ok(Math.abs(ballAt(kick.t - 1 / 120) - 0.6) < 1e-9, 'at the kicker\'s boot at the kick');
-  assert.ok(Math.abs(ballAt(block.t - 1 / 120) - 1.0) < 1e-9, 'at the blocker at the block');
+  assert.ok(Math.abs(ballAt(kick.t - 1 / 60) - 0.6) < 1e-9, 'at the kicker\'s boot at the kick');
+  assert.ok(Math.abs(ballAt(block.t - 1 / 60) - 1.0) < 1e-9, 'at the blocker at the block');
   ballAt(2);
   assert.ok(ui.forward.limbs[1].rotation.x < -0.2, 'the kicker swung');
 });
@@ -348,7 +404,7 @@ test('picking up a loose ball settles it onto the feet without a jump', () => {
   const ui = setup();
   const touch = { player: 2, kind: 'control', t: 1 + STEP, x: 0.9, y: 0.1, z: 0.11 };
   const frames = [
-    snap(1, [player(2, 0, 0, { speed: 3 })], { x: 1.6, y: 0.2 }),
+    snap(1, [player(2, 0, 0, { speed: 3 })], { x: 1.05, y: 0.12 }),
     snap(1 + STEP, [player(2, 0.1, 0, { speed: 3 })], { x: 0.7, y: 0, owner: 2, touches: [touch] }),
     snap(1 + 2 * STEP, [player(2, 0.2, 0, { speed: 3 })], { x: 0.8, y: 0, owner: 2, touches: [touch] }),
     snap(1 + 3 * STEP, [player(2, 0.3, 0, { speed: 3 })], { x: 0.9, y: 0, owner: 2, touches: [touch] }),
