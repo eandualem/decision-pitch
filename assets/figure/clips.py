@@ -1450,15 +1450,16 @@ def _plant(root, land, lift, x, y, yaw, **pivot):
     return (land, lift, at.x, at.y, root(land)[1] + yaw, *pivot.values())
 
 
-def cut_clip(solver, turn=60.0, speed=6.0):
+def cut_clip(solver, turn=60.0, speed=4.0):
     """A sharp cut to the left at speed: the outside (right) foot reaches wide and plants,
     the body drops and leans into the turn, the head already on the new way, and it
     pushes off, the left foot stepping out on the new line. `contact` is the plant. The
     feet stay planted for a root that comes in at `speed`, turns its travel `turn`
-    degrees over the plant and leaves at three quarters of the pace."""
+    degrees over the plant and leaves at four fifths of the pace, as the engine slows a
+    runner that turns sharply; the page times it by `speeds`."""
     end, contact = 22 / FPS, 0.25
 
-    speeds = [(0.0, speed), (contact, speed), (contact + 0.16, 0.75 * speed), (end, 0.75 * speed)]
+    speeds = [(0.0, speed), (contact, speed), (contact + 0.16, 0.8 * speed), (end, 0.8 * speed)]
     pace = Linear(speeds)
 
     def root(t):
@@ -1467,16 +1468,16 @@ def cut_clip(solver, turn=60.0, speed=6.0):
 
     c = contact
     plants = {
-        "L": [_plant(root, -0.04, 0.05, 0.06, -0.24, 5.0), _plant(root, c + 0.25, c + 0.36, 0.08, -0.26, 5.0),
-              _plant(root, c + 0.6, c + 0.7, 0.06, -0.24, 5.0)],
-        "R": [_plant(root, -0.21, -0.12, -0.06, -0.24, -5.0), _plant(root, c, c + 0.12, -0.27, -0.30, 20.0),
-              _plant(root, c + 0.43, c + 0.53, -0.06, -0.24, -5.0)],
+        "L": [_plant(root, -0.04, 0.08, 0.06, -0.24, 5.0), _plant(root, c + 0.25, c + 0.40, 0.08, -0.26, 5.0),
+              _plant(root, c + 0.64, c + 0.78, 0.06, -0.24, 5.0)],
+        "R": [_plant(root, -0.24, -0.12, -0.06, -0.24, -5.0), _plant(root, c, c + 0.14, -0.27, -0.30, 20.0),
+              _plant(root, c + 0.45, c + 0.6, -0.06, -0.24, -5.0)],
     }
     pitch = {
-        "L": Curve([(0.0, -30.0), (0.05, -58.0), (0.15, -45.0), (c + 0.18, -5.0), (c + 0.25, 2.0), (c + 0.3, -10.0),
-                    (c + 0.36, -55.0), (c + 0.48, -35.0), (c + 0.6, 0.0)]),
-        "R": Curve([(0.0, -50.0), (0.12, -30.0), (c - 0.03, -6.0), (c, -4.0), (c + 0.06, -14.0), (c + 0.12, -55.0),
-                    (c + 0.28, -35.0), (c + 0.43, 0.0), (c + 0.48, -12.0), (c + 0.53, -50.0)]),
+        "L": Curve([(0.0, -25.0), (0.08, -58.0), (0.18, -45.0), (c + 0.18, -5.0), (c + 0.25, 2.0), (c + 0.32, -10.0),
+                    (c + 0.40, -55.0), (c + 0.52, -35.0), (c + 0.64, 0.0)]),
+        "R": Curve([(0.0, -50.0), (0.12, -30.0), (c - 0.03, -6.0), (c, -4.0), (c + 0.07, -14.0), (c + 0.14, -55.0),
+                    (c + 0.3, -35.0), (c + 0.45, 0.0), (c + 0.5, -12.0), (c + 0.6, -50.0)]),
     }
     feet = Footwork(root, plants, pitch, height=0.22)
     base = dict(READY)
