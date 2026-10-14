@@ -143,6 +143,22 @@ test('ordinary restarts cut to the managers in turn, at most once every 45 s, ne
   assert.equal(restart('penalty', 'penalty'), -1, 'a penalty stays on the penalty');
 });
 
+test('a substitution or card during a restart shot takes it over', () => {
+  const t = setup();
+  t.run(1);
+  t.broadcast.handleEvent({ kind: 'goal_kick', team: 1 }, t.now, t.actors, t.touchline);
+  t.run(1, 'goal_kick');
+  assert.ok(t.camera.position.distanceTo(t.managers[0]) < 15, 'the restart shot');
+  t.broadcast.handleEvent({ kind: 'substitution', team: 1, off: 15, on: 30 }, t.now, t.actors, t.touchline);
+  t.run(1.5, 'goal_kick');
+  assert.ok(t.camera.position.distanceTo(t.managers[1]) < 15, 'now the substituting manager');
+  t.broadcast.handleEvent({ kind: 'yellow', team: 0, player: 4 }, t.now, t.actors, t.touchline);
+  t.run(0.8, 'goal_kick');
+  assert.ok(t.camera.position.distanceTo(t.managers[1]) < 15, 'a card does not interrupt a substitution');
+  t.run(0.4, 'goal_kick');
+  assert.ok(t.camera.position.y > 40, 'nor extend it past its own 2.5 s');
+});
+
 test('one reaction shot at a time, and none without the touchline or the drawn phase', () => {
   const t = setup();
   t.run(1, 'throw_in');

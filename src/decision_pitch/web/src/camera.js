@@ -22,17 +22,19 @@ export function createCamera(camera, pitch) {
   let cutFrom = Infinity;
   let cutUntil = -Infinity;
   let cutTouchline = null;
+  let cutRestart = false; // the shot is an ordinary restart's, which a card or substitution replaces
   let cutting = false;
   let lastCut = -Infinity;
   let nextRestartTeam = 0;
   let initialized = false;
 
-  function cutaway(team, from, touchline) {
+  function cutaway(team, from, touchline, restart = false) {
     if (!touchline || team === null || team === undefined) return;
     cutTeam = team;
     cutFrom = from;
     cutUntil = from + CUTAWAY;
     cutTouchline = touchline;
+    cutRestart = restart;
   }
 
   return {
@@ -43,12 +45,14 @@ export function createCamera(camera, pitch) {
         closeup.copy(actors.getPlayerPosition(scorer) ?? actors.ballPosition);
         closeUntil = now + CLOSE;
         cutaway(event.team, closeUntil, touchline);
-      } else if (now < closeUntil || now < cutUntil) {
-        // A shot is already on or due.
-      } else if (event.kind === 'yellow' || event.kind === 'red' || event.kind === 'substitution') {
+        return;
+      }
+      const personal = event.kind === 'yellow' || event.kind === 'red' || event.kind === 'substitution';
+      if (now < closeUntil || (now < cutUntil && !(personal && cutRestart))) return; // a shot is on or due
+      if (personal) {
         cutaway(event.team, now, touchline);
       } else if (RESTARTS.has(event.kind) && now - lastCut >= RESTART_GAP && touchline) {
-        cutaway(nextRestartTeam, now, touchline);
+        cutaway(nextRestartTeam, now, touchline, true);
         nextRestartTeam = 1 - nextRestartTeam;
       }
     },
