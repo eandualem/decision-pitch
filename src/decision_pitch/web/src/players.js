@@ -31,7 +31,15 @@ const FADE = 0.12; // s a pose cut short by the next one takes to fade out
 // it plants at 0.5: the ball runs ahead from there and the runner catches it up.
 const TOUCH_PHASE = 0.4;
 const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper leaves its feet
+// m ahead of the root that the right toe reaches as it swings through the carried ball, at
+// scale 1 (0.58 walking to 0.62 sprinting in the clips). The boot meets the ball's back.
+const TOE_REACH = 0.62;
+const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
+const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
 const CELEBRATION = 4.2; // s a looping celebration lasts
+// m: the dark spot under the ball, a little wider than it, so the white ball on its own
+// shadow keeps a contrasting edge on the broadcast camera at its real size.
+const BALL_SHADOW = 0.19;
 
 // Where `keys` ([u, value] pairs, u ascending) are at `u`: eased between each pair, or
 // straight into a key marked 'linear', for a swing that does not slow through contact.
@@ -56,6 +64,9 @@ const TURN = [[-0.14, 0], [-0.04, 1], [0.12, 1], [0.45, 0]];
 const REPOSE = 0.25; // s
 const WEIGHT = { control: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
 const CLIPS = { control: 'control', deflect: 'control', tackle: 'tackle', throw: 'throw_in' };
+// Clips that move the whole body even at a run: the slide, the throw and the goalkeeper's.
+// The others keep the stride's support leg and hips over a run.
+const WHOLE = new Set(['tackle', 'throw_in', 'keeper_catch', 'keeper_catch_high']);
 
 // What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up:
 // a dive to that side if it is diving or the ball is beyond its reach, else a catch.
@@ -118,7 +129,8 @@ export function createPlayers(scene, teams, figure) {
       group.add(badge);
       actors.set(player.id, {
         group, person, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
-        vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, diving: false, armed: false,
+        vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null,
+        diving: false, armed: false,
         celebrateAt: -Infinity,
       });
     });
@@ -129,13 +141,13 @@ export function createPlayers(scene, teams, figure) {
   const ball = new THREE.Group();
   root.add(ball);
   const shell = new THREE.Mesh(geometry(ballGeometry(DRAWN_RADIUS)), material(new THREE.MeshLambertMaterial({
-    vertexColors: true, emissive: '#3c3c36',
+    vertexColors: true, emissive: '#6b6b62',
   })));
   shell.castShadow = true;
   ball.add(shell);
   // The ball's shadow varies independently of the players' contact shadows.
-  const ballShadow = shadow(root, 0.14, material(new THREE.MeshBasicMaterial({
-    color: '#03110b', transparent: true, opacity: 0.5, depthWrite: false,
+  const ballShadow = shadow(root, BALL_SHADOW, material(new THREE.MeshBasicMaterial({
+    color: '#020a06', transparent: true, opacity: 0.62, depthWrite: false,
   })));
   ball.visible = ballShadow.visible = false;
   let ballReady = false;
@@ -150,6 +162,11 @@ export function createPlayers(scene, teams, figure) {
   const turn = new THREE.Quaternion();
   let spinRate = 0; // rad/s
   const seen = new Map(); // touches already posed, by time and player, with their time
+  let taker = null; // the player picking the ball up for a throw-in
+  let thrower = null; // the player with a throw-in under way
+  const hands = new THREE.Vector3();
+  let held = false; // in the thrower's hands last frame
+  let settleFor = SETTLE;
 
   // Start the pose for each touch the engine reports, timed to its moment of contact. A
   // touch in a snapshot still ahead of the render time gets its wind-up.
@@ -168,6 +185,12 @@ export function createPlayers(scene, teams, figure) {
     const at = touch.t - STEP;
     const actor = actors.get(touch.player);
     if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT)) return;
+    // A throw-in held overhead is released on the touch; one not yet picked up is thrown
+    // from the wind-up there is time for.
+    if (touch.kind === 'throw') {
+      if (!actor.throwing) actor.throwing = timed(actor, 'throw_in', time, at);
+      else if (!actor.throwing.anchor) retime(actor.throwing, actor.throwing.last, at);
+    }
     if (touch.kind === 'save' || touch.kind === 'catch') {
       keeperTouch(actor, touch, snapshot, at, time);
       return;
@@ -199,7 +222,7 @@ export function createPlayers(scene, teams, figure) {
   // touch; otherwise it dives to a ball beyond its reach, or catches it at its height.
   function keeperTouch(actor, touch, snapshot, at, time) {
     if (actor.dive) {
-      if (actor.dive.clipTime < actor.person.clip(actor.dive.clip).contact) retime(actor.dive, actor.dive.last, at);
+      if (actor.dive.clipTime < actor.dive.contact) retime(actor.dive, actor.dive.last, at);
       return;
     }
     const player = snapshot.players.find(p => p.id === touch.player);
@@ -221,39 +244,43 @@ export function createPlayers(scene, teams, figure) {
     replace(actor, { kind: touch.kind, touch, at, from: time - at, clip: name, end: clip.duration - clip.contact, aim: null, cut: Infinity }, time);
   }
 
-  // A dive plays from its start at its own pace, on the drawn match's clock. Once a touch
-  // is known its full stretch (the clip's contact) is timed to land on the touch.
-  function startDive(actor, name, time, contactAt = null) {
+  // A dive or a throw-in plays from its start at its own pace on the drawn match's clock,
+  // up to `hold` (a throw-in waits there, the ball overhead). Once its touch is known the
+  // clip's contact, the dive's full stretch or the throw's release, lands on the touch.
+  function timed(actor, name, time, contactAt = null, hold = Infinity) {
     const clip = actor.person.clip(name);
     const clipTime = contactAt == null ? 0 : contactTime(time - contactAt, time - contactAt, clip.contact);
-    actor.dive = { clip: name, contact: clip.contact, duration: clip.duration, start: time, last: time, clipTime, anchor: null };
+    const result = { clip: name, contact: clip.contact, duration: clip.duration, start: time, last: time, clipTime, hold, anchor: null };
+    if (contactAt != null) retime(result, time, contactAt);
+    return result;
+  }
+
+  function startDive(actor, name, time, contactAt = null) {
+    actor.dive = timed(actor, name, time, contactAt);
     actor.armed = false;
-    if (contactAt != null) retime(actor.dive, time, contactAt);
   }
 
-  // From where the dive is at `time`, it runs at the pace that reaches its contact at
+  // From where the clip is at `time`, it runs at the pace that reaches its contact at
   // `contactAt`, within 0.3 to 3 times its own, then at its own pace.
-  function retime(dive, time, contactAt) {
+  function retime(clip, time, contactAt) {
     const left = contactAt - time;
-    const rate = left > 1e-3 ? clamp((dive.contact - dive.clipTime) / left, 0.3, 3) : 3;
-    dive.anchor = { time, clipTime: dive.clipTime, rate, reached: time + (dive.contact - dive.clipTime) / rate };
+    const rate = left > 1e-3 ? clamp((clip.contact - clip.clipTime) / left, 0.3, 3) : 3;
+    clip.anchor = { time, clipTime: clip.clipTime, rate, reached: time + (clip.contact - clip.clipTime) / rate };
   }
 
-  function playDive(actor, time) {
-    const dive = actor.dive;
-    const { anchor } = dive;
-    if (time > dive.last) {
-      if (!anchor) dive.clipTime += time - dive.last;
-      else if (time < anchor.reached) dive.clipTime = anchor.clipTime + anchor.rate * (time - anchor.time);
-      else dive.clipTime = dive.contact + (time - anchor.reached);
-      dive.last = time;
+  // Plays a timed clip; returns false once it has finished.
+  function playTimed(actor, clip, time) {
+    const { anchor } = clip;
+    if (time > clip.last) {
+      if (!anchor) clip.clipTime = Math.min(clip.hold, clip.clipTime + time - clip.last);
+      else if (time < anchor.reached) clip.clipTime = anchor.clipTime + anchor.rate * (time - anchor.time);
+      else clip.clipTime = clip.contact + (time - anchor.reached);
+      clip.last = time;
     }
-    if (dive.clipTime >= dive.duration) {
-      actor.dive = null;
-      return;
-    }
-    const share = Math.min(clamp((time - dive.start) / 0.08, 0, 1), clamp((dive.duration - dive.clipTime) / 0.3, 0, 1));
-    actor.person.act(dive.clip, Math.min(dive.clipTime, dive.duration), share, 'whole');
+    if (clip.clipTime >= clip.duration) return false;
+    const share = Math.min(clamp((time - clip.start) / 0.12, 0, 1), clamp((clip.duration - clip.clipTime) / 0.3, 0, 1));
+    actor.person.act(clip.clip, clip.clipTime, share, 'whole');
+    return true;
   }
 
   // Which way a kick sends the ball and how fast, from the touch to where `snapshot` has
@@ -298,9 +325,9 @@ export function createPlayers(scene, teams, figure) {
       const shot = person.clip('shot');
       if (pose.shot < 1) person.act('pass', contactTime(u, pose.from, pass.contact), w * (1 - pose.shot));
       if (pose.shot > 0 && shot) person.act('shot', contactTime(u, pose.from, shot.contact), w * pose.shot);
-    } else {
+    } else if (!(pose.kind === 'throw' && actor.throwing)) {
       const clip = person.clip(pose.clip);
-      person.act(pose.clip, contactTime(u, pose.from, clip.contact), w, pose.kind === 'throw' ? 'whole' : 'play');
+      person.act(pose.clip, contactTime(u, pose.from, clip.contact), w, WHOLE.has(pose.clip) ? 'whole' : 'play');
     }
   }
 
@@ -325,6 +352,20 @@ export function createPlayers(scene, teams, figure) {
       if (latest !== after) notice(latest, time);
     }
     for (const actor of actors.values()) actor.group.visible = false;
+    // At a throw-in, whoever comes to the ball picks it up.
+    taker = null;
+    if (after.phase === 'throw_in' && !reset) {
+      let nearest = THROWER;
+      for (const player of after.players) {
+        const d = Math.hypot(player.x - after.ball.x, player.y - after.ball.y);
+        if (d < nearest) {
+          nearest = d;
+          taker = actors.get(player.id) ?? null;
+        }
+      }
+      if (taker?.throwing?.anchor) taker = null; // already thrown
+    }
+    thrower = null;
     for (const player of after.players) {
       const actor = actors.get(player.id);
       if (!actor) continue;
@@ -354,7 +395,7 @@ export function createPlayers(scene, teams, figure) {
       const bx = after.ball.x - player.x;
       const by = after.ball.y - player.y;
       if (bx * bx + by * by > 6.25) actor.faceYaw = Math.atan2(by, bx);
-      if (stopped) actor.pose = actor.fading = actor.dive = null;
+      if (stopped) actor.pose = actor.fading = actor.dive = actor.throwing = null;
       const pose = actor.pose;
       const diving = !stopped && Boolean(player.dive);
       if (diving && !actor.diving) actor.armed = true; // the snapshot first marks it diving
@@ -374,13 +415,19 @@ export function createPlayers(scene, teams, figure) {
       else if (fading) playPose(actor, fading, time, after, latest, step);
       if (pose && time - pose.at > pose.end) actor.pose = null;
       else if (pose) playPose(actor, pose, time, after, latest, step);
-      if (actor.dive) playDive(actor, time);
+      if (actor.dive && !playTimed(actor, actor.dive, time)) actor.dive = null;
+      // The throw-in's taker holds the ball until its throw, or lets go if play moves on.
+      if (!actor.throwing && actor === taker) actor.throwing = timed(actor, 'throw_in', time, null, Math.max(0, person.clip('throw_in').contact - 0.15));
+      if (actor.throwing && !actor.throwing.anchor && actor !== taker) actor.throwing = null;
+      if (actor.throwing && !playTimed(actor, actor.throwing, time)) actor.throwing = null;
+      if (actor.throwing) thrower = actor;
       const since = now - actor.celebrateAt;
       const celebrate = person.clip('celebrate');
       if (celebrate && since >= 0) {
         const lasts = celebrate.loop ? CELEBRATION : celebrate.duration;
         if (since < lasts) {
-          person.act('celebrate', celebrate.loop ? since % celebrate.duration : since, envelope(since, 0, lasts, 0.2, 0.4));
+          const at = celebrate.loop ? since % celebrate.duration : since;
+          person.act('celebrate', at, envelope(since, 0, lasts, 0.2, 0.4), 'gesture');
         }
       }
       if (actor.speed > 1e-6) {
@@ -415,6 +462,7 @@ export function createPlayers(scene, teams, figure) {
     let x = mix(start.x, end.x, f);
     let z = -mix(start.y, end.y, f);
     const height = mix(start.z, end.z, f);
+    let y = Math.max(DRAWN_RADIUS, height - BALL_RADIUS + DRAWN_RADIUS);
     // Carried, it is drawn at the drawn feet, nudged ahead by each touch of the stride,
     // until the moment its carrier kicks it.
     const holder = oldBall.owner != null ? actors.get(oldBall.owner) : null;
@@ -427,27 +475,47 @@ export function createPlayers(scene, teams, figure) {
       // The goal frame can stop a carried ball short of the feet: then draw it as sent.
       const sent = Math.hypot(feet.x + Math.cos(carrier.heading) * DRIBBLE - x, feet.z - Math.sin(carrier.heading) * DRIBBLE - z);
       if (sent < LOOSE) {
-        const touchAt = carrier.person.phase - TOUCH_PHASE;
-        const ahead = DRIBBLE + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * touchAt));
+        // The boot meets the back of the ball at the touch, and it runs on from there.
+        const { scale, phase } = carrier.person;
+        let ahead = TOE_REACH * scale + BALL_RADIUS
+          + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * (phase - TOUCH_PHASE)));
+        if (kicking) {
+          // Winding up a kick, it comes back to where the engine kicks it from, which is
+          // where the kick clips meet it.
+          const pose = holder.pose;
+          const lead = -0.6 * pose.from;
+          ahead = mix(ahead, DRIBBLE, lead > 1e-3 ? smooth(clamp((time - pose.at - pose.from) / lead, 0, 1)) : 1);
+        }
         x = feet.x + Math.cos(carrier.facing) * ahead;
         z = feet.z - Math.sin(carrier.facing) * ahead;
         carrying = true;
       }
     }
-    const y = Math.max(DRAWN_RADIUS, height - BALL_RADIUS + DRAWN_RADIUS);
+    // A throw-in's taker holds the ball in its hands until it lets go.
+    const inHands = Boolean(thrower?.group.visible && thrower.throwing.clipTime < thrower.throwing.contact);
+    if (inHands) {
+      thrower.person.hands(hands);
+      x = hands.x;
+      y = hands.y;
+      z = hands.z;
+      carrying = true;
+    }
     // How far the path moved since last frame's.
     const moved = Math.hypot(x - (ball.position.x - applied.x), y - (ball.position.y - applied.y), z - (ball.position.z - applied.z));
     const jump = !ballReady || reset || ballTeleport || moved > 3;
     const snapped = moved > 0.3 && moved > SNAP * (time - ballTime);
     ballTime = time;
     if (jump) settle.set(0, 0, 0);
-    else if (carrying !== carried || snapped) {
+    else if (carrying !== carried || inHands !== held || snapped) {
       settle.set(ball.position.x - x, ball.position.y - y, ball.position.z - z);
       settleAt = time;
+      // Thrown, it leaves the hands slowly enough for its path to rise to meet it.
+      settleFor = held && !inHands ? THROW_RELEASE : SETTLE;
     }
     carried = carrying;
+    held = inHands;
     // The offset fades on the drawn match's clock, so a kicked ball leaves the boot along its path.
-    applied.copy(settle).multiplyScalar(1 - smooth(clamp((time - settleAt) / SETTLE, 0, 1)));
+    applied.copy(settle).multiplyScalar(1 - smooth(clamp((time - settleAt) / settleFor, 0, 1)));
     x += applied.x;
     z += applied.z;
     const drawnY = Math.max(DRAWN_RADIUS, y + applied.y);
@@ -455,7 +523,7 @@ export function createPlayers(scene, teams, figure) {
     if (!jump && step > 0) {
       travel.set(x - ball.position.x, 0, z - ball.position.z);
       const distance = travel.length();
-      if (stopped) spinRate = 0;
+      if (stopped || inHands) spinRate = 0;
       else if (height < BALL_RADIUS + 0.05) {
         if (distance > 1e-6) spinAxis.crossVectors(up, travel).normalize();
         spinRate = distance / DRAWN_RADIUS / step;
@@ -465,9 +533,9 @@ export function createPlayers(scene, teams, figure) {
     ball.position.set(x, drawnY, z);
     ballShadow.position.set(x, 0.022, z);
     // A crisp dark spot under a ball on the grass, larger and fainter as it rises.
-    const size = 0.14 + Math.min(drawnY, 10) * 0.03;
+    const size = BALL_SHADOW + Math.min(drawnY, 10) * 0.03;
     ballShadow.scale.set(size, size, 1);
-    ballShadow.material.opacity = 0.5 / (1 + (drawnY - DRAWN_RADIUS) * 0.35);
+    ballShadow.material.opacity = 0.62 / (1 + (drawnY - DRAWN_RADIUS) * 0.35);
     ball.visible = ballShadow.visible = ballReady = true;
   }
 
@@ -487,7 +555,7 @@ export function createPlayers(scene, teams, figure) {
     // What a player's figure shows and which way it faces, for tests and debugging.
     inspect(id) {
       const actor = actors.get(id);
-      return actor && { ...actor.person.state(), facing: actor.facing, visible: actor.group.visible };
+      return actor && { ...actor.person.state(), facing: actor.facing, scale: actor.person.scale, visible: actor.group.visible };
     },
     dispose() {
       root.removeFromParent();

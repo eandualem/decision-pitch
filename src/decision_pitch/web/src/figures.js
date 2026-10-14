@@ -423,6 +423,8 @@ export function createFigures(template) {
       }
     });
 
+    const handBones = ['hand_L', 'hand_R'].map(name => object.getObjectByName(name));
+    const palm = new THREE.Vector3();
     const mixer = new THREE.AnimationMixer(object);
     const loops = steps.loops.map(({ name }) => {
       const clip = template.clips.get(name);
@@ -473,6 +475,17 @@ export function createFigures(template) {
       get rate() { return rate; },
       // Clip `name`'s description from figure.json: duration, contact, loop, speed.
       clip: (name) => template.described[name] ?? null,
+      // Writes into `target` the point between the palms, in world space, as last posed.
+      hands(target) {
+        object.updateWorldMatrix(true, true);
+        target.set(0, 0, 0);
+        for (const bone of handBones) {
+          if (!bone) continue;
+          // Along the hand bone, a little past the wrist.
+          target.add(bone.localToWorld(palm.set(0, 0.07, 0)));
+        }
+        return target.multiplyScalar(0.5);
+      },
       // Shows one-shot `name` at clip time `time` this frame, taking `share` (0..1) of the
       // body from the loops. A 'play' keeps only its upper body and kicking leg over a
       // running stride, a 'gesture' only its upper body over a walk, and 'whole' always

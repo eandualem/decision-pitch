@@ -115,7 +115,8 @@ test('track eases between keys and runs straight into a linear key', () => {
 
 test('a carried ball stays at the drawn feet between snapshots', () => {
   const ui = setup();
-  const dribble = DRIBBLE;
+  // The boot's reach at the touch, and the ball's radius: its back meets the toe.
+  const dribble = 0.62 * ui.forward.state().scale + 0.11;
   // The engine's ball is a little off where it should be: the drawn one still never slides.
   const a = snap(1, [player(2, 0, 0, { speed: 6 })], { x: 0.6, y: 0, owner: 2 });
   const b = snap(1 + STEP, [player(2, 0.2, 0.05, { speed: 6, heading: 0.3 })], { x: 0.78, y: 0.27, owner: 2 });
@@ -630,7 +631,7 @@ test('the ball is drawn at the engine\'s size, with a crisp shadow beneath it', 
   assert.ok(Math.abs(geometry.boundingSphere.radius - 0.11) < 1e-6, 'a 0.11 m radius');
   assert.ok(geometry.attributes.color, 'its panels are vertex colours on one mesh');
   const shadow = ui.scene.children[0].children.find(child => child.isMesh && Math.abs(child.position.x - 2) < 1e-9);
-  assert.ok(shadow.material.opacity >= 0.45, 'dark on the grass');
+  assert.ok(shadow.material.opacity >= 0.55, 'dark on the grass');
 });
 
 test('a pose cut short by a kick fades out under it', () => {
@@ -647,4 +648,56 @@ test('a pose cut short by a kick fades out under it', () => {
   const d = snap(2.2, [player(2, 0, 0)], { x: 3, y: 0, touches: [control, kick] });
   ui.actors.update(c, d, 0.5, 1 / 60, 2.2, d);
   assert.ok(!ui.forward.acting().includes('control') && kickOf(ui.forward), `then only the kick: ${ui.forward.acting()}`);
+});
+
+test('a throw-in: the taker holds the ball in its hands and lets it go on the throw', () => {
+  const ui = setup();
+  const hands = () => {
+    const figure = ui.forward.group.children[1];
+    figure.updateWorldMatrix(true, true);
+    const point = new THREE.Vector3();
+    for (const name of ['hand_L', 'hand_R']) point.add(figure.getObjectByName(name).localToWorld(new THREE.Vector3(0, 0.07, 0)));
+    return point.multiplyScalar(0.5);
+  };
+  const waiting = (t) => snap(t, [player(2, 0, 33.4)], { x: 0, y: 34 }, 'throw_in');
+  for (let i = 0; i <= 30; i++) ui.actors.update(waiting(1 + i / 60), waiting(1 + (i + 1) / 60), 0.5, 1 / 60, 1 + i / 60);
+  assert.ok(ui.forward.act('throw_in'), 'it takes up the throw');
+  assert.ok(ui.ball.position.distanceTo(hands()) < 1e-6, 'the ball is in its hands');
+  // The throw: the ball leaves from the touchline, rising.
+  const touch = { player: 2, kind: 'throw', t: 1.6, x: 0, y: 34, z: 0.12 };
+  const flight = (t) => snap(t, [player(2, 0, 33.4)], { x: 0, y: 34 - 8 * (t - 1.6 + 1 / 60), z: 0.12 + 4 * (t - 1.6 + 1 / 60), touches: [touch] });
+  ui.actors.update(waiting(1.55), waiting(1.55), 1, 1 / 60, 1.55, flight(1.6));
+  const contact = touch.t - 1 / 60;
+  let time = 1.55;
+  for (; time < contact - 1e-9; time += 1 / 120) {
+    ui.actors.update(waiting(1.55), flight(1.6), (time - 1.55) / 0.05, 1 / 120, time, flight(1.6));
+  }
+  assert.ok(ui.ball.position.distanceTo(hands()) < 0.05, 'in its hands until the release');
+  for (let t = time; t < 2.2; t += 1 / 60) {
+    const a = flight(Math.floor(t * 30) / 30);
+    const b = flight(Math.floor(t * 30) / 30 + 1 / 30);
+    ui.actors.update(a, b, (t - a.t) * 30, 1 / 60, t, b);
+  }
+  const path = flight(2.2);
+  assert.ok(Math.abs(ui.ball.position.z + path.ball.y) < 0.3, `then on its path: ${ui.ball.position.z} vs ${-path.ball.y}`);
+});
+
+test('a celebration over a run moves the upper body; a slide tackle moves the whole body', () => {
+  const ui = setup();
+  ui.actors.handleEvent({ kind: 'goal', team: 0 }, 1);
+  for (let i = 0; i < 30; i++) {
+    const a = snap(1 + i * STEP, [player(2, i * 0.2, 0, { speed: 6 })], { x: 30, y: 0 });
+    const b = snap(1 + (i + 1) * STEP, [player(2, (i + 1) * 0.2, 0, { speed: 6 })], { x: 30, y: 0 });
+    ui.actors.update(a, b, 0.5, STEP, 1 + i * STEP);
+  }
+  assert.deepEqual(ui.forward.state().acts.map(a => a.name), ['celebrate:gesture']);
+  const tackler = setup();
+  const touch = { player: 2, kind: 'tackle', t: 2, x: 6.6, y: 0, z: 0.11 };
+  for (let i = 0; i < 36; i++) {
+    const t = 1 + i * STEP;
+    const a = snap(t, [player(2, i * 0.2, 0, { speed: 6 })], { x: 8, y: 0, touches: t >= 2 ? [touch] : [] });
+    const b = snap(t + STEP, [player(2, (i + 1) * 0.2, 0, { speed: 6 })], { x: 8, y: 0, touches: t + STEP >= 2 ? [touch] : [] });
+    tackler.actors.update(a, b, 0.5, STEP, t + STEP / 2, b);
+  }
+  assert.ok(tackler.forward.state().acts.some(a => a.name === 'tackle'), 'the whole slide, at a run');
 });

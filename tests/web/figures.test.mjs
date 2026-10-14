@@ -1,6 +1,7 @@
 // Run with node --test tests/web/figures.test.mjs; no npm dependencies required.
 import './three-resolve.mjs';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
 import { fixtureGltf, LOOPS, HAIRS, CODES } from './figure-fixture.mjs';
@@ -316,4 +317,96 @@ test('the same clip twice in a frame plays twice, as when a pass fades out as th
   person.update(1 / 60, 0, 0);
   const acts = person.state().acts.filter(a => a.name === 'pass').map(a => a.time).sort();
   assert.deepEqual(acts, [0.1, 0.7]);
+});
+
+// The built figure, when it is there: tests/web runs before the first build too.
+const built = new URL('../../src/decision_pitch/web/figures/', import.meta.url);
+const hasFigure = existsSync(new URL('figure.glb', built)) && existsSync(new URL('figure.json', built));
+
+async function builtFigure() {
+  const { GLTFLoader } = await import('../../src/decision_pitch/web/vendor/three/addons/loaders/GLTFLoader.js');
+  const data = readFileSync(new URL('figure.glb', built));
+  const gltf = await new GLTFLoader().parseAsync(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), '');
+  return prepareFigure(gltf.scene, gltf.animations, JSON.parse(readFileSync(new URL('figure.json', built), 'utf8')));
+}
+
+test('the built figure has every clip the page plays', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  for (const name of ['idle', 'walk', 'jog', 'sprint', 'backpedal', 'strafe_L', 'strafe_R', 'pass', 'shot', 'control',
+    'tackle', 'throw_in', 'celebrate', 'keeper_dive_L', 'keeper_dive_R', 'keeper_catch', 'keeper_catch_high']) {
+    assert.ok(template.clips.has(name), `${name} is in the .glb and figure.json`);
+  }
+  for (const loop of template.gait.loops.slice(1)) assert.ok(loop.stride > 0, `${loop.name} travels`);
+});
+
+// Runs a built figure over the ground at `speed` along `travel` (from its facing) and
+// returns the largest speed of a planted boot's lowest point, the point of the sole on the
+// grass (it rolls from heel to toe, but that point itself must not move), in mid-stance:
+// every loop plants the left foot at phase 0 and the right at 0.5.
+function plantedSlip(template, seed, speed, travel = 0) {
+  const made = createFigures(template);
+  const person = made.create({ seed });
+  const group = new THREE.Group();
+  group.add(person.object);
+  const facing = 0.7; // any direction: the figure faces it and travels `travel` from it
+  person.object.rotation.y = facing + Math.PI / 2;
+  const boots = [];
+  person.object.traverse(node => { if (node.isSkinnedMesh && node.userData.region === 'boots') boots.push(node); });
+  // Each boot vertex, by the side of the bone that carries it most.
+  const sides = [[], []];
+  for (const mesh of boots) {
+    const { skinIndex, skinWeight } = mesh.geometry.attributes;
+    for (let i = 0; i < skinIndex.count; i++) {
+      let best = 0;
+      for (let k = 1; k < 4; k++) if (skinWeight.getComponent(i, k) > skinWeight.getComponent(i, best)) best = k;
+      const bone = mesh.skeleton.bones[skinIndex.getComponent(i, best)].name;
+      if (bone.endsWith('_L')) sides[0].push([mesh, i]);
+      else if (bone.endsWith('_R')) sides[1].push([mesh, i]);
+    }
+  }
+  const before = sides.map(list => new Float64Array(list.length * 3));
+  const now = sides.map(list => new Float64Array(list.length * 3));
+  const point = new THREE.Vector3();
+  const dt = 1 / 240;
+  let worst = 0;
+  for (let i = 0; i < 480; i++) {
+    const t = i * dt;
+    group.position.set(Math.cos(facing + travel) * speed * t, 0, -Math.sin(facing + travel) * speed * t);
+    person.update(dt, speed, travel);
+    group.updateMatrixWorld(true);
+    sides.forEach((list, side) => {
+      let lowest = 0;
+      list.forEach(([mesh, index], j) => {
+        mesh.getVertexPosition(index, point).applyMatrix4(mesh.matrixWorld);
+        point.toArray(now[side], j * 3);
+        if (point.y < now[side][lowest * 3 + 1]) lowest = j;
+      });
+      const stance = (person.phase - side * 0.5 + 1) % 1;
+      if (i > 120 && stance > 0.03 && stance < 0.15 && now[side][lowest * 3 + 1] < 0.02) {
+        const dx = now[side][lowest * 3] - before[side][lowest * 3];
+        const dz = now[side][lowest * 3 + 2] - before[side][lowest * 3 + 2];
+        worst = Math.max(worst, Math.hypot(dx, dz) / dt);
+      }
+      before[side].set(now[side]);
+    });
+  }
+  made.dispose();
+  return worst;
+}
+
+test('built figure: the planted foot stays put at every speed and height', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  // Seeds whose looks are the shortest and the tallest of the first hundred ids.
+  const looks = Array.from({ length: 100 }, (_, id) => ({ id, height: variation(id, { hairs: template.hairs.length, morphs: template.morphs }).height }));
+  looks.sort((a, b) => a.height - b.height);
+  for (const { id, height } of [looks[0], looks.at(-1)]) {
+    for (const speed of [1, 3, 5, 7.5]) {
+      const slip = plantedSlip(template, id, speed);
+      assert.ok(slip < Math.max(0.15, speed * 0.08), `${height.toFixed(2)} m figure at ${speed} m/s: a planted foot slides at ${slip.toFixed(3)} m/s`);
+    }
+    for (const travel of [Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      const slip = plantedSlip(template, id, 2, travel);
+      assert.ok(slip < 0.25, `${height.toFixed(2)} m figure at 2 m/s, travel ${travel.toFixed(2)}: slides at ${slip.toFixed(3)} m/s`);
+    }
+  }
 });
