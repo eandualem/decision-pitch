@@ -30,7 +30,7 @@ function setup(aspect = 16 / 9) {
     message(team, kind = 'instruction') { broadcast.handleMessage({ type: 'manager', team, kind }, now, touchline); },
     // The manager the camera is on, or -1 for none.
     on() { return managers.findIndex(manager => camera.position.distanceTo(manager) < 15); },
-    wide() { return camera.position.y > 40; },
+    wide() { return camera.position.y > 25; },
     run(seconds, phase = 'play') {
       for (let t = 0; t < seconds; t += 1 / 60) {
         now += 1 / 60;
@@ -50,17 +50,60 @@ function setup(aspect = 16 / 9) {
   };
 }
 
-test('the wide shot follows play from the stand, at the same distance as before the touchline', () => {
+test('the wide shot follows play from the stand, two thirds as far as it used to be', () => {
   for (const [x, z] of [[0, 0], [-20, 10], [15, 25], [60, -40]]) {
     const t = setup();
     t.ball.set(x, 0.3, z);
     t.run(6);
-    const lookX = Math.max(-PITCH.length * 0.32, Math.min(PITCH.length * 0.32, x * 0.65));
-    const lookZ = Math.max(-PITCH.width * 0.2, Math.min(PITCH.width * 0.2, z * 0.34));
-    assert.ok(t.camera.position.distanceTo(new THREE.Vector3(lookX, 53, lookZ + 64)) < 0.01, `ball (${x}, ${z})`);
+    const lookX = Math.max(-PITCH.length * 0.4, Math.min(PITCH.length * 0.4, x * 0.85));
+    const lookZ = Math.max(-PITCH.width * 0.3, Math.min(PITCH.width * 0.3, z * 0.55));
+    assert.ok(t.camera.position.distanceTo(new THREE.Vector3(lookX, 35, lookZ + 42)) < 0.01, `ball (${x}, ${z})`);
     const centre = t.screen(lookX, 0, lookZ);
     assert.ok(Math.abs(centre.x) < 0.01 && Math.abs(centre.y) < 0.01, 'aimed at the look point');
+    const distance = t.camera.position.distanceTo(new THREE.Vector3(lookX, 0, lookZ));
+    assert.ok(distance < 0.7 * Math.hypot(53, 64), `closer than the first wide shot: ${distance}`);
   }
+});
+
+test('the play around the ball stays in frame, and a fast switch of play never leaves it', () => {
+  for (const [x, z] of [[-52, -34], [52, 34], [0, 30], [30, -30]]) {
+    const t = setup();
+    t.ball.set(x, 0.3, z);
+    t.run(5);
+    for (const [dx, dz] of [[12, 0], [-12, 0], [0, 10], [0, -10]]) {
+      const px = Math.max(-52.5, Math.min(52.5, x + dx));
+      const pz = Math.max(-34, Math.min(34, z + dz));
+      assert.ok(t.inFrame(px, 1.8, pz, 0.95), `a player ${dx}, ${dz} from the ball at (${x}, ${z})`);
+    }
+  }
+  // Long balls and switches across the pitch at the speed of a driven pass.
+  for (const [[x0, z0], [x1, z1], speed] of [[[-45, 30], [45, -30], 30], [[0, -30], [0, 30], 25], [[30, 20], [-35, -20], 30]]) {
+    const t = setup();
+    t.ball.set(x0, 0.3, z0);
+    t.run(3);
+    const time = Math.hypot(x1 - x0, z1 - z0) / speed;
+    let worst = 0;
+    let pulled = 0;
+    for (let s = 0; s <= time + 1; s += 1 / 60) {
+      const f = Math.min(1, s / time);
+      t.ball.set(x0 + (x1 - x0) * f, 0.3 + Math.sin(Math.PI * f) * 6, z0 + (z1 - z0) * f);
+      t.run(1 / 60);
+      const p = t.screen(t.ball.x, t.ball.y, t.ball.z);
+      worst = Math.max(worst, Math.abs(p.x), Math.abs(p.y));
+      pulled = Math.max(pulled, t.camera.position.y);
+    }
+    assert.ok(worst < 0.8, `ball in frame across ${x0},${z0} -> ${x1},${z1}: ${worst}`);
+    assert.ok(pulled > 36, 'the shot pulls back a little for a fast ball');
+  }
+});
+
+test('a ball placed for a restart is not led as if it had been kicked', () => {
+  const t = setup();
+  t.ball.set(-30, 0.3, 10);
+  t.run(3);
+  t.ball.set(0, 0.3, 0); // the kick-off spot, in one frame
+  t.run(4);
+  assert.ok(t.camera.position.distanceTo(new THREE.Vector3(0, 35, 42)) < 0.05, `settled on the spot: ${t.camera.position.toArray()}`);
 });
 
 test('the ball stays comfortably in frame anywhere on the pitch', () => {

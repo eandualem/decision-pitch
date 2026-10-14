@@ -14,6 +14,20 @@ const LONG = new Set(['kickoff', 'goal_kick', 'corner', 'half_time', 'full_time'
 // A shot asked for replaces one on screen or waiting only if it ranks higher.
 const RANK = { restart: 0, manager: 1, personal: 1, period: 2, goal: 3 };
 const VIEW = Math.tan(THREE.MathUtils.degToRad(20)); // half the camera's vertical field of view
+// The wide shot, from the stand: high and far enough to see the play around the ball, close
+// enough that the players read as people and the ball, at its real size, as a ball.
+const WIDE = {
+  up: 35, back: 42, // m above and behind the point it looks at
+  follow: [0.85, 0.55], // share of the ball's x and z the look point follows
+  reach: [0.4, 0.3], // and how far it goes, as a share of the pitch's length and width
+  rate: 3, // 1/s: how quickly it settles on play
+};
+// A fast ball (a long pass, a switch of play) is led along its way and the shot pulls back
+// a little, so the camera's lag never leaves the ball at the edge of the frame.
+const LEAD = 0.25; // s of the ball's velocity the look point runs ahead by
+const LEAD_MAX = 6; // m
+const PULL = { from: 12, to: 25, by: 0.2 }; // m/s of ball speed, and how much further back at the top
+const TELEPORT = 50; // m/s: faster than any kick, so the ball was placed, not moved
 
 // Presentation only: follow the rendered ball, never predict match outcomes.
 export function createCamera(camera, pitch) {
@@ -21,6 +35,11 @@ export function createCamera(camera, pitch) {
   const desired = new THREE.Vector3();
   const look = new THREE.Vector3();
   const closeup = new THREE.Vector3();
+  const lastBall = new THREE.Vector3();
+  const moved = new THREE.Vector3();
+  const velocity = new THREE.Vector3(); // the drawn ball's, smoothed, along the ground
+  const lead = new THREE.Vector3();
+  let pull = 0;
   let closeUntil = -Infinity;
   let scorer = null;
   let closeActors = null;
@@ -90,6 +109,16 @@ export function createCamera(camera, pitch) {
         else if (phase === 'throw_in' || now > request.from + START_WITHIN) request = null;
       }
       const portrait = Math.max(1, 1 / Math.max(0.35, camera.aspect));
+      // The ball's way over the ground, ignoring a ball placed for a restart.
+      const step = Math.min(dt, 0.1);
+      if (initialized && step > 0) {
+        moved.subVectors(ballPosition, lastBall).setY(0).divideScalar(step);
+        if (moved.length() > TELEPORT) velocity.set(0, 0, 0);
+        else velocity.lerp(moved, 1 - Math.exp(-step * 3));
+      }
+      lastBall.copy(ballPosition);
+      const fast = THREE.MathUtils.clamp((velocity.length() - PULL.from) / (PULL.to - PULL.from), 0, 1);
+      pull += (fast - pull) * (1 - Math.exp(-step * (fast > pull ? 2 : 0.8)));
       const first = shot?.touchline.getManagerPosition(shot.both ? 0 : shot.team) ?? null;
       const second = shot?.both ? shot.touchline.getManagerPosition(1) : null;
       if (now < closeUntil) {
@@ -110,14 +139,20 @@ export function createCamera(camera, pitch) {
         look.set(first.x, 1.3, first.z);
         desired.set(first.x + outside * 4.5 * portrait, 3.4, first.z - 10.5 * portrait);
       } else {
-        look.set(THREE.MathUtils.clamp(ballPosition.x * 0.65, -pitch.length * 0.32, pitch.length * 0.32), 0,
-          THREE.MathUtils.clamp(ballPosition.z * 0.34, -pitch.width * 0.2, pitch.width * 0.2));
-        desired.set(look.x, 53 * portrait, look.z + 64 * portrait);
+        lead.copy(velocity).multiplyScalar(LEAD);
+        if (lead.length() > LEAD_MAX) lead.setLength(LEAD_MAX);
+        look.set(
+          THREE.MathUtils.clamp((ballPosition.x + lead.x) * WIDE.follow[0], -pitch.length * WIDE.reach[0], pitch.length * WIDE.reach[0]),
+          0,
+          THREE.MathUtils.clamp((ballPosition.z + lead.z) * WIDE.follow[1], -pitch.width * WIDE.reach[1], pitch.width * WIDE.reach[1]),
+        );
+        const away = portrait * (1 + PULL.by * pull);
+        desired.set(look.x, WIDE.up * away, look.z + WIDE.back * away);
       }
       const onManagers = now >= closeUntil && first !== null;
       const cut = !initialized || cutting !== onManagers;
       cutting = onManagers;
-      const blend = cut ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) * (cutting ? 4 : 2.4));
+      const blend = cut ? 1 : 1 - Math.exp(-step * (cutting ? 4 : WIDE.rate));
       camera.position.lerp(desired, blend);
       target.lerp(look, blend);
       camera.lookAt(target);
