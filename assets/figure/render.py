@@ -13,6 +13,7 @@ Options:
     --camera X,Y,Z,TX,TY,TZ,LENS
                         a custom camera (location, target, focal length in mm),
                         rendered as <out>/camera.png
+    --dress NAME        player (default), keeper or manager, for --clip and --camera stills
     --engine NAME       eevee (default) or workbench
 
 Each still is written as <out>/<view>.png, or <out>/<clip>_<frame>_<view>.png.
@@ -73,6 +74,7 @@ def parse():
     parser.add_argument("--view", default="side")
     parser.add_argument("--engine", default="eevee")
     parser.add_argument("--camera")
+    parser.add_argument("--dress", default="player", choices=("player", "keeper", "manager"))
     return parser.parse_args(argv)
 
 
@@ -250,7 +252,8 @@ def main():
         for track in rig.animation_data.nla_tracks:
             track.mute = True
     cam = stage(args.engine)
-    dress(rig, LINEUP[0])
+    dress(rig, {"player": LINEUP[0], "keeper": {**LINEUP[1], "kit": "keeper"},
+                "manager": {**LINEUP[0], "kit": "manager", "hair": "hair_swept", "hair_colour": 1}}[args.dress])
     print_number(rig, "17")
     if args.camera and not args.clip:
         pass

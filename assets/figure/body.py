@@ -623,6 +623,7 @@ JACKET = [
 ]
 JACKET_HEM = 0.90
 ZIP = 0.0045  # m: half the width of the trim stripe down the zip
+TROUSERS_BELOW = 0.010  # m: where the trousers' colour starts under the jacket's hem, clear of its edge
 COAT_TRIANGLES = 3800
 COAT_MATERIALS = ["coat", "trousers", "trim"]
 
@@ -649,8 +650,9 @@ def build_coat(figure, collection):
     slab = Box((0.0, -0.25, 1.25), (0.0025, 0.13, 0.40))
     top = Cut(top, Cut(slab, Shell(core, 0.015)), k=0.002)
     # Straight legs, just wide enough over the shorts' hem and the socks' cuffs.
-    leg = Union([Cone(THIGH.at(0.0, out=0.008), THIGH.at(1.0), 0.094, 0.068),
-                 Cone(THIGH.at(0.10, out=0.006), THIGH.at(0.62, out=0.004, front=-0.002), 0.101, 0.098),
+    leg = Union([Cone(THIGH.at(0.0, out=0.008), THIGH.at(0.10, out=0.006), 0.096, 0.101),
+                 Cone(THIGH.at(0.10, out=0.006), THIGH.at(0.64, out=0.004, front=-0.002), 0.101, 0.098),
+                 Cone(THIGH.at(0.64, out=0.004, front=-0.002), THIGH.at(1.0), 0.098, 0.072),
                  Cone(SHIN.at(0.0), SHIN.at(1.0), 0.072, 0.058), Shell(figure.leg, 0.014)], k=0.03)
     seat = _below(Shell(figure.shorts, 0.013), 0.99)
     trousers = Union([seat] + _both([_keep_before(leg, "boot", -0.012)]), k=0.03)
@@ -674,7 +676,7 @@ def build_coat(figure, collection):
                                + [e for e in bm.edges if any(f in chosen for f in e.link_faces)] + geom,
                                dist=1e-5, plane_co=Vector(point), plane_no=Vector(normal))
 
-    cut((0.0, 0.0, JACKET_HEM - 0.003), (0.0, 0.0, 1.0), lambda c: abs(c.z - JACKET_HEM) < 0.03)
+    cut((0.0, 0.0, JACKET_HEM - TROUSERS_BELOW), (0.0, 0.0, 1.0), lambda c: abs(c.z - JACKET_HEM) < 0.04)
     for side in (1, -1):
         cut((side * ZIP, 0.0, 0.0), (1.0, 0.0, 0.0), lambda c: c.y < -0.03 and abs(c.x) < 0.03 and c.z > JACKET_HEM)
     collar_point = COLLAR[0] - COLLAR[1] * 0.012
@@ -684,7 +686,7 @@ def build_coat(figure, collection):
     bm.free()
     centres = np.array([p.center for p in obj.data.polygons])
     part = np.full(len(centres), "coat", dtype=object)
-    part[centres[:, 2] < JACKET_HEM - 0.003] = "trousers"  # the jacket ends at its hem
+    part[centres[:, 2] < JACKET_HEM - TROUSERS_BELOW] = "trousers"  # under the jacket's hem
     zip_line = (np.abs(centres[:, 0]) < ZIP) & (centres[:, 1] < -0.03) & (centres[:, 2] > JACKET_HEM + 0.04)
     collar_band = ((centres - collar_point) @ COLLAR[1] > 0) & (NECK.at(centres) < 0.028)
     part[zip_line | collar_band] = "trim"
