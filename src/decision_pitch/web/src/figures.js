@@ -20,11 +20,12 @@ const STILL = 0.4; // m/s below which a one-shot plays with its whole body
 const LEAST_STEP = 0.35;
 const SET_BLEND = 0.18; // s over which a set (dribble, jockey, shield) comes in or goes
 // Moving slowly to the side or back, a figure side-steps (the jockey set's shuffle) rather
-// than crossing its feet in a part-blended walk: by the angle of travel off its facing,
-// while moving, and below a jog. Not on the ball.
-const SHUFFLE_SIDE = [55 * Math.PI / 180, 80 * Math.PI / 180];
-const SHUFFLE_MOVING = [0.15, 0.4]; // m/s
-const SHUFFLE_SLOW = [1.4, 2.2]; // m/s
+// than crossing its feet in a part-blended walk. The two step differently, so it changes
+// from one to the other (over SET_BLEND) rather than blending them: it starts shuffling
+// past SHUFFLE_SIDE[1] off its facing between SHUFFLE_SPEED[0] and [1], and stops inside
+// SHUFFLE_SIDE[0] or outside SHUFFLE_SPEED[2]..[3]. Not on the ball.
+const SHUFFLE_SIDE = [55 * Math.PI / 180, 70 * Math.PI / 180];
+const SHUFFLE_SPEED = [0.25, 1.7, 0.1, 2.0]; // m/s: on from, on below; off below, off above
 export const TOUCH_PHASE = 0.4; // where a loop without a `touch` meets a carried ball
 // How much faster or slower than its own pace a stride may go to meet the ball on time.
 const STEER = [0.75, 1.3];
@@ -760,6 +761,9 @@ const LOCK_OUT = [0.95, 1.3];
 const LOCK_REACH = [0.2, 0.35]; // m a foot is held over, beyond which the lock gives way
 const HOLDING = [0.02, 0.25]; // of the blend travelling, over which the lock comes in
 const SWING_LIFT = 0.08; // m a foot in the air lifts at most over the clips, at scale 1
+// m a foot in the air keeps its sole above the grass at least, at scale 1, at mid-swing:
+// half a sine over the swing, so it comes down to land.
+const CLEARANCE = 0.03;
 // The pose the page adds over the clips. A body leans into its acceleration, along and
 // across its run (a curve is an acceleration across it), as a runner does, by TILT of the
 // angle that would balance it, at most TILT_MOST; the acceleration is smoothed over
@@ -1000,6 +1004,7 @@ export function createFigures(template, { footLock = true } = {}) {
     const weights = new Float32Array(loops.length);
     const setShares = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
     const jockeySet = steps.set.jockey ?? -1;
+    let shuffling = false; // side-stepping in the jockey shuffle of its own accord
     // Idle variants: idle's own action and one for each other, the one stood in, the one
     // being changed to and how far.
     const idles = steps.idles.map(({ name }) => {
@@ -1073,12 +1078,14 @@ export function createFigures(template, { footLock = true } = {}) {
         const share = (byFoot ? 1 : ramp(moving, ...HOLDING)) * (1 - (i === 0 ? takenLeft : takenRight) / MOST);
         // Stepping with the stride only part of the blend, the foot in the air lifts by the
         // part it lacks, so a slow step clears the grass.
-        const lift = !byFoot && cycle >= duty && share > 1e-3
-          ? SWING_LIFT * scale * share * (1 - moving) * Math.sin(Math.PI * (cycle - duty) / (1 - duty)) : 0;
+        const swing = !byFoot && cycle >= duty ? (cycle - duty) / (1 - duty) : -1;
+        let lift = swing >= 0 && share > 1e-3 ? SWING_LIFT * scale * share * (1 - moving) * Math.sin(Math.PI * swing) : 0;
         const holding = (byFoot || into < LOCK_OUT[1]) && share > 1e-3;
+        // In the air, the sole clears the grass, coming down only to land.
+        const clear = swing >= 0 && share > 1e-3 ? CLEARANCE * scale * share * Math.sin(Math.PI * swing) : 0;
         leg.held = 0;
         if (!holding) leg.down = leg.slack = false;
-        if (!holding && !(lift > 1e-3)) continue;
+        if (!holding && !(lift > 1e-3) && !(clear > 1e-3)) continue;
         const { thigh, shin, foot } = leg;
         if (updated !== thigh.parent) {
           thigh.parent.updateWorldMatrix(true, false);
@@ -1103,6 +1110,13 @@ export function createFigures(template, { footLock = true } = {}) {
         if (leg.held > 1e-3) {
           dx = leg.contact.x - (leg.bearing ? ballAt.x : heelAt.x);
           dz = leg.contact.z - (leg.bearing ? ballAt.z : heelAt.z);
+        }
+        if (clear > 0 && leg.held < 1e-3) {
+          // How far the lower end of the sole is below the clearance it should have.
+          heelAt.copy(leg.heel).applyMatrix4(foot.matrixWorld);
+          ballAt.copy(leg.ball).applyMatrix4(foot.matrixWorld);
+          const low = Math.min(heelAt.y, ballAt.y - leg.rise * scale);
+          lift = Math.max(lift, clear - low);
         }
         if (!(leg.held > 1e-3) && !(lift > 1e-3)) continue;
         footTo.set(footAt.x + dx * leg.held, footAt.y + lift, footAt.z + dz * leg.held);
@@ -1364,9 +1378,11 @@ export function createFigures(template, { footLock = true } = {}) {
         lastTravel = travel;
         const step = Math.max(0, dt);
         const follow = 1 - Math.exp(-step / SET_BLEND);
-        const onBall = sets ? Math.max(sets.dribble || 0, sets.shield || 0) : 0;
-        const shuffle = jockeySet > 0 ? ramp(Math.abs(wrap(travel)), ...SHUFFLE_SIDE) * ramp(speed, ...SHUFFLE_MOVING)
-          * (1 - ramp(speed, ...SHUFFLE_SLOW)) * (1 - onBall) : 0;
+        const onBall = sets ? Math.max(sets.dribble || 0, sets.shield || 0) > 0.5 : false;
+        const off = Math.abs(wrap(travel));
+        if (shuffling) shuffling = !onBall && off > SHUFFLE_SIDE[0] && speed > SHUFFLE_SPEED[2] && speed < SHUFFLE_SPEED[3];
+        else shuffling = jockeySet > 0 && !onBall && off > SHUFFLE_SIDE[1] && speed > SHUFFLE_SPEED[0] && speed < SHUFFLE_SPEED[1];
+        const shuffle = shuffling ? 1 : 0;
         for (let s = 1; s < setShares.length; s++) {
           let target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
           if (s === jockeySet) target = Math.max(target, shuffle);
