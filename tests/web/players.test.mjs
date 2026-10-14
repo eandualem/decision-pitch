@@ -32,7 +32,7 @@ function setup() {
       const snapshot = {
         phase, t: 1, period: 1,
         players: [{ id: 1, x: 0, y: 0, heading: 0, speed: 6, action }],
-        ball: { x: 0, y: 0, z: 0.11, owner: null, touch: null },
+        ball: { x: 0, y: 0, z: 0.11, owner: null, touches: [] },
       };
       actors.update(snapshot, snapshot, 1, 0.1, now);
     },
@@ -41,7 +41,7 @@ function setup() {
 
 const player = (id, x, y, fields = {}) => ({ id, x, y, heading: 0, speed: 0, action: 'move', ...fields });
 const snap = (t, players, ball, phase = 'play') => ({
-  phase, t, period: 1, players, ball: { z: 0.11, owner: null, touch: null, ...ball },
+  phase, t, period: 1, players, ball: { z: 0.11, owner: null, touches: [], ...ball },
 });
 const worldOf = (object) => object.getWorldPosition(new THREE.Vector3());
 
@@ -74,7 +74,7 @@ for (const phase of ['half_time', 'full_time']) {
     try {
       const touch = { player: 1, kind: 'kick', t: 1, x: 0.6, y: 0, z: 0.11 };
       const ready = snap(0.9, [player(1, 0, 0)], { x: 0.6, y: 0, owner: 1 });
-      const kicked = snap(1, [player(1, 0, 0)], { x: 0.9, y: 0, touch });
+      const kicked = snap(1, [player(1, 0, 0)], { x: 0.9, y: 0, touches: [touch] });
       ui.actors.update(ready, ready, 1, 0.016, 0.9, kicked);
       ui.actors.update(ready, kicked, 0.95, 0.016, 0.995, kicked);
       assert.ok(ui.limbs[1].rotation.x < -0.3, `the kick is under way: ${ui.limbs[1].rotation.x}`);
@@ -181,8 +181,8 @@ test('a kick: the leg winds up, meets the ball as it leaves and follows through'
   const contactT = t0 + STEP;
   const touch = { player: 2, kind: 'kick', t: contactT, x: 0.6, y: 0, z: 0.11 };
   const a = snap(t0, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2 });
-  const b = snap(contactT, [player(2, 0, 0)], { x: 0.9, y: 0, touch });
-  const c = snap(contactT + STEP, [player(2, 0, 0)], { x: 1.5, y: 0, touch });
+  const b = snap(contactT, [player(2, 0, 0)], { x: 0.9, y: 0, touches: [touch] });
+  const c = snap(contactT + STEP, [player(2, 0, 0)], { x: 1.5, y: 0, touches: [touch] });
   // The newest snapshot already has the kick 0.1 s before the drawn match reaches it.
   const z = snap(t0 - 3 * STEP, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2 });
   ui.actors.update(z, a, 0, 1 / 60, 0.9, b);
@@ -209,15 +209,15 @@ test('control, tackle and deflection each move the toucher at the moment of cont
   for (const kind of ['control', 'tackle', 'deflect']) {
     const ui = setup();
     const touch = { player: 2, kind, t: 2, x: 0.6, y: 0, z: 0.11 };
-    const s = snap(2, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch });
+    const s = snap(2, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touches: [touch] });
     const before = snap(1.9, [player(2, 0, 0)], { x: 2, y: 0 });
     ui.actors.update(before, s, 0.5, 1 / 60, 1);
     const resting = ui.forward.limbs[1].rotation.x;
     ui.actors.update(s, s, 1, 1 / 60, 1.1);
-    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch }), 0.5, 1 / 60, 1.15);
+    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touches: [touch] }), 0.5, 1 / 60, 1.15);
     assert.ok(ui.forward.limbs[1].rotation.x < resting - 0.2, `${kind}: the leg goes to the ball`);
-    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch }), 1, 1 / 60, 2);
-    const late = snap(3, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch });
+    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touches: [touch] }), 1, 1 / 60, 2);
+    const late = snap(3, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touches: [touch] });
     ui.actors.update(late, late, 1, 1 / 60, 3);
     assert.equal(ui.forward.limbs[1].rotation.x + 0, 0, `${kind}: the pose ends`);
   }
@@ -227,7 +227,7 @@ test('a throw-in swings both arms over the head', () => {
   const ui = setup();
   const touch = { player: 2, kind: 'throw', t: 2, x: 0, y: 34, z: 0.11 };
   const waiting = snap(1.9, [player(2, 0, 33.5)], { x: 0, y: 34, owner: 2 }, 'throw_in');
-  const thrown = snap(2, [player(2, 0, 33.5)], { x: 0, y: 33.8, touch });
+  const thrown = snap(2, [player(2, 0, 33.5)], { x: 0, y: 33.8, touches: [touch] });
   ui.actors.update(waiting, waiting, 1, 1 / 60, 1, thrown);
   ui.actors.update(waiting, waiting, 1, 1 / 60, 1.1, thrown);
   // 0.02 s before the ball leaves the hands
@@ -239,8 +239,8 @@ test('a throw-in swings both arms over the head', () => {
 // Renders a goalkeeper touch from 0.1 s before contact to `after` s past it, as the page would.
 function keeperTouch(ui, touch, keeperAt, ball) {
   const before = snap(touch.t - 0.1, [player(1, ...keeperAt)], ball);
-  const after = snap(touch.t, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touch });
-  const later = snap(touch.t + 1.5, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touch });
+  const after = snap(touch.t, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touches: [touch] });
+  const later = snap(touch.t + 1.5, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touches: [touch] });
   ui.actors.update(before, before, 1, 1 / 60, 1, after);
   return (since) => {
     const time = touch.t - 1 / 120 + since;
@@ -298,10 +298,47 @@ test('a diving goalkeeper leans into its dive', () => {
   assert.ok(Math.abs(ui.keeper.body.rotation.z) < 0.02, 'and gets up again');
 });
 
+test('players trading the ball in a duel do not restart their lunge on every exchange', () => {
+  const duel = setup();
+  const single = setup();
+  const tackle = (player, t) => ({ player, kind: 'tackle', t, x: 0.5, y: 0, z: 0.11 });
+  const first = tackle(2, 2);
+  const exchanges = [first, tackle(1, 2 + 1 / 60), tackle(2, 2 + 2 / 60), tackle(1, 2 + 3 / 60), tackle(2, 2 + 4 / 60)];
+  const players = [player(1, 1, 0, { heading: Math.PI }), player(2, 0, 0)];
+  const a = snap(1.9, players, { x: 0.5, y: 0, owner: 1 });
+  for (let i = 0; i <= 30; i++) {
+    const time = 1.9 + i / 100;
+    const shown = exchanges.filter(t => t.t <= time + 0.1);
+    const b = snap(2.2, players, { x: 0.5, y: 0, owner: 2, touches: shown });
+    duel.actors.update(a, b, (time - 1.9) / 0.3, 1 / 100, time, b);
+    single.actors.update(a, { ...b, ball: { ...b.ball, touches: [first] } }, (time - 1.9) / 0.3, 1 / 100, time, b);
+    assert.equal(duel.forward.limbs[1].rotation.x, single.forward.limbs[1].rotation.x, `one lunge at ${time}`);
+  }
+  assert.ok(duel.keeper.limbs[1].rotation.x < -0.5, 'the other player lunges once too');
+});
+
+test('a kick blocked within one snapshot shows the swing and the ball meets both players', () => {
+  const ui = setup();
+  const kick = { player: 2, kind: 'kick', t: 2 - 1 / 60, x: 0.6, y: 0, z: 0.11 };
+  const block = { player: 1, kind: 'deflect', t: 2, x: 1.0, y: 0, z: 0.11 };
+  const players = [player(1, 1.4, 0, { heading: Math.PI }), player(2, 0, 0)];
+  const a = snap(2 - STEP, players, { x: 0.6, y: 0, owner: 2 });
+  const b = snap(2, players, { x: 0.8, y: 0.3, touches: [kick, block] });
+  const ballAt = (time) => {
+    ui.actors.update(a, b, (time - a.t) / STEP, 1 / 240, time, b);
+    return ui.ball.position.x;
+  };
+  ballAt(a.t);
+  assert.ok(Math.abs(ballAt(kick.t - 1 / 120) - 0.6) < 1e-9, 'at the kicker\'s boot at the kick');
+  assert.ok(Math.abs(ballAt(block.t - 1 / 120) - 1.0) < 1e-9, 'at the blocker at the block');
+  ballAt(2);
+  assert.ok(ui.forward.limbs[1].rotation.x < -0.2, 'the kicker swung');
+});
+
 test('a touch from before the page joined is not replayed', () => {
   const ui = setup();
   const touch = { player: 2, kind: 'kick', t: 1, x: 0.6, y: 0, z: 0.11 };
-  const s = snap(9, [player(2, 0, 0)], { x: 20, y: 0, touch });
+  const s = snap(9, [player(2, 0, 0)], { x: 20, y: 0, touches: [touch] });
   ui.actors.update(s, s, 1, 1 / 60, 1);
   ui.actors.update(s, s, 1, 1 / 60, 1.1);
   assert.equal(ui.forward.limbs[1].rotation.x + 0, 0);
@@ -312,9 +349,9 @@ test('picking up a loose ball settles it onto the feet without a jump', () => {
   const touch = { player: 2, kind: 'control', t: 1 + STEP, x: 0.9, y: 0.1, z: 0.11 };
   const frames = [
     snap(1, [player(2, 0, 0, { speed: 3 })], { x: 1.6, y: 0.2 }),
-    snap(1 + STEP, [player(2, 0.1, 0, { speed: 3 })], { x: 0.7, y: 0, owner: 2, touch }),
-    snap(1 + 2 * STEP, [player(2, 0.2, 0, { speed: 3 })], { x: 0.8, y: 0, owner: 2, touch }),
-    snap(1 + 3 * STEP, [player(2, 0.3, 0, { speed: 3 })], { x: 0.9, y: 0, owner: 2, touch }),
+    snap(1 + STEP, [player(2, 0.1, 0, { speed: 3 })], { x: 0.7, y: 0, owner: 2, touches: [touch] }),
+    snap(1 + 2 * STEP, [player(2, 0.2, 0, { speed: 3 })], { x: 0.8, y: 0, owner: 2, touches: [touch] }),
+    snap(1 + 3 * STEP, [player(2, 0.3, 0, { speed: 3 })], { x: 0.9, y: 0, owner: 2, touches: [touch] }),
   ];
   let last = null;
   for (let i = 0; i < 3; i++) {

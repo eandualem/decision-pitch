@@ -39,6 +39,10 @@ const POSES = {
   throw: { end: 0.5, arms: [[-0.25, 0], [-0.1, -3.4], [0, -2.5], [0.2, -1.2], [0.5, 0]], pitch: [[-0.25, 0], [-0.1, -0.15], [0, 0.12], [0.5, 0]] },
 };
 const KEEPER_POSE = { end: 0.95, envelope: [[-0.16, 0], [0, 1], [0.4, 1], [0.95, 0]] };
+// A touch interrupts a player's pose only once that pose has played this long, or if it
+// matters more: two players trading the ball in a duel do not twitch with every exchange.
+const REPOSE = 0.25; // s
+const WEIGHT = { control: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
 
 // What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up.
 export function reach(lateral, height, diving) {
@@ -194,18 +198,25 @@ export function createPlayers(scene, teams) {
   let spinRate = 0; // rad/s
   const seen = new Map(); // touches already posed, by key, with their time
 
-  // Start the pose for a touch the engine reports, timed to its moment of contact. A
+  // Start the pose for each touch the engine reports, timed to its moment of contact. A
   // touch in a snapshot still ahead of the render time gets its wind-up.
-  function notice(touch, snapshot, time) {
-    if (!touch) return;
-    const key = `${touch.t}:${touch.player}:${touch.kind}`;
-    if (seen.has(key)) return;
-    seen.set(key, touch.t);
-    if (seen.size > 32) for (const [old, t] of seen) if (t < time - 2) seen.delete(old);
+  function notice(snapshot, time) {
+    for (const touch of snapshot?.ball?.touches ?? []) {
+      const key = `${touch.t}:${touch.player}:${touch.kind}`;
+      if (seen.has(key)) continue;
+      seen.set(key, touch.t);
+      if (seen.size > 32) for (const [old, t] of seen) if (t < time - 2) seen.delete(old);
+      startPose(touch, snapshot, time);
+    }
+  }
+
+  function startPose(touch, snapshot, time) {
     const at = touch.t - HALF_STEP;
     const actor = actors.get(touch.player);
     const keeper = touch.kind === 'save' || touch.kind === 'catch';
-    if (!actor || at < time - 0.3 || (actor.pose && actor.pose.at > at) || !(keeper || POSES[touch.kind])) return;
+    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT)) return;
+    const playing = actor.pose;
+    if (playing && (playing.at > at || (at - playing.at < REPOSE && WEIGHT[touch.kind] <= WEIGHT[playing.kind]))) return;
     const pose = { kind: touch.kind, at, from: time - at, end: keeper ? KEEPER_POSE.end : POSES[touch.kind].end };
     if (keeper) {
       const player = snapshot.players.find(p => p.id === touch.player);
@@ -233,8 +244,8 @@ export function createPlayers(scene, teams) {
     // The engine preserves its last velocities and commands at the interval/whistle.
     const stopped = after.phase === 'half_time' || after.phase === 'full_time';
     if (!stopped) {
-      notice(after.ball.touch, after, time);
-      if (latest && latest !== after) notice(latest.ball?.touch, latest, time);
+      notice(after, time);
+      if (latest !== after) notice(latest, time);
     }
     for (const actor of actors.values()) actor.group.visible = false;
     for (const player of after.players) {
@@ -302,21 +313,30 @@ export function createPlayers(scene, teams) {
       body.position.y = lift;
     }
 
-    // The ball as the engine sends it, through the point of any touch at its moment.
+    // The ball as the engine sends it, through the point of each touch at its moment.
     const oldBall = from.ball;
     const newBall = after.ball;
     const ballTeleport = Math.hypot(newBall.x - oldBall.x, newBall.y - oldBall.y) > 10;
-    const touch = newBall.touch;
-    const contact = touch ? touch.t - HALF_STEP : NaN;
-    let path;
-    let f;
-    if (!reset && !ballTeleport && contact > from.t && contact < after.t) {
-      [path, f] = time <= contact ? [[oldBall, touch], (time - from.t) / (contact - from.t)]
-        : [[touch, newBall], (time - contact) / (after.t - contact)];
-    } else [path, f] = [[oldBall, newBall], ballTeleport ? 1 : blend];
-    let x = mix(path[0].x, path[1].x, f);
-    let z = -mix(path[0].y, path[1].y, f);
-    const height = mix(path[0].z, path[1].z, f);
+    let start = oldBall;
+    let end = newBall;
+    let f = ballTeleport ? 1 : blend;
+    if (!reset && !ballTeleport) {
+      let startT = from.t;
+      for (const touch of newBall.touches ?? []) {
+        const contact = touch.t - HALF_STEP;
+        if (contact <= startT || contact >= after.t) continue;
+        if (time <= contact) {
+          end = touch;
+          f = (time - startT) / (contact - startT);
+          break;
+        }
+        [start, startT] = [touch, contact];
+        f = (time - startT) / (after.t - startT);
+      }
+    }
+    let x = mix(start.x, end.x, f);
+    let z = -mix(start.y, end.y, f);
+    const height = mix(start.z, end.z, f);
     // Carried, it is drawn at the drawn feet, nudged ahead by each touch of the stride.
     const owner = newBall.owner;
     const carrier = after.phase === 'play' && !reset && owner != null && oldBall.owner === owner ? actors.get(owner) : null;

@@ -1,10 +1,10 @@
-"""The snapshot's record of the latest touch of the ball and of a goalkeeper's dive, which
+"""The snapshot's record of the latest touches of the ball and of a goalkeeper's dive, which
 the page draws contact from. Reading them must change nothing in play."""
 
 import math
 
 from decision_pitch import pitch
-from decision_pitch.match import CONTROL_SPEED, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import CONTROL_SPEED, RECENT_TOUCHES, Hold, KickTo, Match, MoveTo
 from decision_pitch.physics import BALL_RADIUS, STEP
 
 
@@ -34,9 +34,14 @@ def run(m, seconds):
         m.step()
 
 
+def latest(snapshot):
+    touches = snapshot["ball"]["touches"]
+    return touches[-1] if touches else None
+
+
 def test_a_new_match_has_no_touch_and_no_dive():
     snapshot = Match().snapshot()
-    assert snapshot["ball"]["touch"] is None
+    assert snapshot["ball"]["touches"] == []
     assert not any("dive" in p for p in snapshot["players"])
 
 
@@ -47,7 +52,7 @@ def test_a_kick_is_recorded_with_its_kicker_time_and_where_the_ball_was():
     m.command(p.id, KickTo(30.0, 0.0, 20.0))
     m.step()
     snapshot = m.snapshot()
-    touch = snapshot["ball"]["touch"]
+    touch = latest(snapshot)
     assert touch == {"player": p.id, "kind": "kick", "t": snapshot["t"], "x": 0.0, "y": 0.0, "z": BALL_RADIUS}
     assert m.ball.vx > 15  # the ball is on its way: the record is of the touch, not after it
 
@@ -61,8 +66,8 @@ def test_a_throw_in_is_recorded_as_a_throw():
     m.command(thrower.id, KickTo(10.0, 10.0, 12.0))
     m.step()
     assert m.phase == "play"
-    assert m.snapshot()["ball"]["touch"]["kind"] == "throw"
-    assert m.snapshot()["ball"]["touch"]["player"] == thrower.id
+    assert latest(m.snapshot())["kind"] == "throw"
+    assert latest(m.snapshot())["player"] == thrower.id
 
 
 def test_taking_a_loose_ball_is_a_control_and_carrying_it_adds_no_touch():
@@ -76,13 +81,13 @@ def test_taking_a_loose_ball_is_a_control_and_carrying_it_adds_no_touch():
             taken = m.snapshot()
             break
     assert taken is not None
-    touch = taken["ball"]["touch"]
+    touch = latest(taken)
     assert (touch["player"], touch["kind"], touch["t"]) == (p.id, "control", taken["t"])
     assert touch["x"] > -1.0  # where it met the ball, before it was carried
     m.command(p.id, MoveTo(30.0, 0.0))
     run(m, 1.0)
     assert m.owner == p.id
-    assert m.snapshot()["ball"]["touch"] == touch
+    assert list(m.touches) == [touch]
 
 
 def test_taking_the_ball_off_an_opponent_is_a_tackle():
@@ -94,7 +99,7 @@ def test_taking_the_ball_off_an_opponent_is_a_tackle():
     challenger.x, challenger.y = 1.0, 0.0  # standing nearer the ball: no foul to judge
     m.step()
     assert m.owner == challenger.id
-    touch = m.snapshot()["ball"]["touch"]
+    touch = latest(m.snapshot())
     assert (touch["player"], touch["kind"]) == (challenger.id, "tackle")
     assert m.drain_events() == []
 
@@ -105,10 +110,10 @@ def test_a_ball_too_fast_to_control_is_a_deflection():
     p.x, p.y = 0.0, 0.0
     for _ in range(30):
         m.step()
-        if m.touch:
+        if m.touches:
             break
     assert m.owner is None
-    touch = m.snapshot()["ball"]["touch"]
+    touch = latest(m.snapshot())
     assert (touch["player"], touch["kind"]) == (p.id, "deflect")
 
 
@@ -119,9 +124,9 @@ def test_a_goalkeeper_parrying_a_shot_in_its_area_is_a_save():
     gk.x, gk.y = goal + 2, 0.0
     for _ in range(60):
         m.step()
-        if m.touch:
+        if m.touches:
             break
-    touch = m.snapshot()["ball"]["touch"]
+    touch = latest(m.snapshot())
     assert (touch["player"], touch["kind"]) == (gk.id, "save")
     assert touch["y"] > 0.5  # it reached across to the ball
 
@@ -131,9 +136,12 @@ def test_a_goalkeeper_taking_the_ball_in_its_area_is_a_catch():
     m = in_play(ball=(goal + 8, 0.0), velocity=(-6.0, 0.0, 0.0))
     gk = keeper(m, 0)
     gk.x, gk.y = goal + 2, 0.0
-    run(m, 1.5)
+    for _ in range(90):
+        m.step()
+        if m.touches:
+            break
     assert m.owner == gk.id
-    touch = m.snapshot()["ball"]["touch"]
+    touch = latest(m.snapshot())
     assert (touch["player"], touch["kind"]) == (gk.id, "catch")
 
 
@@ -142,7 +150,44 @@ def test_walking_up_to_a_ball_placed_for_a_restart_is_not_a_touch():
     taker = min((p for p in m.players if p.team == 0), key=lambda p: math.hypot(p.x, p.y))
     run(m, 0.5)
     assert m.owner == taker.id and m.phase == "kickoff"
-    assert m.snapshot()["ball"]["touch"] is None
+    assert latest(m.snapshot()) is None
+
+
+def test_each_touch_is_repeated_for_a_tenth_of_a_second_so_no_snapshot_misses_it():
+    m = in_play(ball=(0.0, 0.0))
+    p = outfield(m)
+    p.x, p.y = -0.5, 0.0
+    m.command(p.id, KickTo(30.0, 0.0, 20.0))
+    m.step()
+    touch = latest(m.snapshot())
+    seen = 0
+    while m.t < touch["t"] + 0.3:
+        m.step()
+        seen += touch in m.snapshot()["ball"]["touches"]
+    assert seen == round(RECENT_TOUCHES / STEP)
+    assert m.snapshot()["ball"]["touches"] == []
+
+
+def test_a_kick_met_at_once_by_another_player_keeps_both_touches_in_order():
+    m = in_play(ball=(0.0, 0.0))
+    kicker, blocker = outfield(m, 0), outfield(m, 1)
+    kicker.x, kicker.y = -0.5, 0.0
+    blocker.x, blocker.y = 0.9, 0.0  # the ball reaches it the next step, too fast to control
+    m.command(kicker.id, KickTo(30.0, 0.0, 26.0))
+    m.step()
+    m.step()
+    touches = m.snapshot()["ball"]["touches"]
+    assert [(t["player"], t["kind"]) for t in touches] == [(kicker.id, "kick"), (blocker.id, "deflect")]
+    assert touches[0]["t"] < touches[1]["t"]
+
+
+def test_a_kick_in_the_step_the_ball_is_taken_replaces_that_first_touch():
+    m = in_play(ball=(0.0, 0.0))
+    p = outfield(m)
+    p.x, p.y = -0.5, 0.0
+    m.command(p.id, KickTo(30.0, 0.0, 20.0))
+    m.step()  # it takes the loose ball and kicks it at once
+    assert [t["kind"] for t in m.snapshot()["ball"]["touches"]] == ["kick"]
 
 
 def test_a_goalkeeper_diving_across_its_goal_is_flagged_while_it_dives():
@@ -167,6 +212,6 @@ def test_reading_the_snapshot_changes_nothing():
     m.command(p.id, KickTo(30.0, 0.0, 20.0))
     m.step()
     first = m.snapshot()
-    first["ball"]["touch"]["kind"] = "changed by the reader"
-    assert m.snapshot()["ball"]["touch"]["kind"] == "kick"
+    first["ball"]["touches"][0]["kind"] = "changed by the reader"
+    assert latest(m.snapshot())["kind"] == "kick"
     assert m.snapshot() == m.snapshot()

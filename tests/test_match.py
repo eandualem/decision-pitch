@@ -249,7 +249,7 @@ def test_a_snapshot_lists_every_player_and_the_ball():
     snapshot = m.snapshot()
     assert snapshot["type"] == "snapshot" and snapshot["phase"] == "kickoff"
     assert len(snapshot["players"]) == 22
-    assert set(snapshot["ball"]) == {"x", "y", "z", "owner", "touch"}
+    assert set(snapshot["ball"]) == {"x", "y", "z", "owner", "touches"}
     assert snapshot["players"][0]["action"] == "hold"
 
 

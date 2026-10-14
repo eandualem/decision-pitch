@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
 
 from decision_pitch import pitch
@@ -77,6 +78,7 @@ GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-s
 SUBSTITUTES = 5  # substitutions a team may make
 WINDOWS = 3  # stoppages it may make them in, half time not counted
 FEWEST = 7  # players a team needs to play on
+RECENT_TOUCHES = 0.1  # s of touches each snapshot repeats, so none falls between two of them
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -149,7 +151,7 @@ class Match:
         self.window_at: list[int | None] = [None, None]  # the stoppage of each team's latest
         self.stoppage = 0  # counts the restarts
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
-        self.touch: dict | None = None  # the latest touch of the ball, for the page
+        self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
         self.diving: set[int] = set()  # goalkeepers diving across their goal this step
         self._kickoff(0, place_players=True)
 
@@ -197,7 +199,7 @@ class Match:
                 "y": round(b.y, 3),
                 "z": round(b.z, 3),
                 "owner": self.owner,
-                "touch": dict(self.touch) if self.touch else None,
+                "touches": [dict(touch) for touch in self.touches if touch["t"] >= self.t - RECENT_TOUCHES],
             },
             "players": [self._player_snapshot(p) for p in self.players],
         }
@@ -456,10 +458,14 @@ class Match:
 
     def _touched(self, p: Player, kind: str) -> None:
         """Record `p`'s touch of the ball, where the ball is as it touches it, for the page
-        to show (docs/protocol.md). It changes nothing in play."""
+        to show (docs/protocol.md). A kick straight after taking the ball, in the same step,
+        replaces the touch it follows. It changes nothing in play."""
         b = self.ball
-        self.touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
-                      "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
+        touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
+                 "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
+        if self.touches and (self.touches[-1]["t"], self.touches[-1]["player"]) == (touch["t"], p.id):
+            self.touches.pop()
+        self.touches.append(touch)
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:
         return self._in_own_penalty_area(self.ball.x, self.ball.y, team)
