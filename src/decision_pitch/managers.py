@@ -14,6 +14,7 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import anthropic
 import httpx
 
 from decision_pitch.arena import apis
@@ -204,6 +205,7 @@ def _slowness(squad: Players, p: Player) -> tuple:
 DEFAULT_MODEL = "gpt-5.4-mini"
 ASSISTANT_MODEL = "gpt-5.4-nano"
 CHAT = "https://api.openai.com/v1/chat/completions"
+CLAUDE_MODEL = "claude-haiku-5-5"  # the manager and its assistants on Anthropic
 BRIEF = (
     "You manage a soccer team in a real-time match between decision models. Each of your "
     "players is driven by a decision model that is asked again as soon as its last answer "
@@ -238,6 +240,8 @@ class LanguageModel:
     """A manager that asks an LLM on OpenAI's Chat Completions API, with its answer held to
     a JSON schema. The key comes from the environment only and is never shown."""
 
+    assistant = ASSISTANT_MODEL
+
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
@@ -265,7 +269,7 @@ class LanguageModel:
         feed = situation.feed
         if self._assistants:
             notes = await asyncio.gather(
-                *(self._ask(ASSISTANT_MODEL, brief, feed) for brief in self._assistants),
+                *(self._ask(self.assistant, brief, feed) for brief in self._assistants),
                 return_exceptions=True,
             )
             heard = [f"Assistant {i + 1}: {note}" for i, note in enumerate(notes) if isinstance(note, str)]
@@ -310,6 +314,44 @@ class LanguageModel:
         if not response.is_success:
             raise RuntimeError(f"HTTP {response.status_code}: {apis._detail(response, self._key)}")
         content = response.json()["choices"][0]["message"]["content"]
+        return json.loads(content) if schema else content.strip()
+
+
+class Claude(LanguageModel):
+    """A manager that asks Claude on Anthropic's Messages API, with its answer held to a
+    JSON schema by structured outputs. The key comes from the environment only and is
+    never shown."""
+
+    assistant = CLAUDE_MODEL
+
+    def __init__(
+        self,
+        model: str = CLAUDE_MODEL,
+        assistants: int = 0,
+        http_client: anthropic.DefaultAsyncHttpxClient | None = None,
+    ) -> None:
+        if not 0 <= assistants <= len(ASSISTANTS):
+            raise ValueError(f"a manager can have up to {len(ASSISTANTS)} assistants")
+        self.name, self._model, self._assistants = model, model, ASSISTANTS[:assistants]
+        self._key = apis._key("ANTHROPIC_API_KEY", "The Anthropic manager")
+        self._client = anthropic.AsyncAnthropic(api_key=self._key, http_client=http_client, timeout=30.0)
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+    async def _ask(self, model: str, system: str, feed: str, schema: dict | None = None):
+        """The model's answer to `feed`: an object held to `schema`, or else plain text."""
+        config: dict = {"effort": "low"}
+        if schema:
+            config["format"] = {"type": "json_schema", "schema": schema}
+        try:
+            response = await self._client.messages.create(
+                model=model, max_tokens=8000, system=system,
+                messages=[{"role": "user", "content": feed}], output_config=config,
+            )  # fmt: skip
+        except anthropic.APIStatusError as exc:
+            raise RuntimeError(f"HTTP {exc.status_code}: {apis._detail(exc.response, self._key)}") from None
+        content = "".join(block.text for block in response.content if block.type == "text")
         return json.loads(content) if schema else content.strip()
 
 

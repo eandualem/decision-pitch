@@ -353,13 +353,22 @@ configured waits for the maintainer's go-ahead with its expected cost.
   an answer cannot name anyone else's. A failed line-up falls back to the
   built-in manager's, and a failed consultation changes nothing. Recorded on
   14 October 2026: a consultation took 2 to 5 s and 800 to 1,400 tokens.
+- **Claude as the manager.** `--home-manager anthropic` (or
+  `anthropic:MODEL`) asks Claude on Anthropic's Messages API instead, through
+  the official `anthropic` Python SDK, with the same briefs, feed and schemas:
+  the answer is held to the schema by structured outputs
+  (`output_config.format`), at low effort. The model is `claude-haiku-5-5`
+  unless another is named, and assistants use `claude-haiku-5-5` too. The key
+  is `ANTHROPIC_API_KEY`, from the environment or `.env` only, and is never
+  logged or shown; an error is reported by its HTTP status, as for OpenAI.
 
 **Why.** A fixed interval keeps an LLM manager's cost known in advance
 (about 25 consultations a team in a match of two three-minute halves) while
 it still sees each phase of play. A JSON schema makes every answer parseable
-without retries. OpenAI is the one language-model provider whose key is
-configured here; another provider is one more request function behind the
-same interface.
+without retries. OpenAI and Anthropic each need only their own request
+function behind the same interface. Claude Haiku 5.5 is the default for its
+low price ($0.10 and $0.50 per million input and output tokens), so a test
+match costs a few cents; a larger model can be named for a real match.
 
 **Rejected.** Consulting the manager at every event: goals and cards come in
 bursts, and a manager that lags behind them would be asked again before it

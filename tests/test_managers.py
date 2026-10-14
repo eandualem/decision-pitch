@@ -3,10 +3,12 @@ import json
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
+from anthropic import DefaultAsyncHttpxClient
 
 from decision_pitch import actions, managers
-from decision_pitch.managers import Advice, BuiltIn, LanguageModel, Staff
+from decision_pitch.managers import Advice, BuiltIn, Claude, LanguageModel, Staff
 from decision_pitch.match import Match
 from decision_pitch.players import Players
 from decision_pitch.server import fast, hello, main, run
@@ -201,6 +203,62 @@ def test_a_failed_consultation_changes_nothing_and_never_shows_the_key(monkeypat
     assert "Your last consultation failed (HTTP 500" in feed and KEY not in feed
 
 
+class RecordedClaude:
+    """Anthropic's Messages API replaying the same recorded answers as Recorded."""
+
+    def __init__(self):
+        self.requests, self.advised = [], 0
+
+    def __call__(self, request):
+        body = json.loads(request.content)
+        self.requests.append(request)
+        schema = body["output_config"].get("format", {}).get("schema")
+        if schema is None:
+            content = RECORDED["assistant"]
+        elif "lineup" in schema["properties"]:
+            content = RECORDED["lineup"]
+        else:
+            content = RECORDED["advice"][self.advised % len(RECORDED["advice"])]
+            self.advised += 1
+        return httpx2.Response(200, json={
+            "id": "msg_test", "type": "message", "role": "assistant", "model": body["model"],
+            "content": [{"type": "text", "text": content}], "stop_reason": "end_turn",
+            "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1},
+        })  # fmt: skip
+
+
+def test_claude_manages_a_full_match_with_substitutions(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    api = RecordedClaude()
+    manager = Claude(assistants=1, http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(api)))
+    staff = staffed(manager, options=({"bot": None, "laya": Fake("Laya"), "jev": Fake("Jev")}, {"bot": None}),
+                    match=Match(half_length=60.0, seed=1))  # fmt: skip
+    sent = play(staff)
+    assert staff.match.phase == "full_time"
+    assert all(request.headers["x-api-key"] == KEY for request in api.requests)
+    bodies = [json.loads(request.content) for request in api.requests]
+    assert {body["model"] for body in bodies} == {managers.CLAUDE_MODEL}
+    assert bodies[0]["output_config"]["effort"] == "low" and "Kick-off is next" in bodies[0]["messages"][0]["content"]
+    made = {(m["off"], m["on"]) for m in sent if m.get("kind") == "substitution" and m["team"] == 0
+            and m["type"] == "event"}  # fmt: skip
+    assert made == {(8, 26), (11, 28)}
+    assert any("format" not in body["output_config"] for body in bodies)  # an assistant's note
+
+
+def test_a_failed_claude_consultation_never_shows_the_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+
+    def fail(request):
+        return httpx2.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
+                                                                     "message": f"bad request for {KEY}"}})
+
+    staff = staffed(Claude(http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(fail))))
+    asyncio.run(staff.line_up())  # falls back to the built-in line-up
+    asyncio.run(staff.consult(0))
+    feed = staff.feed(0)
+    assert "Your last consultation failed (HTTP 400" in feed and KEY not in feed
+
+
 def test_the_page_is_told_each_team_s_manager_and_models(monkeypatch):
     staff = staffed(options=({"laya": Fake("Laya")}, {"bot": None}))
     asyncio.run(staff.line_up())
@@ -210,11 +268,14 @@ def test_the_page_is_told_each_team_s_manager_and_models(monkeypatch):
     assert {p["model"] for p in teams[1]["players"]} == {None}
 
 
-def test_a_language_model_manager_without_its_key_says_which_key(capsys):
+@pytest.mark.parametrize("manager, key", [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])
+def test_a_language_model_manager_without_its_key_says_which_key(manager, key, capsys, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)  # no .env
+    monkeypatch.delenv(key, raising=False)
     with pytest.raises(SystemExit) as stopped:
-        main(["--headless", "--home-manager", "openai"])
+        main(["--headless", "--home-manager", manager])
     assert stopped.value.code == 2
-    assert "OPENAI_API_KEY" in capsys.readouterr().err
+    assert key in capsys.readouterr().err
 
 
 def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys):
