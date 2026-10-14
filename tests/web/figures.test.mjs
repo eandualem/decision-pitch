@@ -419,6 +419,84 @@ test('the page leans a body into its acceleration and turns its hips to the stri
   made.dispose();
 });
 
+test('a figure turning on the spot steps round with the turn; at a run it cuts, and it brakes to a stop', () => {
+  const made = createFigures(fixtureMore());
+  const turner = made.create({ seed: 3 });
+  // Turning left at 9 rad/s, standing: the turn clip's time follows the turn.
+  let state;
+  for (let i = 0; i < 6; i++) {
+    turner.object.rotation.y = 9 * i / 60;
+    turner.update(1 / 60, 0, 0);
+    state = turner.state();
+  }
+  assert.equal(state.move?.name, 'turn_L');
+  const turned = 9 * 5 / 60; // rad since the turn began
+  assert.ok(near(state.move.time, 0.05 + 0.4 * turned / (Math.PI / 2), 0.02), `following the turn: ${state.move.time}`);
+  assert.ok(turner.state().acts.some(a => a.name === 'turn_L' && a.weight > 0), 'it shows');
+  // Turning right, the other way.
+  const other = made.create({ seed: 4 });
+  for (let i = 0; i < 6; i++) {
+    other.object.rotation.y = -9 * i / 60;
+    other.update(1 / 60, 0, 0);
+  }
+  assert.equal(other.state().move?.name, 'turn_R');
+  // At 6 m/s, its run turning to the left at 3 rad/s: a cut to the left.
+  const cutter = made.create({ seed: 5 });
+  for (let i = 0; i < 30; i++) cutter.update(1 / 60, 6, 0);
+  for (let i = 0; i < 6; i++) {
+    cutter.object.rotation.y = 3 * i / 60;
+    cutter.update(1 / 60, 6, 0);
+  }
+  assert.equal(cutter.state().move?.name, 'cut_L');
+  // A steady curve is not a cut.
+  const runner = made.create({ seed: 6 });
+  for (let i = 0; i < 90; i++) {
+    runner.object.rotation.y = i / 60;
+    runner.update(1 / 60, 5, 0);
+    assert.equal(runner.state().move, null);
+  }
+  // Slowing hard from a run: the braking step.
+  const braker = made.create({ seed: 7 });
+  for (let i = 0; i < 30; i++) braker.update(1 / 60, 7, 0);
+  for (let i = 0; i < 20 && !braker.state().move; i++) braker.update(1 / 60, 7 - i * 6 / 60, 0);
+  assert.equal(braker.state().move?.name, 'brake');
+  // A figure without these clips makes none of them.
+  const plain = createFigures(fixture()).create({ seed: 3 });
+  for (let i = 0; i < 6; i++) {
+    plain.object.rotation.y = 9 * i / 60;
+    plain.update(1 / 60, 0, 0);
+  }
+  assert.equal(plain.state().move, null);
+  made.dispose();
+});
+
+test('standing, each person has its own idle and changes it now and then, with a cross-fade', () => {
+  const made = createFigures(fixtureMore());
+  const idleOf = (seed) => {
+    const person = made.create({ seed });
+    person.update(1 / 60, 0, 0);
+    return person.state().idle;
+  };
+  assert.equal(idleOf(3), idleOf(3), 'the same for the same id');
+  const chosen = new Set(Array.from({ length: 22 }, (_, i) => idleOf(i + 1)));
+  assert.ok(chosen.size >= 3, `a range of idles: ${[...chosen]}`);
+  const person = made.create({ seed: 8 });
+  person.update(1 / 60, 0, 0);
+  const first = person.state().idle;
+  assert.deepEqual(person.state().idles, { [first]: 1 }, 'standing in it alone');
+  let both = false;
+  for (let i = 0; i < 60 * 16 && person.state().idle === first; i++) {
+    person.update(1 / 60, 0, 0);
+    both ||= Object.keys(person.state().idles).length === 2;
+  }
+  assert.notEqual(person.state().idle, first, 'it changes within 16 s');
+  assert.ok(both, 'cross-fading from one to the other');
+  // Running, no idle shows.
+  for (let i = 0; i < 30; i++) person.update(1 / 60, 4, 0);
+  assert.deepEqual(person.state().idles, {});
+  made.dispose();
+});
+
 test('a late-seen wind-up plays faster, at most twice, and contact lands on the touch', () => {
   assert.equal(contactTime(0, -0.1, 0.4), 0.4);
   assert.ok(near(contactTime(0.2, -0.1, 0.4), 0.6), 'its own pace after contact');

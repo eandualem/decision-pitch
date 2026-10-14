@@ -733,6 +733,24 @@ const POSTURE = [0.03, 0.05]; // rad the back bends forwards, and by how much mo
 const ARMS_OUT = [0.03, 0.12]; // rad the upper arms are held out from the sides, least to most
 const ELBOWS = [0, 0.3]; // rad more the elbows bend, least to most
 const COUNTER = { chest: 0.5, neck: 0.3 }; // of the hips' turn the chest and neck turn back
+// Moves the figure makes of itself from how it moves (one-shots in figure.json, when it
+// has them). A turn on the spot (turn_L, turn_R) when it turns faster than TURNING_FAST
+// below TURNING_SLOW m/s, its clip time following the turn; a cut (cut_L, cut_R) when its
+// run turns faster than CUTTING above CUTTING_SPEED, planting a moment later; a braking
+// step (brake) when it slows harder than BRAKING from above BRAKING_SPEED.
+const TURNING_FAST = 2.5; // rad/s
+const TURNING_SLOW = 1;
+const TURNING_DONE = 0.6; // rad/s below which a turn has finished
+const CUTTING = 2; // rad/s
+const CUTTING_SPEED = 3.5;
+const BRAKING = 3.5; // m/s2
+const BRAKING_SPEED = 3;
+const PLANT = 0.1; // s from seeing a cut or a brake to its plant
+const MOVE_SHARE = { turn: 1, cut: 0.7, brake: 0.75 }; // of the body each takes
+const MOVE_AGAIN = { turn: 0, cut: 0.5, brake: 1 }; // s before the same kind again
+// Idle variants (gait.idles): a person stands in its own and changes now and then.
+const IDLE_CHANGE = [6, 14]; // s between changes, least and most
+const IDLE_FADE = 0.8; // s
 const HEEL = 0.35; // the heel's distance behind the ankle, over the ankle-to-toe length
 const ROCK = 0.01; // m lower the other end of the sole must be to take the weight
 const LIFTED = [0.03, 0.06]; // m up over which a sole is no longer on the ground
@@ -930,6 +948,31 @@ export function createFigures(template, { footLock = true } = {}) {
     });
     const weights = new Float32Array(loops.length);
     const setShares = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
+    // Idle variants: idle's own action and one for each other, the one stood in, the one
+    // being changed to and how far.
+    const idles = steps.idles.map(({ name }) => {
+      if (name === steps.loops[0].name) return loops[0];
+      const clip = template.clips.get(name);
+      if (!clip) return null;
+      const action = mixer.clipAction(clip);
+      action.weight = 0;
+      action.play();
+      return action;
+    });
+    const idleSeed = seedOf(seed);
+    let idleNow = idles.length ? Math.floor(look.style.idle * idles.length) : -1;
+    let idleNext = -1;
+    let idleFade = 0;
+    let idleChanges = 0;
+    let idleAt = 0;
+    let idleChange = mix(...IDLE_CHANGE, hash01(idleSeed, 100));
+    // The move under way (turn, cut or brake), the heading and travel last frame, and when
+    // each kind last began.
+    const move = { kind: null, name: null, time: 0, turned: 0, total: 0, from: 0, to: 0, rate: 1, began: 0, share: 0, ending: false };
+    const lastMove = { turn: -Infinity, cut: -Infinity, brake: -Infinity };
+    let clock = 0;
+    let lastYaw = null;
+    let lastWay = null;
     const slots = Array.from({ length: SLOTS }, () => ({ name: null, time: 0, share: 0, layer: 'play' }));
     let acting = 0;
     // One-shot actions by clip, each with the last frame it showed in; those that showed
@@ -1017,6 +1060,89 @@ export function createFigures(template, { footLock = true } = {}) {
         footTo.set(footAt.x + dx * leg.held, footAt.y, footAt.z + dz * leg.held);
         reachFor(thigh, shin, foot, footTo);
       }
+    }
+
+    // Shares idle's weight between the idle variants, changing now and then.
+    function standIdle(step, weight) {
+      if (idleNow < 0) return;
+      idleAt += step;
+      if (idleNext < 0 && idleAt >= idleChange && idles.length > 1) {
+        idleChanges++;
+        idleNext = (idleNow + 1 + Math.floor(hash01(idleSeed, 200 + idleChanges) * (idles.length - 1))) % idles.length;
+        idleFade = 0;
+      }
+      if (idleNext >= 0) {
+        idleFade = Math.min(1, idleFade + step / IDLE_FADE);
+        if (idleFade >= 1) {
+          idleNow = idleNext;
+          idleNext = -1;
+          idleAt = 0;
+          idleChange = mix(...IDLE_CHANGE, hash01(idleSeed, 300 + idleChanges));
+        }
+      }
+      const fade = idleNext >= 0 ? smooth(idleFade) : 0;
+      for (let i = 0; i < idles.length; i++) {
+        const action = idles[i];
+        if (!action) continue;
+        action.weight = weight * (i === idleNow ? 1 - fade : i === idleNext ? fade : 0);
+        action.time = idle % steps.idles[i].duration;
+      }
+    }
+
+    // Starts and plays the moves a figure makes of itself from how it moves: a turn on the
+    // spot, a cut, a braking step (see TURNING_FAST). Each plays whole, over the loops.
+    function moves(step, speed, travel) {
+      const yaw = object.rotation.y;
+      const way = yaw + travel;
+      const turning = lastYaw === null || !(step > 0) ? 0 : wrap(yaw - lastYaw) / step;
+      const running = lastWay === null || !(step > 0) || speed < 1 ? 0 : wrap(way - lastWay) / step;
+      lastYaw = yaw;
+      lastWay = way;
+      const slowing = -(ax * Math.sin(way) + az * Math.cos(way));
+      // Another one-shot (a kick, a gesture) takes the body: no move begins under it.
+      let others = 0;
+      for (let i = 0; i < acting; i++) others = Math.max(others, slots[i].share);
+      if (!move.kind && others === 0) {
+        if (speed < TURNING_SLOW && Math.abs(turning) > TURNING_FAST) begin('turn', turning > 0 ? 'turn_L' : 'turn_R', speed);
+        else if (speed > CUTTING_SPEED && Math.abs(running) > CUTTING) begin('cut', running > 0 ? 'cut_L' : 'cut_R', speed);
+        else if (speed > BRAKING_SPEED && slowing > BRAKING) begin('brake', 'brake', speed);
+      }
+      if (!move.kind) return;
+      const clip = template.described[move.name];
+      if (move.kind === 'turn') {
+        // The clip turns as far as the figure does, then steps out of the turn at its own
+        // pace; a longer turn begins another.
+        const along = Math.sign(move.total) * turning * step;
+        if (!move.ending) {
+          move.turned += Math.max(0, along);
+          move.time = move.from + (move.to - move.from) * Math.min(1, move.turned / Math.abs(move.total));
+        }
+        if (Math.abs(turning) < TURNING_DONE || along < 0 || speed > TURNING_SLOW * 2 || move.turned >= Math.abs(move.total)) move.ending = true;
+        if (move.ending) move.time += step;
+      } else move.time = contactTime(clock - move.began - PLANT, -PLANT, clip.contact ?? 0);
+      const left = clip.duration - move.time;
+      if (left <= 0) {
+        move.kind = null;
+        return;
+      }
+      const share = MOVE_SHARE[move.kind] * clamp((clock - move.began) / 0.08, 0, 1) * clamp(left / 0.2, 0, 1) * (1 - others);
+      person.act(move.name, move.time, share, 'whole');
+    }
+
+    function begin(kind, name, speed) {
+      const clip = template.described[name];
+      if (!clip || !template.clips.has(name) || clock - lastMove[kind] < MOVE_AGAIN[kind]) return;
+      move.kind = kind;
+      move.name = name;
+      move.began = clock;
+      move.ending = false;
+      move.turned = 0;
+      move.total = (Number.isFinite(clip.turn) ? clip.turn : name.endsWith('_L') ? 90 : -90) * Math.PI / 180;
+      const window = Array.isArray(clip.turning) ? clip.turning : [0, clip.duration];
+      move.from = window[0];
+      move.to = window[1];
+      move.time = kind === 'turn' ? move.from : 0;
+      lastMove[kind] = clock;
     }
 
     // Adds the page's pose over the clips: the hips turned to the stride (gait.yaw) with the
@@ -1141,6 +1267,9 @@ export function createFigures(template, { footLock = true } = {}) {
           loop.weight = weights[i];
           loop.time = made > 0 ? phase * duration : idle % duration;
         }
+        standIdle(step, weights[0]);
+        clock += step;
+        moves(step, speed, travel);
         // Over the loops, which sum to one, a weight of s / (1 - s) takes a share s.
         frame++;
         const still = 1 - ramp(speed, STILL, steps.walk);
@@ -1196,6 +1325,9 @@ export function createFigures(template, { footLock = true } = {}) {
         return {
           speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach(),
           feet: legs.map(leg => leg.held), duty: shownDuty, hips, tilt, style,
+          move: move.kind && { kind: move.kind, name: move.name, time: move.time },
+          idle: idleNow >= 0 ? steps.idles[idleNow].name : null,
+          idles: Object.fromEntries(steps.idles.map((variant, i) => [variant.name, idles[i]?.weight ?? 0]).filter(([, w]) => w > 0)),
         };
       },
     };
