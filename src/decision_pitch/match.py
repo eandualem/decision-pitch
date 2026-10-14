@@ -56,7 +56,9 @@ KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
 KICK_RECOVERY = 0.25  # s after a kick before the kicker can play the ball again
 KICK_ERROR = 0.002  # radians of aim error per m/s of kick speed
-KICKOFF_WAIT = 5.0  # s players have to take their places before they are placed
+KICKOFF_WAIT = 10.0  # s players have to take their places for a kick-off before they are placed
+RETREAT_WAIT = 5.0  # s opponents have to retreat at any other restart before they are placed
+OUT_OF_PLACE = 0.2  # m out of place beyond which a player runs back instead of being put right
 SET_PIECE_WAIT = 1.5  # s before a free kick or penalty can be taken
 HALF_TIME = 3.0  # s
 RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick": 9.15, "throw_in": 2.0,
@@ -281,7 +283,10 @@ class Match:
 
     def _move(self, p: Player) -> None:
         command = self.commands[p.id]
-        if isinstance(command, MoveTo):
+        if self._out_of_place(p) > OUT_OF_PLACE:
+            # the laws ask it to retreat, whatever it was told
+            step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
+        elif isinstance(command, MoveTo):
             step_player(p, command.x, command.y, command.speed)
         elif isinstance(command, KickTo) and self.owner != p.id:
             # run at the ball from behind, so the kick goes the right way
@@ -331,14 +336,14 @@ class Match:
         self.owner = nearest.id
 
     def _may_kick(self, p: Player) -> bool:
-        if self.phase in ("free_kick", "penalty"):
-            return self.since_restart >= SET_PIECE_WAIT
-        if self.phase != "kickoff":
+        if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
+            return False
+        if self.phase == "play" or self.phase == "penalty":
             return True
-        if self.since_restart >= KICKOFF_WAIT:
-            self._place_for_kickoff()
+        if self.since_restart >= (KICKOFF_WAIT if self.phase == "kickoff" else RETREAT_WAIT):
+            self._keep_distance(everyone=True)  # anyone still out of place is placed
             return True
-        return self._kickoff_ready()
+        return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
@@ -537,53 +542,63 @@ class Match:
         self._restart("kickoff", team, 0.0, 0.0)
         self.events.pop()  # a kick-off is not shown as an event
         if place_players:
-            self._place_for_kickoff(formation=True)
+            self._place_for_kickoff()
 
-    def _kickoff_ready(self) -> bool:
+    def _place_for_kickoff(self) -> None:
         for p in self.players:
             side = -self.attack(p.team)
-            if p.x * side < -0.5:
-                return False  # in the opponents' half
-            if p.team != self.restart_team and math.hypot(p.x, p.y) < pitch.CENTRE_RADIUS:
-                return False
-        return True
+            p.x, p.y = -side * p.home[0], -side * p.home[1]
+            p.vx = p.vy = 0.0
+            p.heading = 0.0 if side < 0 else math.pi
+            self.commands[p.id] = Hold()
+        self._keep_distance(everyone=True)
+        # the kicking team's most advanced player stands at the ball
+        team = [p for p in self.players if p.team == self.restart_team]
+        taker = max(team, key=lambda p: p.home[0])
+        side = -self.attack(taker.team)
+        taker.x, taker.y = side * 0.6, 0.0
 
-    def _place_for_kickoff(self, formation: bool = False) -> None:
-        for p in self.players:
-            side = -self.attack(p.team)
-            if formation:
-                p.x, p.y = -side * p.home[0], -side * p.home[1]
-                p.vx = p.vy = 0.0
-                p.heading = 0.0 if side < 0 else math.pi
-                self.commands[p.id] = Hold()
-            if p.x * side < 0:
-                p.x = 0.0
-        self._keep_distance()
-        if formation:  # the kicking team's most advanced player stands at the ball
-            team = [p for p in self.players if p.team == self.restart_team]
-            taker = max(team, key=lambda p: p.home[0])
-            side = -self.attack(taker.team)
-            taker.x, taker.y = side * 0.6, 0.0
-
-    def _keep_distance(self) -> None:
-        """Opponents of the restarting team keep their distance from the ball."""
+    def _keep_distance(self, everyone: bool = False) -> None:
+        """Put right the players only just out of place for the restart, or `everyone`;
+        the others are running back (see _move)."""
         if self.phase == "penalty":
             self._line_up_for_penalty()
             return
-        distance = RESTART_DISTANCE[self.phase]
         for p in self.players:
-            if p.team == self.restart_team:
-                continue
-            self._keep_away(p, distance)
+            if everyone or self._out_of_place(p) <= OUT_OF_PLACE:
+                p.x, p.y = self._allowed_spot(p)
+
+    def _allowed_spot(self, p: Player, margin: float = 0.0) -> tuple[float, float]:
+        """The nearest spot to `p` where the laws let it stand for this restart, `margin` m
+        clear of the line: in its own half at a kick-off, and as far from the ball as the
+        restart requires if it is an opponent of the restarting team."""
+        x, y = p.x, p.y
+        if self.phase == "kickoff" and x * -self.attack(p.team) < 0:
+            x = -self.attack(p.team) * margin  # back over halfway
+        if p.team != self.restart_team and self.phase in RESTART_DISTANCE:
+            x, y = self._away(p, x, y, RESTART_DISTANCE[self.phase] + margin)
+        return x, y
+
+    def _out_of_place(self, p: Player) -> float:
+        """How far `p` is from where the laws let it stand for this restart; 0 in play, and
+        at a penalty, whose line-up is placed."""
+        if self.phase not in RESTARTS or self.phase == "penalty":
+            return 0.0
+        x, y = self._allowed_spot(p)
+        return math.hypot(x - p.x, y - p.y)
+
+    def _away(self, p: Player, x: float, y: float, distance: float) -> tuple[float, float]:
+        """(x, y), moved out to `distance` from the ball if it is nearer."""
+        dx, dy = x - self.ball.x, y - self.ball.y
+        dist = math.hypot(dx, dy)
+        if dist >= distance:
+            return x, y
+        if dist == 0:
+            dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
+        return self.ball.x + dx / dist * distance, self.ball.y + dy / dist * distance
 
     def _keep_away(self, p: Player, distance: float) -> None:
-        dx, dy = p.x - self.ball.x, p.y - self.ball.y
-        dist = math.hypot(dx, dy)
-        if dist < distance:
-            if dist == 0:
-                dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
-            p.x = self.ball.x + dx / dist * distance
-            p.y = self.ball.y + dy / dist * distance
+        p.x, p.y = self._away(p, p.x, p.y, distance)
 
     def _line_up_for_penalty(self) -> None:
         """The defending goalkeeper on its goal line; everyone else but the taker outside the

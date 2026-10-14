@@ -3,8 +3,8 @@ import math
 import pytest
 
 from decision_pitch import bots, pitch
-from decision_pitch.match import HALF_TIME, THROW_MAX, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import BALL_RADIUS, STEP
+from decision_pitch.match import HALF_TIME, KICKOFF_WAIT, OUT_OF_PLACE, THROW_MAX, Hold, KickTo, Match, MoveTo
+from decision_pitch.physics import BALL_RADIUS, STEP, TOP_SPEED
 
 
 def in_play(ball=(0.0, 0.0), velocity=(0.0, 0.0, 0.0), last_touch=0):
@@ -85,7 +85,7 @@ def test_opponents_keep_their_distance_at_a_corner():
     defender = next(p for p in m.players if p.team == 1)
     defender.x, defender.y = pitch.HALF_LENGTH - 2, pitch.HALF_WIDTH - 2
     m.command(defender.id, MoveTo(m.ball.x, m.ball.y))
-    run(m, 1)
+    run(m, 3)  # it runs back, then is held there
     assert math.hypot(defender.x - m.ball.x, defender.y - m.ball.y) >= 9.15 - 1e-9
     assert m.phase == "corner"
 
@@ -217,16 +217,40 @@ def test_a_player_cannot_carry_the_ball_through_a_post():
     assert m.phase == "play" and m.ball.x < pitch.HALF_LENGTH
 
 
-def test_an_opponent_on_the_centre_spot_at_kick_off_is_moved_into_its_own_half():
+def test_an_opponent_on_the_centre_spot_at_kick_off_runs_into_its_own_half():
     m = Match()
     for p in m.players:  # nobody nearby to nudge the opponent off the spot
         if p.team == 0 and abs(p.x) < 2:
             p.x = -20.0
     opponent = next(p for p in m.players if p.team == 1)
     opponent.x, opponent.y = 0.0, 0.0
-    m.step()
+    run(m, 3)
     assert opponent.x * m.attack(1) <= 0
     assert math.hypot(opponent.x, opponent.y) >= pitch.CENTRE_RADIUS - 1e-9
+
+
+def test_players_run_back_for_a_kick_off_after_a_goal_and_it_waits_for_them():
+    m = Match()
+    m.phase, m.restart_team = "play", None
+    scorer = m.player(10)
+    scorer.x, scorer.y = pitch.HALF_LENGTH - 5, 0.0  # in the opponents' penalty area
+    m.ball.place(pitch.HALF_LENGTH, 0.0)
+    m.ball.vx = 10.0
+    m.step()
+    assert m.score == [1, 0]
+    assert m.phase == "kickoff" and m.restart_team == 1
+    for p in m.players:  # everyone else is in place, and the kick-off is ready to be taken
+        if p is not scorer:
+            p.x = -abs(p.x) if p.team == 0 else abs(p.x)
+    taker = next(p for p in m.players if p.team == 1 and p.position == "FW")
+    taker.x, taker.y = 0.6, 0.0
+    m.command(taker.id, KickTo(20.0, 0.0, 10.0))
+    m.command(scorer.id, Hold())
+    while m.phase == "kickoff":
+        x = scorer.x
+        m.step()
+        assert abs(scorer.x - x) <= TOP_SPEED * STEP + OUT_OF_PLACE  # no jump
+    assert scorer.x <= 0 and m.since_restart < KICKOFF_WAIT
 
 
 def test_a_goalkeeper_has_no_extra_reach_for_a_ball_outside_its_area():
