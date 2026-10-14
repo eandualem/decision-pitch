@@ -210,8 +210,7 @@
   ],
   "jaw_strong": [
    "body",
-   "eyes",
-   "coat"
+   "eyes"
   ],
   "nose_big": [
    "body"
@@ -219,8 +218,8 @@
  },
  "number": "number",
  "triangles": {
-  "body": 9018,
-  "coat": 4182,
+  "body": 8988,
+  "coat": 4238,
   "eyes": 280,
   "hair_bald": 160,
   "hair_bun": 1000,

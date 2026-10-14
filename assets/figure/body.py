@@ -127,23 +127,25 @@ TRUNK = [
 ]
 
 
-def shoulders():
-    """The shoulder girdle, left side: shoulder blade, trapezius and deltoid."""
+def shoulders(neck=True):
+    """The shoulder girdle, left side: shoulder blade, trapezius and deltoid, and with
+    `neck` the slope of the trapezius up the back of the neck."""
     blade = Ellipsoid((0.085, 0.085, 1.34), (0.062, 0.030, 0.075))
     trapezius = Cone((0.035, 0.040, 1.488), (0.175, 0.035, 1.468), 0.040, 0.036)
     neck_slope = Cone((0.0, 0.045, 1.53), (0.10, 0.04, 1.478), 0.035, 0.030)
     deltoid = Ellipsoid(UPPER_ARM.at(0.10, out=0.021, front=0.002), (0.058, 0.064, 0.092), UPPER_ARM.axes)
     deltoid_front = Ellipsoid(UPPER_ARM.at(0.14, out=0.004, front=0.026), (0.038, 0.036, 0.068), UPPER_ARM.axes)
-    return [blade, trapezius, neck_slope, deltoid, deltoid_front]
+    return [blade, trapezius, deltoid, deltoid_front] + ([neck_slope] if neck else [])
 
 
-def trunk_core(chest=True):
-    """The trunk with its muscles; without `chest` for the shirt, which hides the pectorals."""
+def trunk_core(chest=True, neck=True):
+    """The trunk with its muscles; without `chest` for the shirt, which hides the pectorals,
+    and without `neck` for the jacket, whose collar stands around the neck instead."""
     trunk = Loft(TRUNK, power=2.4, cap=0.03)
     pecs = Ellipsoid((0.070, -0.058, 1.335), (0.086, 0.030, 0.064), S.rotation(rz=-0.12))
     lats = Ellipsoid((0.125, 0.040, 1.26), (0.050, 0.064, 0.125), S.rotation(ry=0.22))
     glute = Ellipsoid((0.072, 0.072, 0.905), (0.078, 0.060, 0.085))
-    return Union([trunk] + _both(([pecs] if chest else []) + [lats, glute] + shoulders()), k=0.035)
+    return Union([trunk] + _both(([pecs] if chest else []) + [lats, glute] + shoulders(neck)), k=0.035)
 
 
 # How the shorts hang from the waist to the crotch: sections as for the trunk.
@@ -634,18 +636,25 @@ def build_coat(figure, collection):
     sleeves = _both([_keep_before(arm, "wrist", -0.03)])
     # A straight line from the collar to the shoulder's point, as a jacket's shoulder seam holds it.
     seam = Cone((0.045, 0.035, 1.505), (0.212, 0.030, 1.472), 0.034, 0.034)
-    core = Union([Loft(JACKET, power=2.4, cap=0.02), figure.trunk, figure.shorts, Loft(DRAPE, power=2.4)]
-                 + _both(shoulders() + [seam]) + sleeves, k=0.02)
+    core = Union([Loft(JACKET, power=2.4, cap=0.02), trunk_core(neck=False), figure.shorts, Loft(DRAPE, power=2.4)]
+                 + _both(shoulders(neck=False) + [seam]) + sleeves, k=0.02)
     jacket = _above(Shell(core, 0.017), JACKET_HEM)
     waistband = Within(_above(Shell(core, 0.024), JACKET_HEM), Plane((0, 0, JACKET_HEM + 0.035), (0, 0, 1),
                                                                       core.lo - 0.1, core.hi + 0.1))
     cuffs = _both([Shell(_keep_after(_keep_before(arm, "wrist", -0.03), "wrist", -0.065), 0.024)])
     point, normal = COLLAR
-    band = Shell(NECK, 0.016)
+    # A band standing clear of the neck, open at the top, so nothing of it crosses the neck.
+    band = Cut(Shell(NECK, 0.019), Shell(NECK, 0.010))
     box = (band.lo - 0.1, band.hi + 0.1)
     collar = Within(Within(band, Plane(point + normal * 0.05, normal, *box)), Plane(point - normal * 0.015, -normal, *box))
-    # Hollow below the chest, so the hem and the cuffs are open like cloth.
-    top = Cut(Union([jacket, waistband, collar] + cuffs, k=0.004), _below(Shell(core, 0.011), 1.30))
+    # The jacket opens around the collar's foot, so the collar stands clear of it.
+    opening = Within(Shell(NECK, 0.019), Plane(point - normal * 0.012, -normal, *box))
+    jacket = Cut(jacket, opening, k=0.004)
+    # Hollow inside the waistband and the cuffs, where the cloth is thickest, so the hem
+    # and the cuffs are open like cloth.
+    hollow = Union([_below(Shell(core, 0.011), JACKET_HEM + 0.03)]
+                   + _both([Shell(_keep_after(_keep_before(arm, "wrist", -0.03), "wrist", -0.06), 0.011)]))
+    top = Cut(Union([jacket, waistband, collar] + cuffs, k=0.003), hollow)
     # The zip: a shallow groove down the middle of the front, through the collar.
     slab = Box((0.0, -0.25, 1.25), (0.0025, 0.13, 0.40))
     top = Cut(top, Cut(slab, Shell(core, 0.015)), k=0.002)
@@ -659,8 +668,6 @@ def build_coat(figure, collection):
     coat = Union([top, trousers], k=0.006)
     figure.jacket_core, figure.trousers = core, trousers
     verts, quads = S.mesh_field(coat, STEP)
-    # Open the collar where it closes over the neck.
-    verts, quads = keep_vertices(verts, quads, NECK.at(verts) > 0.004)
     obj = mesh_object("coat", smooth(verts, quads, 1), quads, collection)
     collapse(obj, COAT_TRIANGLES)
     # The jacket and the trousers are separate materials, so the page can colour them apart,
@@ -688,7 +695,8 @@ def build_coat(figure, collection):
     part = np.full(len(centres), "coat", dtype=object)
     part[centres[:, 2] < JACKET_HEM - TROUSERS_BELOW] = "trousers"  # under the jacket's hem
     zip_line = (np.abs(centres[:, 0]) < ZIP) & (centres[:, 1] < -0.03) & (centres[:, 2] > JACKET_HEM + 0.04)
-    collar_band = ((centres - collar_point) @ COLLAR[1] > 0) & (NECK.at(centres) < 0.028)
+    # The collar is where the collar's own shape, not the jacket's, makes the surface.
+    collar_band = ((centres - collar_point) @ COLLAR[1] > 0) & (collar.at(centres) < jacket.at(centres))
     part[zip_line | collar_band] = "trim"
     _assign(obj, COAT_MATERIALS, part)
     for poly in obj.data.polygons:
