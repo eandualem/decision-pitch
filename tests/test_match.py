@@ -164,6 +164,16 @@ def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():
     assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), bots.JOG)
 
 
+def test_the_goalkeeper_gets_across_to_a_shot_but_lets_a_wide_one_go():
+    m = in_play(ball=(-30.0, 0.0), velocity=(-22.0, -3.0, 0.0))  # 3 m off centre at the line
+    keeper = m.player(1)
+    keeper.x, keeper.y = -51.0, 0.0
+    goes = bots.command(m, keeper)
+    assert goes.x == -51.0 and goes.y == pytest.approx(-3.0 * 21 / 22)
+    m.ball.vy = -6.0  # 6 m off centre at the line: wide
+    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper))
+
+
 def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
     m = in_play(ball=(0.5, 0.0))
     carrier, opponent = m.player(7), m.player(18)

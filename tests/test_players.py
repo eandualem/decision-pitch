@@ -9,7 +9,7 @@ import pytest
 from decision_pitch import actions, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
-from decision_pitch.bots import DRIBBLE_SPEED, _home, _taker
+from decision_pitch.bots import DRIBBLE_SPEED, _home, _save_spot, _taker
 from decision_pitch.match import TEAMS, Hold, KickTo, Match, MoveTo, Team
 from decision_pitch.players import FAILURE_WAIT, Players
 from decision_pitch.server import main, run, seat
@@ -125,6 +125,15 @@ def test_without_the_ball_only_the_nearest_goes_for_it_to_kick_it():
     for action in ("dribble", "pass", "shoot", "clear"):
         assert actions.command(match, nearest, action) != actions.command(match, nearest, "hold")
         assert actions.command(match, other, action) == MoveTo(*_home(match, other), 5.0)
+
+
+def test_a_model_goalkeeper_gets_across_to_a_shot_as_the_bot_does():
+    match = in_play(Match())
+    keeper = match.player(1)
+    match.ball.place(keeper.x + 20, keeper.y)
+    match.ball.vx, match.ball.vy = -22.0, -3.0
+    for action in ("hold", "support"):
+        assert actions.command(match, keeper, action) == MoveTo(keeper.x, _save_spot(match, keeper)[1])
 
 
 def test_a_presser_does_not_chase_its_own_teammate_on_the_ball():

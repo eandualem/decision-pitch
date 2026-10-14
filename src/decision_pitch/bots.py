@@ -26,6 +26,7 @@ ROUND_INTERCEPT = 2.0  # s ahead, at most, that it aims to meet the ball once in
 ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the ball
 CHASE_AHEAD = 3.0  # s of a loose ball's path searched for the player who reaches it first
 CHASE_STEP = 0.1  # s between the points of that path
+SAVE_MARGIN = 1.0  # m outside a post within which a goalkeeper still covers a shot
 
 
 def play(match: Match) -> None:
@@ -55,6 +56,8 @@ def command(m: Match, p: Player) -> Command:
     if m.owner is not None and m.player(m.owner).team == p.team:
         return MoveTo(*_home(m, p, attacking=True), JOG)
     if p.position == "GK":
+        if spot := _save_spot(m, p):
+            return MoveTo(*spot)
         if _ball_in_own_area(m, p) and p.id == _nearest(m, p.team).id:
             return MoveTo(m.ball.x, m.ball.y)
         return MoveTo(*_goal_line_spot(m, p))
@@ -255,6 +258,18 @@ def _goal_line_spot(m: Match, p: Player) -> tuple[float, float]:
     goal_x = -m.attack(p.team) * pitch.HALF_LENGTH
     y = max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, m.ball.y * 0.25))
     return goal_x + m.attack(p.team) * 1.5, y
+
+
+def _save_spot(m: Match, p: Player) -> tuple[float, float] | None:
+    """Where a goalkeeper gets across to a ball heading into its goal: the ball's line at
+    the keeper's depth. None if the ball is not heading into the goal."""
+    goal_x = -m.attack(p.team) * pitch.HALF_LENGTH
+    b = m.ball
+    if m.owner is not None or (goal_x - b.x) * b.vx <= 0 or (p.x - b.x) * b.vx <= 0:
+        return None  # carried, moving away from the goal, or already past the keeper
+    if abs(b.y + b.vy * (goal_x - b.x) / b.vx) > pitch.GOAL_WIDTH / 2 + SAVE_MARGIN:
+        return None  # going wide
+    return p.x, b.y + b.vy * (p.x - b.x) / b.vx
 
 
 def _ball_in_own_area(m: Match, p: Player) -> bool:
