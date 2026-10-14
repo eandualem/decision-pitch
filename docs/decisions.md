@@ -67,7 +67,13 @@ a test or from the command line without a browser.
   match runs with no model at all. A loose ball is chased by the one player
   of each team who can reach its path first, judged along the next 3 s of the
   ball's flight, so a pass is met by its receiver rather than chased by its
-  passer. A player on the ball dribbles until an opponent is within 2.5 m,
+  passer. Within 6 m of a moving ball, the chaser aims 3 m beyond its
+  meeting spot, so it arrives at full speed; running to the spot itself, it
+  slowed to stop there while the ball rolled on, and ran alongside it for
+  seconds. Over 32 matches with the live model mix this cut loose spells of
+  4 s or more from 11.0 to 7.2 a match and throw-ins from 5.8 to 4.1, and
+  raised shots from 12.4 to 12.9 and goals from 1.34 to 1.59. Running beyond
+  the spot at any distance made those spells longer (12.2 a match). A player on the ball dribbles until an opponent is within 2.5 m,
   then passes. Measured over 16 bot matches of two 180 s halves, these two
   rules raised shots from 3.1 to 6.5 a match and goals from 0.6 to 2.7, with
   throw-ins unchanged. A check that no opponent could cut a pass out on its
