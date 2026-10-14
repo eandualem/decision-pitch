@@ -8,7 +8,7 @@ import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES } from './figure-fixture.m
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const figures = await import('../../src/decision_pitch/web/src/figures.js');
-const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure, reachFor } = figures;
+const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure, reachFor, switchingState } = figures;
 
 const fixture = () => {
   const { scene, animations, info } = fixtureGltf();
@@ -25,7 +25,9 @@ const near = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance;
 
 // The planted foot's velocity against the ground for a blend: each loop's foot moves
 // opposite its travel at its speed times its playback rate, and the figure moves at `speed`.
+// The figure's hips turn by `steps.yaw`, the angle the blended stride misses the travel by.
 function footSlip(steps, weights, rate, scale, speed, travel) {
+  travel -= steps.yaw;
   let fx = 0;
   let fy = 0;
   steps.loops.forEach((loop, i) => {
@@ -158,10 +160,17 @@ test('with loops in eight directions, feet stay planted at any angle and speed, 
       }
     }
   }
-  for (let travel = -Math.PI; travel < Math.PI; travel += 0.01) {
-    blendLoops(steps, 3, travel, 1, before);
-    blendLoops(steps, 3, travel + 0.01, 1, weights);
-    for (let i = 0; i < weights.length; i++) assert.ok(Math.abs(weights[i] - before[i]) < 0.03, `weight jump at ${travel} rad`);
+  // Turning steadily, as a figure does over time, the blend never jumps.
+  const switching = switchingState(steps);
+  switching.dt = 0.003;
+  blendLoops(steps, 3, -Math.PI, 1, before, null, 1, switching);
+  let yaw = steps.yaw;
+  for (let travel = -Math.PI + 0.01; travel < Math.PI; travel += 0.01) {
+    blendLoops(steps, 3, travel, 1, weights, null, 1, switching);
+    for (let i = 0; i < weights.length; i++) assert.ok(Math.abs(weights[i] - before[i]) < 0.04, `weight jump at ${travel} rad`);
+    assert.ok(Math.abs(steps.yaw - yaw) < 0.05, `the hips jump at ${travel} rad: ${yaw} -> ${steps.yaw}`);
+    before.set(weights);
+    yaw = steps.yaw;
   }
   for (let speed = 0; speed < 9; speed += 0.01) {
     const ra = blendLoops(steps, speed, 2.1, 1, before);
@@ -178,6 +187,38 @@ test('with loops in eight directions, feet stay planted at any angle and speed, 
   assert.ok(!names(weights).includes('strafe_L'), 'the side shuffle is the jockey\'s, not the run\'s');
   const angles = new Set(steps.loops.filter((loop, i) => weights[i] > 1e-9 && loop.speed > 0).map(loop => Math.round(loop.angle * 4 / Math.PI)));
   assert.deepEqual([...angles].sort(), [2, 3], `left and back-left only: ${names(weights)}`);
+});
+
+test('walking backwards and stepping back to the side are never blended part way: the figure changes over time', () => {
+  const steps = gait(describeMore());
+  const weights = new Float32Array(steps.loops.length);
+  const footwork = () => new Set(steps.loops.filter((loop, i) => weights[i] > 1e-6 && loop.speed > 0).map(loop => loop.footwork));
+  const deg = (d) => d * Math.PI / 180;
+  // Without a state, the footwork of the nearest direction, its hips turned to the travel.
+  let rate = blendLoops(steps, 2, deg(165), 1, weights);
+  assert.deepEqual([...footwork()], ['back']);
+  assert.ok(near(steps.yaw, deg(-15), 1e-9), `the hips turn by what straight back misses: ${steps.yaw}`);
+  assert.ok(footSlip(steps, weights, rate, 1, 2, deg(165)) < 1e-6, 'planted');
+  rate = blendLoops(steps, 2, deg(150), 1, weights);
+  assert.deepEqual([...footwork()], ['forward']);
+  assert.ok(near(steps.yaw, deg(15), 1e-9), 'or by what back to the side misses');
+  assert.ok(footSlip(steps, weights, rate, 1, 2, deg(150)) < 1e-6, 'planted');
+  // With one, it keeps its footwork just past the middle, and changes over SWITCH s.
+  const switching = switchingState(steps);
+  switching.dt = 1 / 60;
+  blendLoops(steps, 2, deg(140), 1, weights, null, 1, switching);
+  blendLoops(steps, 2, deg(159), 1, weights, null, 1, switching);
+  assert.deepEqual([...footwork()], ['forward'], 'just past the middle it keeps stepping back to the side');
+  let frames = 0;
+  while (footwork().has('forward')) {
+    blendLoops(steps, 2, deg(165), 1, weights, null, 1, switching);
+    frames++;
+    assert.ok(frames < 30, 'it changes within half a second');
+  }
+  assert.ok(frames >= 8, `over a few frames, not at once: ${frames}`);
+  rate = blendLoops(steps, 2, deg(165), 1, weights, null, 1, switching);
+  assert.deepEqual([...footwork()], ['back']);
+  assert.ok(footSlip(steps, weights, rate, 1, 2, deg(165)) < 1e-6, 'planted once changed');
 });
 
 test('a loop may travel at any angle, which wins over its named direction', () => {

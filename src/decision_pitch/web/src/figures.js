@@ -35,6 +35,15 @@ const AXES = [0, Math.PI / 2, -Math.PI, -Math.PI / 2];
 const NAMED = { walk: 'forward', jog: 'forward', sprint: 'forward', backpedal: 'back', strafe_L: 'left', strafe_R: 'right' };
 const TAU = 2 * Math.PI;
 const SAME = 1e-6; // rad within which two loops travel the same way
+// Directions whose feet step differently (walking backwards, and a crossover step back
+// and to the side) are not blended part way, where the feet would slide and collide. Each
+// footwork blends its own directions, and outside them takes the nearest, turning the
+// figure's hips by the angle it misses the travel by (gait.yaw); the figure changes from
+// one footwork to another over SWITCH s, once a direction of the other is nearer the
+// travel by HYSTERESIS rad.
+const SWITCH = 0.15;
+const HYSTERESIS = 0.07;
+const FOOTWORKS = 4; // at most, in one set
 const wrap = (a) => a - TAU * Math.floor((a + Math.PI) / TAU); // into [-pi, pi)
 const around = (a) => a - TAU * Math.floor(a / TAU); // into [0, 2 pi)
 
@@ -113,7 +122,15 @@ export function gait(clips) {
     loops.push({
       name, duration: clip.duration, speed: clip.speed, angle, stride: clip.speed * clip.duration, set,
       touch: Number.isFinite(clip.touch) ? clip.touch : null, duty: clip.duty > 0 && clip.duty < 1 ? clip.duty : null,
+      footwork: typeof clip.footwork === 'string' ? clip.footwork : null,
     });
+  }
+  // A loop's footwork, when figure.json does not say: a run that has loops back and to the
+  // side steps those with its hips turned, and steps backwards only straight back.
+  const diagonalBack = loops.some(loop => loop.set === 'run' && loop.speed > 0 && Math.abs(loop.angle) > 5 * Math.PI / 8 && Math.abs(loop.angle) < 7 * Math.PI / 8);
+  for (const loop of loops) {
+    if (loop.footwork || !(loop.speed > 0)) continue;
+    loop.footwork = diagonalBack && loop.set === 'run' && Math.abs(loop.angle) >= 7 * Math.PI / 8 ? 'back' : 'forward';
   }
   idles.sort((a, b) => (a.name === 'idle' ? -1 : b.name === 'idle' ? 1 : a.name < b.name ? -1 : 1));
   const byAngle = (indices) => {
@@ -168,12 +185,22 @@ export function gait(clips) {
   for (const set of sets) {
     set.ahead = 0;
     set.dirs.forEach((dir, i) => { if (Math.abs(dir.angle) < Math.abs(set.dirs[set.ahead].angle)) set.ahead = i; });
+    // Each direction's footwork, that of most of its loops, and the directions of each.
+    set.footworks = [];
+    for (const dir of set.dirs) {
+      const count = new Map();
+      for (const i of dir.ladder) if (loops[i].footwork) count.set(loops[i].footwork, (count.get(loops[i].footwork) ?? 0) + 1);
+      dir.footwork = [...count].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 'forward';
+      if (!set.footworks.includes(dir.footwork)) set.footworks.push(dir.footwork);
+    }
+    set.footworks.length = Math.min(set.footworks.length, FOOTWORKS);
+    set.members = set.footworks.map(name => set.dirs.flatMap((dir, i) => (dir.footwork === name ? [i] : [])));
   }
   const forward = run.length ? run[sets[0].ahead].ladder : [0];
   const walk = forward.length > 1 ? loops[forward[1]].speed : 1.5;
   const scratch = 3; // the forward step and the two directions either side of the travel
   return {
-    loops, idles, sets, walk, shuffle: SHUFFLE[1],
+    loops, idles, sets, walk, shuffle: SHUFFLE[1], yaw: 0,
     set: Object.fromEntries(sets.map((set, i) => [set.name, i])),
     lower: new Int32Array(scratch), upper: new Int32Array(scratch), t: new Float64Array(scratch),
     stride: new Float64Array(scratch), x: new Float64Array(scratch), y: new Float64Array(scratch),
@@ -194,8 +221,9 @@ export function gait(clips) {
 // whichever way it goes. Sets blend the same way, their strides added by their shares.
 // Below a shuffle the travel is ignored and the figure steps forwards; above it the blends
 // cross-fade.
-export function blendLoops(gait, speed, travel, scale, weights, shares = null, stride = 1) {
+export function blendLoops(gait, speed, travel, scale, weights, shares = null, stride = 1, switching = null) {
   weights.fill(0);
+  gait.yaw = 0;
   const { sets } = gait;
   let others = 0;
   if (shares) for (let s = 1; s < sets.length; s++) if (shares[s] > 0) others += shares[s];
@@ -203,17 +231,34 @@ export function blendLoops(gait, speed, travel, scale, weights, shares = null, s
   const moving = speed > 0;
   const pace = speed / scale; // the speed a figure of scale 1 would move at
   let length = 0;
+  let turned = 0;
   for (let s = 0; s < sets.length; s++) {
     const share = s === 0 ? Math.max(0, 1 - others) : shares && shares[s] > 0 ? shares[s] * norm : 0;
-    if (!(share > 0)) continue;
-    if (moving) length += share * blendSet(gait, sets[s], pace, travel, stride, weights, share);
-    else weights[sets[s].rest] += share;
+    if (!(share > 0) || !moving) {
+      if (share > 0) weights[sets[s].rest] += share;
+      continue;
+    }
+    const part = share * blendSet(gait, s, pace, travel, stride, weights, share, switching);
+    length += part;
+    turned += part * gait.yaw;
   }
+  gait.yaw = length > 1e-9 ? turned / length : 0;
   return moving && length > 1e-9 ? speed / (scale * length) : 0;
 }
 
-// One set's part of the blend, weighted by `share`; returns its blended stride's length.
-function blendSet(gait, set, pace, travel, stride, weights, share) {
+// A figure's state for changing footwork (see SWITCH), for blendLoops: for each set, the
+// footwork it is changing to (-1 before the first blend) and each footwork's share. `dt`
+// is the time since the last blend. Without it, a figure takes the nearest footwork.
+export function switchingState(gait) {
+  const n = gait.sets.length;
+  return { dt: 0, target: new Int32Array(n).fill(-1), shares: new Float32Array(n * FOOTWORKS) };
+}
+
+// One set's part of the blend, weighted by `share`; returns its blended stride's length,
+// and leaves in gait.yaw the angle its stride misses the travel by.
+function blendSet(gait, s, pace, travel, stride, weights, share, switching) {
+  gait.yaw = 0;
+  const set = gait.sets[s];
   const { dirs } = set;
   if (!dirs.length) {
     weights[set.rest] += share;
@@ -229,40 +274,103 @@ function blendSet(gait, set, pace, travel, stride, weights, share) {
     length += (1 - across) * gait.stride[0];
   }
   if (across > 0) {
-    // Along the travel: it is a sum of the directions either side, a.u + b.v, and each
-    // takes a share of the blend in proportion to its part over its stride, so the
-    // strides add up along the travel.
-    const n = dirs.length;
     const heading = wrap(travel);
-    let a = n - 1;
-    for (let i = 0; i < n && dirs[i].angle <= heading; i++) a = i;
-    const b = (a + 1) % n;
-    const from = around(heading - dirs[a].angle);
-    const gap = n > 1 ? around(dirs[b].angle - dirs[a].angle) : TAU;
-    let alongA = 1;
-    let alongB = 0;
-    if (gap < Math.PI - SAME) {
-      alongA = Math.sin(gap - from) / Math.sin(gap);
-      alongB = Math.sin(from) / Math.sin(gap);
-    } else if (gap - from < from) {
-      alongA = 0;
-      alongB = 1;
+    const { footworks } = set;
+    let along = 0;
+    let turned = 0;
+    if (footworks.length === 1) along = blendFootwork(gait, set, 0, heading, select, weights, share * across);
+    else {
+      const shares = footworkShares(set, s, heading, switching);
+      for (let f = 0; f < footworks.length; f++) {
+        const part = shares[s * FOOTWORKS + f];
+        if (!(part > 0)) continue;
+        const reach = part * blendFootwork(gait, set, f, heading, select, weights, share * across * part);
+        along += reach;
+        turned += reach * gait.yaw;
+      }
     }
-    pick(gait, dirs[a].ladder, select, 1);
-    pick(gait, dirs[b].ladder, select, 2);
-    const { stride: strides, x, y } = gait;
-    const wa = alongA > 0 && strides[1] > 0 ? alongA / strides[1] : 0;
-    const wb = alongB > 0 && strides[2] > 0 ? alongB / strides[2] : 0;
-    const total = wa + wb;
-    if (total > 0) {
-      place(gait, weights, 1, share * across * wa / total);
-      place(gait, weights, 2, share * across * wb / total);
-      // Loops borrowed from another direction keep its stride: count them along their own.
-      length += across * Math.hypot((wa * x[1] + wb * x[2]) / total, (wa * y[1] + wb * y[2]) / total);
-    } else weights[set.rest] += share * across;
+    length += across * along;
+    gait.yaw = along > 1e-9 ? across * turned / along : 0; // the hips turn as the steps come round
   }
   return length;
 }
+
+const nearest = new Float32Array(FOOTWORKS);
+const snapped = new Float32Array(FOOTWORKS * 32); // shares by set, without a switching state
+
+// How much of each footwork set `s` shows for travel `heading`: the one with the direction
+// nearest the travel, changed to over time when `switching` is given.
+function footworkShares(set, s, heading, switching) {
+  const { footworks, members, dirs } = set;
+  for (let f = 0; f < footworks.length; f++) {
+    nearest[f] = Infinity;
+    for (const i of members[f]) nearest[f] = Math.min(nearest[f], Math.abs(wrap(heading - dirs[i].angle)));
+  }
+  let best = 0;
+  for (let f = 1; f < footworks.length; f++) if (nearest[f] < nearest[best]) best = f;
+  const base = s * FOOTWORKS;
+  const shares = switching ? switching.shares : snapped;
+  if (!switching || switching.target[s] < 0) {
+    for (let f = 0; f < FOOTWORKS; f++) shares[base + f] = f === best ? 1 : 0;
+    if (switching) switching.target[s] = best;
+    return shares;
+  }
+  if (nearest[best] < nearest[switching.target[s]] - HYSTERESIS) switching.target[s] = best;
+  const target = switching.target[s];
+  const grown = Math.min(1, shares[base + target] + switching.dt / SWITCH);
+  let others = 0;
+  for (let f = 0; f < footworks.length; f++) if (f !== target) others += shares[base + f];
+  for (let f = 0; f < footworks.length; f++) {
+    shares[base + f] = f === target ? grown : others > 0 ? shares[base + f] * (1 - grown) / others : 0;
+  }
+  return shares;
+}
+
+// One footwork's part of a set's blend along `heading`, weighted by `weight`: the two of its
+// directions either side of the travel share it so that the blended stride points along the
+// travel; a travel between two of its directions with another footwork's in between, or more
+// than half a turn apart, takes the nearer and leaves the angle it misses by in gait.yaw.
+// Returns the blended stride's length.
+function blendFootwork(gait, set, f, heading, select, weights, weight) {
+  const { dirs } = set;
+  const members = set.members[f];
+  const n = members.length;
+  let k = n - 1;
+  for (let m = 0; m < n && dirs[members[m]].angle <= heading; m++) k = m;
+  const a = members[k];
+  const b = members[(k + 1) % n];
+  const from = around(heading - dirs[a].angle);
+  const gap = n > 1 ? around(dirs[b].angle - dirs[a].angle) : TAU;
+  // Along the travel: it is a sum of the directions either side, a.u + b.v, and each
+  // takes a share of the blend in proportion to its part over its stride, so the
+  // strides add up along the travel.
+  let alongA = 1;
+  let alongB = 0;
+  gait.yaw = 0;
+  if (gap < Math.PI - SAME && (b === (a + 1) % dirs.length || n === dirs.length)) {
+    alongA = Math.sin(gap - from) / Math.sin(gap);
+    alongB = Math.sin(from) / Math.sin(gap);
+  } else if (gap - from < from) {
+    alongA = 0;
+    alongB = 1;
+    gait.yaw = from - gap;
+  } else gait.yaw = from;
+  pick(gait, dirs[a].ladder, select, 1);
+  pick(gait, dirs[b].ladder, select, 2);
+  const { stride: strides, x, y } = gait;
+  const wa = alongA > 0 && strides[1] > 0 ? alongA / strides[1] : 0;
+  const wb = alongB > 0 && strides[2] > 0 ? alongB / strides[2] : 0;
+  const total = wa + wb;
+  if (!(total > 0)) {
+    weights[set.rest] += weight;
+    return 0;
+  }
+  place(gait, weights, 1, weight * wa / total);
+  place(gait, weights, 2, weight * wb / total);
+  // Loops borrowed from another direction keep its stride: count them along their own.
+  return Math.hypot((wa * x[1] + wb * x[2]) / total, (wa * y[1] + wb * y[2]) / total);
+}
+
 
 // The two loops of `ladder` either side of `select` and how far between them it is, with
 // the stride they blend to, as a length and as a vector, into slot `j` of the scratch.
@@ -709,10 +817,21 @@ export function createFigures(template, { footLock = true } = {}) {
       contact: new THREE.Vector3(), bearing: 0, down: false, slack: false, held: 0,
     }));
     const lockable = footLock && legs.every(leg => leg.thigh?.parent && leg.shin && leg.foot);
+    // The bone the whole skeleton turns about, the hips' parent, and the way up in its
+    // parent's space.
+    const base = legs[0].thigh?.parent?.parent ?? null;
+    const up = new THREE.Vector3(0, 1, 0);
+    if (base?.parent) {
+      template.scene.updateMatrixWorld(true);
+      const rest = template.scene.getObjectByName(base.parent.name);
+      if (rest) up.applyQuaternion(rest.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize();
+    }
+    const switching = switchingState(steps);
     // Bones the page poses over the clips start each frame from their rest, in case no
     // clip keys them.
-    const posed = lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : [];
+    const posed = [...(lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : []), ...(base ? [base] : [])];
     const rests = posed.map(bone => bone.quaternion.clone());
+    const turn = new THREE.Quaternion();
     const palm = new THREE.Vector3();
     const mixer = new THREE.AnimationMixer(object);
     const loops = steps.loops.map(({ name }) => {
@@ -739,6 +858,7 @@ export function createFigures(template, { footLock = true } = {}) {
     let lastSpeed = 0;
     let lastTravel = 0;
     let shownDuty = DUTY;
+    let hips = 0; // rad the skeleton turns so its stride runs along the travel (gait.yaw)
 
     function action(clip) {
       // The same clip twice in a frame (one fading out as it starts again) plays on a twin.
@@ -875,7 +995,9 @@ export function createFigures(template, { footLock = true } = {}) {
           const target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
           setShares[s] += (target - setShares[s]) * follow;
         }
-        rate = blendLoops(steps, speed, travel, scale, weights, setShares);
+        switching.dt = step;
+        rate = blendLoops(steps, speed, travel, scale, weights, setShares, 1, switching);
+        hips = steps.yaw;
         phase = fract(phase + rate * step);
         idle += step; // the clock of the loops that do not travel
         for (let i = 0; i < loops.length; i++) {
@@ -916,6 +1038,7 @@ export function createFigures(template, { footLock = true } = {}) {
         acting = 0;
         for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(rests[i]);
         mixer.update(0);
+        if (base && hips !== 0) base.quaternion.premultiply(turn.setFromAxisAngle(up, hips));
         if (lockable) {
           let moving = 0;
           let duty = 0;
@@ -938,7 +1061,7 @@ export function createFigures(template, { footLock = true } = {}) {
         steps.sets.forEach((set, s) => { if (s > 0 && setShares[s] > 0) shares[set.name] = setShares[s]; });
         return {
           speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach(),
-          feet: legs.map(leg => leg.held), duty: shownDuty,
+          feet: legs.map(leg => leg.held), duty: shownDuty, hips,
         };
       },
     };
