@@ -787,6 +787,29 @@ test('a player turning back on itself steps the new way within a few centimetres
   actors.dispose();
 });
 
+test('two neighbours running side by side at the same speed do not stay in step', () => {
+  // Ids 5 and 58 have strides within 0.02% of each other and start within a hundredth of
+  // a stride: alone, they would run in step all the way.
+  const scene = new THREE.Scene();
+  const actors = createPlayers(scene, [
+    { colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' }, players: [{ id: 5, number: 5, position: 'MF' }] },
+    { colours: { shirt: '#654321', shorts: '#000000', keeper: '#00ccff' }, players: [{ id: 58, number: 8, position: 'DF' }] },
+  ], figureMore);
+  const at = (t) => snap(t, [player(5, 4.5 * t, 0, { speed: 4.5 }), player(58, 4.5 * t, 1.5, { speed: 4.5 })], { x: 40, y: 20 });
+  let together = 0;
+  let frames = 0;
+  for (let t = 1; t < 9; t += STEP / 2) {
+    const t0 = 1 + Math.floor((t - 1) / STEP + 1e-9) * STEP;
+    actors.update(at(t0), at(t0 + STEP), (t - t0) / STEP, STEP / 2, t);
+    if (t < 2) continue;
+    frames++;
+    const apart = Math.abs(((actors.inspect(5).phase - actors.inspect(58).phase) % 1 + 1.5) % 1 - 0.5);
+    if (apart < 0.05) together++;
+  }
+  assert.ok(together / frames < 0.12, `in step ${(100 * together / frames).toFixed(0)}% of the time`);
+  actors.dispose();
+});
+
 test('a goal: the scoring team celebrates, the other does not', () => {
   const scene = new THREE.Scene();
   const actors = createPlayers(scene, [

@@ -85,6 +85,12 @@ const INSTEAD = { cross: 'pass_lofted', pass_lofted: 'pass', shot: 'pass', tackl
 // of its own pace, and it keeps the look of a run with the ball while it chases (CHASE s).
 const CHASE = 4;
 const CATCH = 0.75; // m between a chaser and the ball it knocked when it plays it again (the engine's reach)
+// Neighbours (within NEAR m) running alike (velocities within ALIKE m/s) whose strides are
+// within IN_STEP of a cycle of each other do not stay so: the later of the two quickens
+// its stride (figures.js) until they part.
+const NEAR = 4;
+const ALIKE = 0.8;
+const IN_STEP = 0.08;
 
 // What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up:
 // a dive to that side if it is diving or the ball is beyond its reach, else a catch.
@@ -162,7 +168,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
         diving: false, armed: false,
         celebrateAt: -Infinity,
         // The loop sets the figure shows (figures.js) and the model's latest decision.
-        sets: { dribble: 0, jockey: 0, shield: 0, touchIn: 0 }, decision: null, decidedAt: -Infinity,
+        sets: { dribble: 0, jockey: 0, shield: 0, touchIn: 0, hurry: 0 }, decision: null, decidedAt: -Infinity, id: player.id,
         strideAt: -Infinity, // when its boot is to meet the ball it knocked on or catches up
         chasing: false, // the ball it knocked ahead
       });
@@ -447,6 +453,28 @@ export function createPlayers(scene, teams, figure, options = {}) {
     sets.jockey = (1 - ramp(d, 3, 6)) * ramp(facing, 0.5, 0.85) * (1 - ramp(closing, 1.5, 3.5)) * (1 - ramp(actor.speed, 3.5, 5));
   }
 
+  // Of two neighbours running alike and in step (as drawn last frame), the later hurries.
+  const running = [];
+  function unstep() {
+    running.length = 0;
+    for (const actor of actors.values()) {
+      actor.sets.hurry = 0;
+      if (actor.group.visible && actor.speed > ALIKE) running.push(actor);
+    }
+    for (let i = 0; i < running.length; i++) {
+      const a = running[i];
+      for (let j = i + 1; j < running.length; j++) {
+        const b = running[j];
+        const pa = a.group.position;
+        const pb = b.group.position;
+        if ((pa.x - pb.x) ** 2 + (pa.z - pb.z) ** 2 > NEAR * NEAR) continue;
+        if ((a.vx - b.vx) ** 2 + (a.vy - b.vy) ** 2 > ALIKE * ALIKE) continue;
+        const apart = Math.abs(((a.person.phase - b.person.phase) % 1 + 1.5) % 1 - 0.5);
+        if (apart < IN_STEP) (a.id > b.id ? a : b).sets.hurry = 1;
+      }
+    }
+  }
+
   function update(before, after, alpha, dt, now, latest = after) {
     if (!after) return;
     const from = before || after;
@@ -467,6 +495,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
       notice(after, time, now);
       if (latest !== after) notice(latest, time, now);
     }
+    unstep();
     for (const actor of actors.values()) actor.group.visible = false;
     // At a throw-in, whoever of the team it was given to comes to the ball picks it up;
     // an opponent standing nearer, the player who put it out, say, does not. Not before

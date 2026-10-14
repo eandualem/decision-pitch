@@ -29,6 +29,7 @@ const SHUFFLE_SPEED = [0.25, 1.7, 0.1, 2.0]; // m/s: on from, on below; off belo
 export const TOUCH_PHASE = 0.4; // where a loop without a `touch` meets a carried ball
 // How much faster or slower than its own pace a stride may go to meet the ball on time.
 const STEER = [0.75, 1.3];
+const HURRY = 0.08; // how much quicker a stride goes to fall out of step with a neighbour
 const MOST = 0.999; // the largest share of a bone a one-shot takes from the loops
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -1383,7 +1384,8 @@ export function createFigures(template, { footLock = true } = {}) {
       // travelling `travel` radians from the way it faces (anticlockwise), and poses it.
       // `sets` (optional) gives each loop set by name ({ dribble, jockey, shield }) the
       // share, 0 to 1, it should have: each comes in and goes over a fraction of a second;
-      // and `touchIn`, when above 0, the seconds until the boot is to meet the ball.
+      // `touchIn`, when above 0, the seconds until the boot is to meet the ball; and
+      // `hurry`, when above 0, quickens the stride to fall out of step with a neighbour.
       update(dt, speed, travel, sets = null) {
         lastSpeed = speed;
         lastTravel = travel;
@@ -1423,6 +1425,7 @@ export function createFigures(template, { footLock = true } = {}) {
         hips = steps.yaw;
         // To meet the ball in `touchIn` s, the stride comes to its touch then, at the nearest
         // pace to its own that does it.
+        if (sets?.hurry > 0) rate *= 1 + HURRY;
         const touchIn = sets?.touchIn ?? 0;
         if (touchIn > 0 && rate > 0) {
           const ahead = fract(person.touch() - phase);
