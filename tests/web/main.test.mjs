@@ -50,12 +50,18 @@ function setup(protocol = 'http:', loadFigure = loaded) {
       },
       Scene: class {}, Color: class {},
       PerspectiveCamera: class {
+        constructor(fov) { this.fov = fov; }
         position = { set() {} };
         lookAt() {} updateProjectionMatrix() {}
       },
     },
     createStadium: component('stadium'), createPlayers: actors,
-    createCamera: component('camera'), createMoments: component('moments'),
+    createCamera: (camera) => {
+      calls.push(['camera.create', camera.fov]);
+      camera.fov = 20; // a wide shot narrows the lens
+      return component('camera')();
+    },
+    createMoments: component('moments'),
     createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline, loadFigure,
     console: { error: (...args) => calls.push(['console.error', ...args]) },
     document: { getElementById: (id) => id === 'status' ? status : { appendChild() {} } },
@@ -292,4 +298,11 @@ test('a figure that fails to load says so and is tried again', () => {
   app.timers.at(-1)();
   figure.resolve();
   assert.equal(named(app.calls, 'actors.create').length, 1, 'the held hello builds the match');
+});
+
+test('each match\'s camera starts from the same lens, whatever the last match left it at', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(hello); // a reconnect: the server sends a new hello
+  assert.deepEqual(named(app.calls, 'camera.create').map(([, fov]) => fov), [40, 40]);
 });

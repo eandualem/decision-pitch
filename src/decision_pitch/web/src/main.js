@@ -19,7 +19,8 @@ document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x101f2b);
-const camera = new THREE.PerspectiveCamera(40, 1, 0.2, 600);
+const LENS = 40; // degrees: the vertical field of view each match's camera starts from
+const camera = new THREE.PerspectiveCamera(LENS, 1, 0.2, 600);
 camera.position.set(0, 62, 88);
 camera.lookAt(0, 0, 0);
 
@@ -55,6 +56,9 @@ function resetMatch(message) {
   stadium = createStadium(scene, renderer, message.pitch);
   actors = createPlayers(scene, message.teams, figure);
   touchline = createTouchline(scene, message.teams, message.pitch, figure);
+  // The camera is kept between matches; the last one's shots may have changed its lens.
+  camera.fov = LENS;
+  camera.updateProjectionMatrix();
   broadcast = createCamera(camera, message.pitch);
   moments = createMoments(scene, message.teams);
   overlay = createOverlay(message.teams);
