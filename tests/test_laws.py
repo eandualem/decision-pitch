@@ -228,6 +228,22 @@ def test_a_touch_after_time_ends_the_half_before_that_player_can_score():
     assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
 
 
+def test_a_penalty_parried_after_time_can_still_go_in():
+    m = penalty_after_time((51.8, 0.0), 17.0)
+    keeper = m.player(12)
+    keeper.x, keeper.y = 52.1, -1.2
+    run(m, 1.0)
+    assert kinds(m.drain_events()) == ["goal", "half_time"]
+
+
+def test_a_penalty_deflected_by_the_attacking_goalkeeper_after_time_ends_the_half():
+    m = penalty_after_time((51.8, 0.0), 24.0)
+    keeper = m.player(1)
+    keeper.x, keeper.y = 51.6, -0.65
+    run(m, 1.0)
+    assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
+
+
 def test_the_bot_shoots_a_penalty():
     m = in_play()
     on_the_ball(m, 10, 45.0, 5.0)
@@ -370,6 +386,66 @@ def test_a_goal_cannot_be_scored_directly_from_an_indirect_free_kick(indirect, r
     m.command(10, KickTo(pitch.HALF_LENGTH + 2, 0.0, 20.0))
     run(m, 3.0)
     assert kinds(m.drain_events()) == [restart] and m.score == score
+
+
+# -- saves and deflections --------------------------------------------------------------------
+
+
+def shot_at_keeper(keeper_y, ball_y, speed):
+    """A ball rolling at the away goalkeeper (player 12), 1.5 m off its line at +x."""
+    m = in_play()
+    keeper = m.player(12)
+    keeper.x, keeper.y = 51.0, keeper_y
+    m.ball.place(45.0, ball_y)
+    m.ball.vx = speed
+    return m, keeper
+
+
+def test_the_goalkeeper_catches_a_shot_at_its_body():
+    m, keeper = shot_at_keeper(0.0, 0.0, 15.0)
+    run(m, 0.5)
+    assert m.owner == keeper.id
+
+
+def test_the_goalkeeper_parries_a_shot_too_fast_to_hold():
+    m, keeper = shot_at_keeper(0.0, 0.0, 20.0)
+    run(m, 0.5)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1
+
+
+def test_a_shot_parried_at_full_stretch_over_the_goal_line_is_a_corner():
+    m, keeper = shot_at_keeper(2.0, 3.2, 17.0)  # it would go in just inside the post
+    run(m, 2.0)
+    events = m.drain_events()
+    assert kinds(events) == ["corner"] and events[0]["team"] == 0 and m.score == [0, 0]
+
+
+def test_a_hard_ball_bounces_off_an_outfield_player_who_cannot_play_it_at_once():
+    m = in_play()
+    blocker = m.player(15)
+    blocker.x, blocker.y = 30.0, 0.0
+    m.ball.place(28.0, 0.0)
+    m.ball.vx = 24.0
+    run(m, 0.15)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1 and blocker.id in m.recovering
+
+
+def test_a_ball_dropping_fast_onto_a_player_bounces_off_it():
+    m = in_play()
+    m.player(15).x, m.player(15).y = 30.0, 0.0
+    m.ball.place(29.4, 0.0)
+    m.ball.z, m.ball.vx, m.ball.vz = 0.8, 12.0, -16.0
+    m.step()
+    assert m.owner is None and m.last_touch == 1
+
+
+def test_a_deflection_off_an_opponent_leaves_an_offside_position_as_it_was():
+    m = through_ball((30.0, 10.0))
+    blocker = m.player(13)
+    m.ball.place(blocker.x - 0.6, blocker.y)
+    m.ball.vx, m.ball.vy = 24.0, 0.0
+    m.step()
+    assert m.owner is None and m.offside == {10}
 
 
 # -- substitutions ----------------------------------------------------------------------------

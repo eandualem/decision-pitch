@@ -100,6 +100,7 @@ while it waits.
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends. No added time |
 | Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
+| Saves and deflections | Implemented. A ball faster than 18 m/s bounces off any player it reaches; a goalkeeper at full stretch parries a shot instead of catching it, so a parry or block can give a corner |
 | Playing the ball twice at a restart | Not implemented yet |
 | Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick, corner or direct free kick) | Not implemented yet: such a goal currently counts. A goal straight from an indirect free kick does not count |
 | Fouls | Implemented for challenges on the player with the ball: running into it from behind, or without being able to reach the ball. Handball and fouls off the ball are not implemented yet |

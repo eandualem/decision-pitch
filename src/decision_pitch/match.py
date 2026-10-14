@@ -51,6 +51,10 @@ CONTROL = 0.75  # m from a player's centre to the ball's within which it plays t
 CONTROL_HEIGHT = 0.9  # m, the highest ball a player can play
 KEEPER_CONTROL = 1.3  # a goalkeeper's reach in its own penalty area
 KEEPER_HEIGHT = 2.6
+CONTROL_SPEED = 18.0  # m/s, relative to a player, above which a loose ball bounces off it
+PARRY_SPEED = 10.0  # m/s above which a goalkeeper at full stretch parries a ball, not catches it
+DEFLECT_PUSH = 0.4  # share of its speed a deflected ball leaves outwards from the player with
+DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected ball keeps
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
 KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
@@ -322,11 +326,15 @@ class Match:
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
-            if self.penalty_live and self.elapsed >= self.half_length:
-                self._end_half()  # this touch completes the penalty the half waited for
+            deflects = self.owner is None and self._deflects(nearest)
+            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and self._saves(nearest)):
+                self._end_half()  # this touch completes the penalty the half waited for; a save does not
                 return
             if nearest.id in self.offside:
                 self._offside(nearest)
+                return
+            if deflects:
+                self._deflect(nearest)
                 return
             self.offside = set()  # someone onside played it
             self.penalty_live = False
@@ -334,6 +342,45 @@ class Match:
                 self.indirect = None
             self.last_touch = nearest.team
         self.owner = nearest.id
+
+    def _deflects(self, p: Player) -> bool:
+        """Whether the loose ball comes at `p` too fast to control, or reaches a goalkeeper
+        only at full stretch (docs/decisions.md, section 8)."""
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
+        if speed > CONTROL_SPEED:
+            return True
+        if p.position != "GK" or speed <= PARRY_SPEED or vx == vy == 0:
+            return False
+        # its path passes beyond an outfield player's reach
+        return abs((b.x - p.x) * vy - (b.y - p.y) * vx) / math.hypot(vx, vy) > CONTROL
+
+    def _deflect(self, p: Player) -> None:
+        """The ball bounces off `p`: outwards from where it touched, keeping a little of its
+        speed along the body. It counts as `p` playing it, except for the opponents' offside."""
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
+        dx, dy = b.x - p.x, b.y - p.y
+        dist = math.hypot(dx, dy)
+        nx, ny = (dx / dist, dy / dist) if dist > 0 else (-vx / speed, -vy / speed)
+        along = vx * nx + vy * ny
+        b.vx = p.vx + nx * speed * DEFLECT_PUSH + (vx - along * nx) * DEFLECT_KEEP
+        b.vy = p.vy + ny * speed * DEFLECT_PUSH + (vy - along * ny) * DEFLECT_KEEP
+        b.vz *= DEFLECT_KEEP
+        self.offside = self._offside_positions(p) | {q for q in self.offside if self.player(q).team != p.team}
+        if not self._saves(p):
+            self.penalty_live = False  # a goalkeeper's save does not complete a penalty
+        if p.id != self.indirect:
+            self.indirect = None
+        self.last_touch = p.team
+        self.owner = None
+        self.recovering[p.id] = KICK_RECOVERY
+
+    def _saves(self, p: Player) -> bool:
+        """Whether `p` is the goalkeeper defending the goal the ball is at."""
+        return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
 
     def _may_kick(self, p: Player) -> bool:
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
