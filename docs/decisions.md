@@ -435,9 +435,10 @@ substitution) and when the `substitution` event is made, celebrates its team's
 goals and holds its head at the other team's. The `hello` message lists each
 team's assistant models; one assistant figure stands behind the manager per
 assistant model, and none when there are none. There is no crowd. The wide
-shot keeps the near technical areas in frame while play is in midfield or on
-that side, and while the ball is dead the camera cuts briefly to a manager's
-reaction: after the scorer's close-up and when a substitution is made. It
+shot stays on the match, at the same size as before, so the managers are in it
+when play comes near their touchline. While the ball is dead the camera cuts
+briefly to a manager: after the scorer's close-up, at a card, at a
+substitution and, at most about once in 45 seconds, at another restart. It
 never cuts away during open play.
 
 **Buffered interpolation.** The page renders a fixed delay, about 100 ms,
