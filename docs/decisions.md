@@ -436,7 +436,7 @@ goals and holds its head at the other team's. The `hello` message lists each
 team's assistant models; one assistant figure stands behind the manager per
 assistant model, and none when there are none. There is no crowd. The wide
 shot stays on the match, so the managers are in it when play comes near their
-touchline. (It kept its size here; the human figures below tightened it.) While the ball is dead the camera cuts
+touchline. (It kept its size here; the human figures below changed it.) While the ball is dead the camera cuts
 briefly to a manager: after the scorer's close-up, at a card, at a
 substitution, at half time and full time, when a manager gives advice
 during a stoppage and, at most about once in 25 seconds, at a goal kick,
@@ -603,15 +603,24 @@ readable on the broadcast camera at its real size. The engine is unchanged:
 headers stay unplayed until the engine has them, and the `header` clip is ready
 for that.
 
-**A closer wide shot.** The broadcast wide shot comes about a third closer to
-play, showing roughly a third to half of the pitch like a real main camera,
-instead of standing about 83 m from it. From the old distance a 1280×720
-recording drew a player about 15 pixels tall and the real-size ball as a dot of
-two or three pixels, so the figures and the ball this section adds could not
-be read. The frame still follows the ball and leads a little the way play is
-going, so a long pass's receiver comes into view early, and it pans no faster
-relative to the frame than before; the cuts to the scorer and the managers are
-unchanged.
+**A broadcast wide shot.** The wide shot now frames play like a broadcast main
+camera: it looks 22 degrees down from about 72 m through a 22 degree vertical
+lens, showing about 50 m of pitch across, instead of looking 40 degrees down
+from about 83 m through 40 degrees, which showed most of the pitch. From the
+old shot a 1280×720 recording drew a player about 17 pixels tall, seen mostly
+from above, and the real-size ball as a dot of two or three pixels, so the
+figures and the ball this section adds could not be read; now a player near
+the frame's centre is about 43 pixels tall, seen more from the side, and the
+ball about 6. The frame follows the ball and leads it by a fraction of a
+second of its velocity, so a long pass's receiver comes into view early, and
+it keeps the ball, and at a restart the taker, inside the frame. Replaying
+three recorded bot matches through the old and new camera, the ball stayed
+in frame in every frame of open play and every restart, and every receiver
+of a pass longer than 25 m was in view at least half a second before the ball
+arrived. Measured against the narrower frame, pans are faster than before
+(95th percentile 0.20 against 0.075 frame widths a second), while over the
+ground the frame moves as fast as it did; they ease in and out. The scorer's
+close-up and the managers' cutaways keep their own 40 degree lens.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
 camera and in a close-up in a way that articulated boxes cannot, and stride
