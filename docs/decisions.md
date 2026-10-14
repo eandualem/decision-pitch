@@ -422,6 +422,46 @@ This keeps the engine authoritative and the page usable offline, while shared
 geometry, capped pixel density and one shadow-casting light limit GPU work for
 smooth laptop recording. It replaces the scaffold's cylinders and fixed camera.
 
+### Managers on the touchline, smooth motion and contact
+
+**Managers.** Each team's manager stands in a technical area on the touchline
+nearest the broadcast camera, beside the halfway line: home to its left, away
+to its right, and they stay there after half time. A touchline module builds
+each manager as a low-poly figure in a coat of the team's shirt colour with a
+name label, walks it along its area to follow the ball and turns it towards
+play. It gestures when its team's `manager` message arrives (pointing towards
+the player it instructs, or signalling a change when it asks for a
+substitution) and when the `substitution` event is made, celebrates its team's
+goals and holds its head at the other team's. The `hello` message lists each
+team's assistant models; one assistant figure stands behind the manager per
+assistant model, and none when there are none. There is no crowd.
+
+**Buffered interpolation.** The page renders a fixed delay, about 100 ms,
+behind the newest snapshot instead of chasing the last two. A timeline module
+maps the server's `t` to the page's clock with an offset that absorbs uneven
+arrival, keeps a short buffer of snapshots and samples the pair that brackets
+the render time. It never interpolates across a change of phase or period or a
+clock that goes back, so restarts that place players still do not sweep them
+across the pitch; it holds the last state when the buffer runs dry and drops
+the backlog after a stall. Events carry `t` and are released on the same
+timeline, so a goal banner, a celebration or a contact pose appears when the
+drawn ball gets there. `decision` and `manager` messages stay immediate.
+
+**The ball and contact.** While a player has the ball, the page draws it at
+that player's drawn feet, where the engine carries it, so it cannot slide or
+jump against them. The ball spins with the distance it travels and keeps its
+height from the engine, so it sits on the grass and arcs as sent. The snapshot
+carries the latest touch of the ball, with who made it, what kind it was and
+when, read from state the engine records where the touch happens; it changes
+no rule or physics. The page plays the matching pose at that moment: a leg
+swing for a kick, first touch or tackle, a nod for a header and a dive or
+reach for a goalkeeper's save. Only kinds the engine can tell apart are sent.
+
+The delay costs a tenth of a second of latency, which nobody watching can see,
+and buys motion that stays even when the connection does not. Drawing from the
+engine's touches rather than guessing from the ball's path keeps the page a
+renderer of the match, not a second engine.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules
