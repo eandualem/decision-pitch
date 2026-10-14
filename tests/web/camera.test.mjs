@@ -18,13 +18,21 @@ function setup(aspect = 16 / 9) {
   const broadcast = context.createCamera(camera, PITCH);
   const ball = new THREE.Vector3(0, 0.3, 0);
   const scorer = new THREE.Vector3(48, 0, -3);
-  const actors = { ballPosition: ball, getPlayerPosition: (id) => (id === 9 ? scorer : null) };
+  const others = []; // other players near the scorer, for the close-up to keep clear of
+  const actors = {
+    ballPosition: ball,
+    getPlayerPosition: (id) => (id === 9 ? scorer : others[id - 100] ?? null),
+    forEachPlayerPosition(visit) {
+      visit(9, scorer);
+      others.forEach((position, i) => visit(100 + i, position));
+    },
+  };
   const managers = [new THREE.Vector3(-5, 0, AREA_Z), new THREE.Vector3(6, 0, AREA_Z)];
   const touchline = { getManagerPosition: (team) => managers[team] ?? null };
   let now = 0;
   const point = new THREE.Vector3();
   return {
-    camera, broadcast, ball, actors, touchline, managers,
+    camera, broadcast, ball, actors, touchline, managers, scorer, others,
     get now() { return now; },
     event(kind, fields = {}) { broadcast.handleEvent({ type: 'event', kind, ...fields }, now, actors, touchline); },
     message(team, kind = 'instruction') { broadcast.handleMessage({ type: 'manager', team, kind }, now, touchline); },
@@ -345,5 +353,72 @@ test('each match starts from the page\'s own lens, whatever the last one left', 
   const actors = { ballPosition: new THREE.Vector3(), getPlayerPosition: () => new THREE.Vector3(10, 0, 5) };
   next.handleEvent({ type: 'event', kind: 'goal', team: 0, player: 9 }, 0, actors, null);
   for (let i = 1; i <= 60; i++) next.update(actors.ballPosition, 1 / 60, i / 60, 'kickoff');
-  assert.ok(Math.abs(first.camera.fov - 40) < 0.5, `the goal close-up through the page's lens: ${first.camera.fov}`);
+  assert.ok(Math.abs(first.camera.fov - 30) < 0.5, `the goal close-up through its own lens, not the wide one: ${first.camera.fov}`);
+});
+
+// The close-up's framing, measured: the scorer's share of the frame's height, the camera's
+// distance over the ground, and how clear it keeps of everything around it.
+function closeUpCheck(t) {
+  const { scorer } = t;
+  const feet = t.screen(scorer.x, 0, scorer.z);
+  const head = t.screen(scorer.x, 1.8, scorer.z);
+  const share = (head.y - feet.y) / 2;
+  const distance = Math.hypot(t.camera.position.x - scorer.x, t.camera.position.z - scorer.z);
+  const nearest = Math.min(Infinity, ...t.others.map(o => Math.hypot(o.x - t.camera.position.x, o.z - t.camera.position.z)));
+  const framed = [feet, head].every(p => Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z < 1);
+  return { share, distance, nearest, framed, position: t.camera.position.clone() };
+}
+
+const insideGoal = (p) => Math.abs(p.x) > PITCH.length / 2 - 0.6 && Math.abs(p.x) < PITCH.length / 2 + 2.8 &&
+  Math.abs(p.z) < PITCH.goalWidth / 2 + 0.6 && p.y < PITCH.goalHeight + 0.6;
+
+test('the scorer close-up fills about half the frame from 6-8 m, a little low, and follows the celebration', () => {
+  const t = setup();
+  t.scorer.set(20, 0, -5);
+  t.run(1);
+  t.event('goal', { team: 1, player: 9 });
+  let worst = 1;
+  for (let s = 0; s < 3.7; s += 1 / 60) {
+    // The scorer runs off to celebrate at 4 m/s.
+    t.scorer.x += 4 / 60;
+    t.run(1 / 60, 'kickoff');
+    const c = closeUpCheck(t);
+    if (s > 0.3) assert.ok(c.framed, `scorer framed at ${s.toFixed(2)} s`);
+    if (s > 1.2) {
+      assert.ok(c.share > 0.4 && c.share < 0.6, `about half the frame's height: ${c.share.toFixed(2)}`);
+      assert.ok(c.distance > 6 && c.distance < 8, `6-8 m away: ${c.distance.toFixed(2)}`);
+      worst = Math.min(worst, c.share);
+      assert.ok(t.camera.position.y > 0.5 && t.camera.position.y < 1.8, 'a little low, never under the pitch');
+    }
+  }
+  assert.ok(Math.abs(t.camera.fov - 30) < 0.5, 'through the close-up lens');
+  assert.ok(t.camera.position.z > t.scorer.z, 'from the broadcast camera\'s side');
+});
+
+test('the close-up keeps clear of the goal, the stands and the players round the scorer', () => {
+  const cases = [
+    ['beside a post at the byline', [51.5, 0, 4.5], []],
+    ['in the goalmouth', [50, 0, 0.5], []],
+    ['at a corner flag', [52, 0, 33.5], []],
+    ['at the far corner flag', [-52, 0, -33.5], []],
+    ['in a crowd', [40, 0, 2], [[40, 0, 4], [41.5, 0, 3.5], [38.5, 0, 3.5], [40, 0, 9], [43, 0, 7]]],
+  ];
+  for (const [name, at, crowd] of cases) {
+    const t = setup();
+    t.scorer.fromArray(at);
+    t.others.push(...crowd.map(p => new THREE.Vector3().fromArray(p)));
+    t.run(1);
+    t.event('goal', { team: 0, player: 9 });
+    for (let s = 0; s < 3.7; s += 1 / 60) {
+      t.run(1 / 60, 'kickoff');
+      const c = closeUpCheck(t);
+      const where = `${name} at ${s.toFixed(2)} s: ${c.position.toArray().map(v => v.toFixed(1))}`;
+      if (s > 1.2) {
+        assert.ok(c.nearest > 1.1, `clear of the players, ${where}`);
+        assert.ok(!insideGoal(c.position), `not in the goal, ${where}`);
+        assert.ok(Math.abs(c.position.x) < PITCH.length / 2 + 4.5 && Math.abs(c.position.z) < PITCH.width / 2 + 1.5, `over the pitch, ${where}`);
+        assert.ok(c.framed, `scorer framed, ${where}`);
+      }
+    }
+  }
 });

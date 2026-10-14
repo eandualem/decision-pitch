@@ -38,6 +38,26 @@ const PULL = { from: 12, to: 25, by: 0.3 }; // m/s of ball speed, and how much f
 // the camera, so the side margin shrinks by `narrow` m for each metre the ball is nearer.
 const SAFE = { side: 15, narrow: 0.3, near: 12, far: 30 };
 const TELEPORT = 50; // m/s: faster than any kick, so the ball was placed, not moved
+// The scorer's close-up: near and a little low, through a longer lens, so the scorer stands
+// about half the frame's height while it celebrates. Like a broadcast's cut to a close
+// camera, it cuts in a little further out and eases in, follows the scorer, and cuts away
+// when it ends.
+const CLOSE_UP = {
+  fov: 30, // deg, vertical
+  distance: 7, // m from the scorer, over the ground
+  height: 1.35, // m: a little below the scorer's eyes
+  aim: 1.15, // m: the height it looks at
+  from: 1.4, // starts this many times further out
+  easeIn: 0.9, // s to come in to its distance
+  follow: 4, // 1/s: how quickly it follows the scorer (leading its run, so it keeps its distance)
+  turn: 1.5, // rad/s it may swing round the scorer when its side gets blocked, the way that is clear
+  ahead: [0.4, 0.9], // s ahead it checks its side is still clear, as it moves with the scorer
+  lift: 1.5, // m it rises to pass over the heads, and raised arms, of anyone who still comes too near
+};
+// What the close-up keeps clear of, in m: other players, the line of sight to the scorer,
+// and the goal frame and net. It stays over the pitch and its surround, never behind a goal.
+const CLEAR = { player: 1.2, sight: 0.5, goal: 0.6 };
+const AZIMUTHS = 24; // sides tried round the scorer
 
 // Presentation only: follow the rendered ball, never predict match outcomes.
 export function createCamera(camera, pitch) {
@@ -55,6 +75,124 @@ export function createCamera(camera, pitch) {
   let closeUntil = -Infinity;
   let scorer = null;
   let closeActors = null;
+  let closeStart = 0;
+  const closeFollow = new THREE.Vector3(); // the scorer, smoothed
+  const lastScorer = new THREE.Vector3();
+  const scorerVelocity = new THREE.Vector3();
+  const scorerAhead = new THREE.Vector3();
+  const closeSide = new THREE.Vector3(0, 0, 1); // from the scorer towards the camera
+  const others = []; // the other players' positions this frame
+  const probe = new THREE.Vector3();
+  const chest = new THREE.Vector3();
+  const later = new THREE.Vector3();
+  const tryDir = new THREE.Vector3();
+  const tryArc = new THREE.Vector3();
+  const ray = new THREE.Ray();
+  const hit = new THREE.Vector3();
+  const halfLength = pitch.length / 2;
+  const halfWidth = pitch.width / 2;
+  const goalWidth = pitch.goalWidth ?? 7.32;
+  const goalHeight = pitch.goalHeight ?? 2.44;
+  const goals = [-1, 1].map(side => new THREE.Box3(
+    new THREE.Vector3(side > 0 ? halfLength - CLEAR.goal : -halfLength - 2.2 - CLEAR.goal, 0, -goalWidth / 2 - CLEAR.goal),
+    new THREE.Vector3(side > 0 ? halfLength + 2.2 + CLEAR.goal : -halfLength + CLEAR.goal, goalHeight + CLEAR.goal, goalWidth / 2 + CLEAR.goal),
+  ));
+
+  function gather(actors, id) {
+    others.length = 0;
+    actors?.forEachPlayerPosition?.((other, position) => { if (other !== id) others.push(position); });
+  }
+
+  // Whether the close-up camera, `distance` from `centre` along `dir`, is clear of the
+  // stands, the goals and the other players, and sees the scorer past the goal frame.
+  function clearAt(centre, dir, distance, room = CLEAR.player, velocity = null) {
+    if (velocity) {
+      for (const seconds of CLOSE_UP.ahead) {
+        if (!clearAt(later.copy(centre).addScaledVector(velocity, seconds), dir, distance, room)) return false;
+      }
+    }
+    probe.copy(centre).addScaledVector(dir, distance);
+    probe.y = CLOSE_UP.height;
+    if (Math.abs(probe.x) > halfLength + 4 || Math.abs(probe.z) > halfWidth + 1) return false;
+    if (Math.abs(probe.x) > halfLength - 0.3 && Math.abs(probe.z) < goalWidth / 2 + 2) return false;
+    chest.copy(centre);
+    chest.y = CLOSE_UP.aim;
+    const length = probe.distanceTo(chest);
+    ray.set(probe, chest.clone().sub(probe).normalize());
+    for (const goal of goals) {
+      if (goal.containsPoint(probe)) return false;
+      if (ray.intersectBox(goal, hit) && hit.distanceTo(probe) < length) return false;
+    }
+    for (const other of others) {
+      if (Math.hypot(other.x - probe.x, other.z - probe.z) < room) return false;
+    }
+    return true;
+  }
+
+  // How good a side is: the broadcast camera's side of the scorer, looking out from the
+  // pitch, with no one walking between the camera and the scorer.
+  function sideScore(centre, dir, distance, velocity = null) {
+    let score = dir.z + 0.5 * -dir.x * Math.sign(centre.x || 1);
+    const ax = centre.x + dir.x * distance;
+    const az = centre.z + dir.z * distance;
+    for (const other of others) {
+      // Room round the camera, now and where it is heading with the scorer.
+      for (const seconds of [0, ...(velocity ? CLOSE_UP.ahead : [])]) {
+        const d = Math.hypot(other.x - (ax + (velocity?.x ?? 0) * seconds), other.z - (az + (velocity?.z ?? 0) * seconds));
+        if (d < 3) score -= (3 - d) / 3;
+      }
+      // Distance from the other player to the line of sight, over the ground.
+      const vx = centre.x - ax;
+      const vz = centre.z - az;
+      const along = THREE.MathUtils.clamp(((other.x - ax) * vx + (other.z - az) * vz) / (vx * vx + vz * vz), 0.05, 0.9);
+      if (Math.hypot(other.x - (ax + vx * along), other.z - (az + vz * along)) < CLEAR.sight) score -= 2;
+    }
+    return score;
+  }
+
+  // Whether someone stands between the camera, `distance` along `dir`, and the scorer.
+  function sightBlocked(centre, dir, distance) {
+    const ax = centre.x + dir.x * distance;
+    const az = centre.z + dir.z * distance;
+    const vx = centre.x - ax;
+    const vz = centre.z - az;
+    for (const other of others) {
+      const along = ((other.x - ax) * vx + (other.z - az) * vz) / (vx * vx + vz * vz);
+      if (along > 0.05 && along < 0.9 && Math.hypot(other.x - (ax + vx * along), other.z - (az + vz * along)) < CLEAR.sight) return true;
+    }
+    return false;
+  }
+
+  // Whether swinging `delta` round the scorer from the side at `from` passes clear of everyone.
+  function arcClear(centre, from, delta, distance) {
+    const steps = Math.ceil(Math.abs(delta) / 0.2);
+    for (let i = 1; i <= steps; i++) {
+      const angle = from + (delta * i) / steps;
+      tryArc.set(Math.sin(angle), 0, Math.cos(angle));
+      if (!clearAt(centre, tryArc, distance, CLEAR.player * 0.6)) return false;
+    }
+    return true;
+  }
+
+  // The clear side with the best view, `out` set to its direction; false if none is clear.
+  function pickSide(centre, out, velocity = null) {
+    for (const [room, ahead] of [[CLEAR.player, velocity], [CLEAR.player, null], [CLEAR.player * 0.6, null]]) {
+      let best = -Infinity;
+      for (let i = 0; i < AZIMUTHS; i++) {
+        const angle = (i / AZIMUTHS) * Math.PI * 2;
+        tryDir.set(Math.sin(angle), 0, Math.cos(angle));
+        if (!clearAt(centre, tryDir, CLOSE_UP.distance, room, ahead) || !clearAt(centre, tryDir, CLOSE_UP.distance * CLOSE_UP.from, room)) continue;
+        const score = sideScore(centre, tryDir, CLOSE_UP.distance, velocity);
+        if (score > best) {
+          best = score;
+          out.copy(tryDir);
+        }
+      }
+      if (best > -Infinity) return true;
+    }
+    return false;
+  }
+
   // The wide shot stays on the match. The managers are seen in short shots while the
   // drawn ball is dead: after the scorer at a goal, at a card, a substitution, a
   // manager's message, the whistles and now and then a restart. A shot asked for waits
@@ -65,7 +203,7 @@ export function createCamera(camera, pitch) {
   let lastShot = -Infinity;
   let nextRestartTeam = 0;
   let drawnPhase = null;
-  let cutting = false;
+  let shown = 'wide'; // the shot on screen: wide, close or managers
   let wasWide = false;
   let initialized = false;
 
@@ -94,6 +232,12 @@ export function createCamera(camera, pitch) {
         closeActors = actors;
         closeup.copy(actors.getPlayerPosition(scorer) ?? actors.ballPosition);
         closeUntil = now + CLOSE;
+        closeStart = now;
+        closeFollow.copy(closeup);
+        lastScorer.copy(closeup);
+        scorerVelocity.set(0, 0, 0);
+        gather(actors, scorer);
+        if (!pickSide(closeFollow, closeSide)) closeSide.set(0, 0, 1);
         shot = request = null;
         ask('goal', now, touchline, { team: event.team, from: closeUntil });
       } else if (event.kind === 'yellow' || event.kind === 'red' || event.kind === 'substitution') {
@@ -137,9 +281,37 @@ export function createCamera(camera, pitch) {
       if (now < closeUntil) {
         const playerPosition = closeActors?.getPlayerPosition(scorer);
         if (playerPosition) closeup.copy(playerPosition);
-        look.copy(closeup);
-        look.y = 1;
-        desired.set(closeup.x + 10 * portrait, 12 * portrait, closeup.z + 20 * portrait);
+        if (step > 0) {
+          moved.subVectors(closeup, lastScorer).setY(0).divideScalar(step);
+          if (moved.length() > 12) scorerVelocity.set(0, 0, 0); // placed, not run
+          else scorerVelocity.lerp(moved, 1 - Math.exp(-step * CLOSE_UP.follow));
+        }
+        lastScorer.copy(closeup);
+        // Follow where the scorer is heading over the smoothing's lag, so a running scorer
+        // stays as near as a standing one.
+        scorerAhead.copy(closeup).addScaledVector(scorerVelocity, 1 / CLOSE_UP.follow);
+        closeFollow.lerp(scorerAhead, 1 - Math.exp(-step * CLOSE_UP.follow));
+        gather(closeActors, scorer);
+        const ease = THREE.MathUtils.smoothstep((now - closeStart) / CLOSE_UP.easeIn, 0, 1);
+        const distance = CLOSE_UP.distance * (CLOSE_UP.from + (1 - CLOSE_UP.from) * ease);
+        // Swing round the scorer, not through anyone, if its side becomes blocked now or
+        // where the camera is heading, or someone walks into the line of sight.
+        const blocked = !clearAt(closeFollow, closeSide, distance, CLEAR.player, scorerVelocity) || sightBlocked(closeFollow, closeSide, distance);
+        if (blocked && pickSide(closeFollow, tryDir, scorerVelocity)) {
+          const from = Math.atan2(closeSide.x, closeSide.z);
+          let delta = Math.atan2(Math.sin(Math.atan2(tryDir.x, tryDir.z) - from), Math.cos(Math.atan2(tryDir.x, tryDir.z) - from));
+          // Round the other way if the short way passes anyone.
+          const long = delta - Math.sign(delta) * Math.PI * 2;
+          if (!arcClear(closeFollow, from, delta, distance) && arcClear(closeFollow, from, long, distance)) delta = long;
+          const angle = from + THREE.MathUtils.clamp(delta, -CLOSE_UP.turn * step, CLOSE_UP.turn * step);
+          closeSide.set(Math.sin(angle), 0, Math.cos(angle));
+        }
+        look.copy(closeFollow);
+        look.y = CLOSE_UP.aim;
+        desired.copy(closeFollow).addScaledVector(closeSide, distance);
+        let nearest = Infinity;
+        for (const other of others) nearest = Math.min(nearest, Math.hypot(other.x - desired.x, other.z - desired.z));
+        desired.y = CLOSE_UP.height + CLOSE_UP.lift * (1 - THREE.MathUtils.smoothstep(nearest, 0.6, CLEAR.player));
       } else if (first && second) {
         // Both managers, from the pitch, far enough back to frame the two areas.
         const x = (first.x + second.x) / 2;
@@ -170,15 +342,16 @@ export function createCamera(camera, pitch) {
         const away = WIDE.distance * portrait * (1 + PULL.by * pull);
         desired.set(look.x, Math.sin(wideDown) * away, look.z + Math.cos(wideDown) * away);
       }
-      const wide = now >= closeUntil && first === null;
+      const mode = now < closeUntil ? 'close' : first !== null ? 'managers' : 'wide';
+      const wide = mode === 'wide';
       wasWide = wide;
-      const onManagers = now >= closeUntil && first !== null;
-      const cut = !initialized || cutting !== onManagers;
-      cutting = onManagers;
-      const blend = cut ? 1 : 1 - Math.exp(-step * (cutting ? 4 : WIDE.rate));
+      // Shots cut from one to another; the close-up, smoothed already, is followed exactly.
+      const cut = !initialized || mode !== shown;
+      shown = mode;
+      const blend = cut || mode === 'close' ? 1 : 1 - Math.exp(-step * (mode === 'managers' ? 4 : WIDE.rate));
       camera.position.lerp(desired, blend);
       target.lerp(look, blend);
-      const fov = camera.fov + ((wide ? WIDE.fov : LENS) - camera.fov) * blend;
+      const fov = camera.fov + ((wide ? WIDE.fov : mode === 'close' ? CLOSE_UP.fov : LENS) - camera.fov) * blend;
       if (Math.abs(fov - camera.fov) > 1e-4) {
         camera.fov = fov;
         camera.updateProjectionMatrix();
