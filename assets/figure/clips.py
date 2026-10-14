@@ -207,7 +207,7 @@ for _s in SIDES:
         f"a{_s}elev": 0.0, f"a{_s}prot": 0.0,
         f"a{_s}flex": 0.0, f"a{_s}abd": 8.0, f"a{_s}twist": 0.0,
         f"a{_s}elbow": 12.0, f"a{_s}pron": 0.0, f"a{_s}wrist": 0.0,
-        # Hand reach: weight, wrist target (root space) and elbow direction.
+        # Hand reach: weight, wrist target (root space) and how far the elbow turns out.
         f"a{_s}ik": 0.0, f"a{_s}ix": 0.0, f"a{_s}iy": 0.0, f"a{_s}iz": 0.0,
         f"a{_s}pole": 0.0,
     })
@@ -434,7 +434,7 @@ class Solver:
                 shoulder_pos = self._chain_pos(out, f"upper_arm_{s}", w)
                 target = Vector((p[f"a{s}ix"], p[f"a{s}iy"], p[f"a{s}iz"]))
                 # Elbow points backwards and out, turned by the pole channel.
-                pole = w["chest"] @ (rot(Z, p[f"a{s}pole"] * sign) @ Vector((0.35 * sign, 1.0, -0.2)))
+                pole = w["chest"] @ (rot(Z, -p[f"a{s}pole"] * sign) @ Vector((0.35 * sign, 1.0, -0.2)))
                 arm = self.arm[s]
                 e_ik, u_ik, f_ik, _ = self.two_bone(shoulder_pos, target, arm["upper"], arm["fore"], pole)
                 u = u.lerp(u_ik, ik).normalized()
@@ -807,7 +807,604 @@ def strafe_R_clip(solver):
     return strafe_clip(solver, "R")
 
 
-CLIP_BUILDERS = [idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip]
+
+# --------------------------------------------------------------------------
+# One-shots: key poses eased into each other, with overlap.
+
+BALL = Vector((0.0, -0.6, 0.11))  # where the engine carries the ball, 0.11 m radius
+BALL_RADIUS = 0.11
+
+READY = dict(NEUTRAL)
+READY.update({
+    "fLx": 0.13, "fLy": 0.01, "fLyaw": 9.0, "fRx": -0.13, "fRy": -0.01, "fRyaw": -9.0,
+    "hz": -0.035, "hpitch": 2.0, "sflex": 1.0, "cflex": -1.0, "look_down": 3.0,
+})
+for _s in SIDES:
+    READY.update({f"a{_s}flex": 3.0, f"a{_s}abd": 9.0, f"a{_s}elbow": 16.0, f"a{_s}twist": 4.0,
+                  f"a{_s}pron": 15.0, f"a{_s}wrist": 6.0})
+
+KEEPER_READY = dict(READY)
+KEEPER_READY.update({
+    "fLx": 0.19, "fLy": -0.02, "fLyaw": 10.0, "fRx": -0.19, "fRy": -0.02, "fRyaw": -10.0,
+    "fLpitch": -6.0, "fRpitch": -6.0,
+    "hz": -0.13, "hy": 0.02, "hpitch": 10.0, "sflex": 9.0, "cflex": 3.0, "look_down": -4.0,
+    "kLout": 10.0, "kRout": 10.0,
+})
+for _s in SIDES:
+    KEEPER_READY.update({f"a{_s}flex": 32.0, f"a{_s}abd": 28.0, f"a{_s}elbow": 52.0,
+                         f"a{_s}twist": -10.0, f"a{_s}pron": 50.0, f"a{_s}wrist": 15.0})
+
+
+class Shot:
+    """A clip from key poses: [(time, {channel: value})].
+
+    Every channel a key mentions eases from key to key; before its first key
+    and after its last it holds the base pose (keys are added at 0 and at the
+    end). `lag` delays channels by prefix, so arms and head follow the trunk.
+    `extra(t, p)` may change the pose afterwards for a procedural detail.
+    """
+
+    def __init__(self, base, end, keys, lag=None, extra=None, settle=True, period=None):
+        self.base = base
+        self.end = end
+        self.lag = lag or {}
+        self.extra = extra
+        self.period = period
+        self.keys = {}
+        for t, channels in keys:
+            for k, v in channels.items():
+                self.keys.setdefault(k, {})[t] = v
+        for k, ks in self.keys.items():
+            if 0.0 not in ks:
+                ks[0.0] = base[k]
+            if settle and end not in ks:
+                ks[end] = base[k]
+        self._build()
+
+    def _build(self):
+        self.curves = {k: Curve(sorted(ks.items()), self.period) for k, ks in self.keys.items()}
+
+    def nudge(self, t, deltas):
+        for k, d in deltas.items():
+            self.keys[k][t] = self.keys[k].get(t, self.base[k]) + d
+        self._build()
+
+    def _lag(self, k):
+        best = 0.0
+        best_len = 0
+        for prefix, lag in self.lag.items():
+            if k.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = lag, len(prefix)
+        return best
+
+    def __call__(self, t):
+        p = dict(self.base)
+        for k, c in self.curves.items():
+            lag = self._lag(k)
+            p[k] = c(t - lag if self.period else max(0.0, t - lag))
+        if self.extra is not None:
+            self.extra(t, p)
+        return p
+
+
+def aim(solver, shot, t, bone, rest_point, target, channels, passes=4):
+    """Move a key's channels (x, y, z in that order) so a point on `bone` meets `target` at t."""
+    for _ in range(passes):
+        solved = solver.solve(shot(t))
+        err = Vector(target) - solved.point(bone, rest_point)
+        shot.nudge(t, {channels[0]: err.x, channels[1]: err.y, channels[2]: err.z})
+    solved = solver.solve(shot(t))
+    return (Vector(target) - solved.point(bone, rest_point)).length
+
+
+_MIRROR_NEGATE = {"hx", "hyaw", "hroll", "sside", "stwist", "cside", "ctwist", "look_yaw", "look_tilt"}
+
+
+def mirror(p):
+    """The same pose mirrored left to right."""
+    out = {}
+    for k, v in p.items():
+        if k in _MIRROR_NEGATE:
+            out[k] = -v
+            continue
+        for a, b in (("L", "R"), ("R", "L")):
+            if len(k) > 1 and k[1] == a and k[0] in "fak":
+                other = k[0] + b + k[2:]
+                if k[2:] in ("x", "ix") or k[2:] == "yaw":
+                    out[other] = -v if v is not None else v
+                elif k[2:] == "ankle":
+                    out[other] = Vector((-v.x, v.y, v.z)) if v is not None else None
+                else:
+                    out[other] = v
+                break
+        else:
+            out[k] = v
+    return out
+
+
+def _point(s, x, y, z):
+    """A point given for the left side, mirrored to the right."""
+    return Vector((x if s == "L" else -x, y, z))
+
+
+# Points on the right foot, at rest, that meet the ball.
+INSTEP_R = Vector((-0.10, -0.10, 0.075))  # the laces, just behind the ball of the foot
+INSIDE_R = Vector((-0.055, -0.06, 0.04))  # the inside of the foot, at the arch
+
+
+def pass_clip(solver):
+    contact = 0.40
+    keys = [
+        (0.12, {"hy": -0.03, "hz": -0.045, "fRpitch": -8.0, "look_down": 16.0}),
+        (0.16, {"fLz": 0.05, "fLy": -0.07, "fLpitch": 4.0}),
+        (0.28, {"fLx": 0.18, "fLy": -0.20, "fLz": 0.0, "fLpitch": 8.0, "fLyaw": 4.0,
+                "hx": 0.05, "hy": -0.10, "hz": -0.065, "hyaw": -14.0, "hpitch": 5.0, "hroll": 2.0,
+                "fRx": -0.17, "fRy": 0.20, "fRz": 0.20, "fRyaw": -50.0, "fRpitch": -26.0, "fRflat": 0.0,
+                "sflex": 9.0, "cflex": 3.0, "ctwist": 10.0, "sside": 3.0,
+                "aLabd": 40.0, "aLflex": 25.0, "aLelbow": 35.0, "aRabd": 30.0, "aRflex": -22.0, "aRelbow": 28.0}),
+        (0.33, {"fLpitch": 0.0}),
+        (contact, {"fRx": -0.02, "fRy": -0.43, "fRz": 0.05, "fRyaw": -82.0, "fRpitch": 6.0, "fRtoe": 0.0,
+                   "hx": 0.05, "hy": -0.13, "hz": -0.075, "hyaw": 4.0, "hpitch": 7.0, "hroll": -2.0,
+                   "sflex": 10.0, "cflex": 3.0, "ctwist": -2.0, "sside": 2.0, "look_down": 22.0,
+                   "aLabd": 48.0, "aLflex": 28.0, "aLelbow": 30.0, "aRabd": 38.0, "aRflex": 8.0, "aRelbow": 25.0}),
+        (0.52, {"fRx": -0.03, "fRy": -0.66, "fRz": 0.10, "fRyaw": -70.0, "fRpitch": 8.0,
+                "hy": -0.16, "hyaw": 9.0, "look_down": 24.0}),
+        (0.70, {"fRx": -0.12, "fRy": -0.40, "fRz": 0.0, "fRyaw": -22.0, "fRpitch": 6.0, "fRflat": 1.0,
+                "hx": 0.01, "hy": -0.17, "hz": -0.05, "sflex": 6.0, "cflex": 1.0, "ctwist": 0.0}),
+        (0.78, {"fRpitch": 0.0, "fRyaw": -12.0}),
+        (1.10, {"fLx": 0.17, "fLy": -0.20, "fLyaw": 6.0, "fRx": -0.12, "fRy": -0.40, "fRyaw": -10.0,
+                "hx": 0.0, "hy": -0.17, "hz": -0.035, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0}),
+    ]
+    shot = Shot(READY, 1.10, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSIDE_R, BALL + Vector((0.0, BALL_RADIUS, -0.01)), ("fRx", "fRy", "fRz"))
+    return Clip("pass", int(round(1.10 * FPS)), shot, loop=False, contact=contact)
+
+
+def shot_clip(solver):
+    contact = 0.45
+    keys = [
+        (0.10, {"look_down": 20.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.06, "fLy": -0.08, "fLpitch": 4.0}),
+        (0.30, {"fLx": 0.21, "fLy": -0.30, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 6.0,
+                "hx": 0.06, "hy": -0.16, "hz": -0.075, "hyaw": -24.0, "hroll": 4.0, "hpitch": 4.0,
+                "sflex": 3.0, "cflex": -5.0, "ctwist": 16.0, "sside": 7.0,
+                "fRx": -0.10, "fRy": 0.26, "fRz": 0.40, "fRyaw": -12.0, "fRpitch": -62.0, "fRflat": 0.0, "fRtoe": 5.0,
+                "aLabd": 72.0, "aLflex": 32.0, "aLelbow": 24.0, "aRabd": 34.0, "aRflex": -36.0, "aRelbow": 30.0}),
+        (0.36, {"fLpitch": 0.0}),
+        (0.395, {"fRx": -0.08, "fRy": 0.02, "fRz": 0.30, "fRyaw": -10.0, "fRpitch": -68.0}),
+        (contact, {"fRx": -0.04, "fRy": -0.33, "fRz": 0.06, "fRyaw": -8.0, "fRpitch": -58.0,
+                   "hx": 0.05, "hy": -0.24, "hz": -0.085, "hyaw": 8.0, "hroll": -2.0, "hpitch": 9.0,
+                   "sflex": 14.0, "cflex": 6.0, "ctwist": -6.0, "sside": 4.0, "look_down": 30.0,
+                   "aLabd": 60.0, "aLflex": 18.0, "aRabd": 30.0, "aRflex": 22.0, "aRtwist": 15.0}),
+        (0.53, {"fRx": -0.03, "fRy": -0.78, "fRz": 0.36, "fRpitch": -52.0}),
+        (0.63, {"fRx": -0.02, "fRy": -1.06, "fRz": 0.74, "fRpitch": -40.0, "fRyaw": -5.0,
+                "fLpitch": -22.0, "hy": -0.30, "hz": -0.06, "hyaw": 15.0, "hroll": -3.0,
+                "sflex": 11.0, "cflex": 4.0, "ctwist": -10.0, "look_down": 14.0,
+                "aLabd": 45.0, "aLflex": -18.0, "aRabd": 22.0, "aRflex": 38.0, "aRtwist": 22.0}),
+        (0.84, {"fRx": -0.11, "fRy": -0.56, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": -10.0, "fRflat": 1.0, "fRtoe": 0.0,
+                "fLpitch": -30.0, "hy": -0.33, "hz": -0.06, "hx": 0.0}),
+        (0.93, {"fRpitch": 0.0}),
+        (1.10, {"fLpitch": 0.0}),
+        (1.30, {"fLx": 0.18, "fLy": -0.30, "fLyaw": 6.0, "fRx": -0.11, "fRy": -0.56, "fRyaw": -10.0,
+                "hx": 0.0, "hy": -0.33, "hz": -0.035, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "ctwist": 0.0}),
+    ]
+    shot = Shot(READY, 1.30, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSTEP_R, BALL + Vector((0.0, BALL_RADIUS * 0.8, 0.0)), ("fRx", "fRy", "fRz"))
+    return Clip("shot", int(round(1.30 * FPS)), shot, loop=False, contact=contact)
+
+
+def control_clip(solver):
+    contact = 0.30
+    keys = [
+        (0.12, {"look_down": 26.0, "hz": -0.05, "hx": 0.03, "fRz": 0.04, "fRy": -0.08, "fRyaw": -40.0,
+                "fRflat": 0.0, "fRpitch": 2.0}),
+        (contact, {"fRx": -0.02, "fRy": -0.42, "fRz": 0.05, "fRyaw": -80.0, "fRpitch": 6.0,
+                   "hx": 0.04, "hy": -0.10, "hz": -0.075, "hyaw": 3.0, "hpitch": 6.0,
+                   "sflex": 13.0, "cflex": 4.0, "look_down": 32.0,
+                   "aLabd": 32.0, "aLflex": 20.0, "aLelbow": 30.0, "aRabd": 28.0, "aRflex": 5.0, "aRelbow": 26.0}),
+        (0.45, {"fRx": -0.07, "fRy": -0.30, "fRz": 0.05, "fRyaw": -50.0, "hy": -0.09, "look_down": 28.0}),
+        (0.60, {"fRx": -0.13, "fRy": -0.16, "fRz": 0.0, "fRyaw": -14.0, "fRpitch": 0.0, "fRflat": 1.0,
+                "hx": 0.0, "hz": -0.05, "sflex": 6.0, "cflex": 0.0}),
+        (0.90, {"fRx": -0.13, "fRy": -0.16, "fRyaw": -10.0, "hy": -0.08, "hz": -0.035}),
+    ]
+    shot = Shot(READY, 0.90, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSIDE_R, BALL + Vector((0.0, BALL_RADIUS, -0.01)), ("fRx", "fRy", "fRz"))
+    return Clip("control", int(round(0.90 * FPS)), shot, loop=False, contact=contact)
+
+
+def tackle_clip(solver):
+    contact = 0.36
+    keys = [
+        (0.10, {"hz": -0.10, "hpitch": 6.0, "sflex": 8.0, "look_down": 18.0,
+                "fRz": 0.05, "fRflat": 0.0, "fRpitch": -10.0, "fRy": -0.04}),
+        (0.16, {"fLpitch": -6.0, "fLflat": 1.0}),
+        (0.22, {"fLz": 0.04, "fLy": 0.10, "fLflat": 0.0}),
+        (contact, {"fRx": -0.05, "fRy": -0.47, "fRz": 0.03, "fRyaw": -62.0, "fRpitch": 10.0,
+                   "hx": 0.04, "hy": 0.15, "hz": -0.31, "hpitch": 12.0, "hyaw": 12.0, "hroll": -4.0,
+                   "fLx": 0.15, "fLy": 0.18, "fLpitch": -30.0, "fLflat": 1.0,
+                   "sflex": 16.0, "cflex": 8.0, "ctwist": -6.0, "look_down": 22.0,
+                   "aLabd": 58.0, "aLflex": 30.0, "aLelbow": 34.0, "aRabd": 50.0, "aRflex": -20.0, "aRelbow": 30.0}),
+        (0.56, {"fRx": -0.06, "fRy": -0.49, "fRz": 0.02, "fRyaw": -55.0, "hy": 0.13, "hz": -0.30, "fLpitch": -28.0}),
+        (0.86, {"fRx": -0.13, "fRy": -0.20, "fRz": 0.0, "fRyaw": -15.0, "fRpitch": 0.0, "fRflat": 1.0,
+                "fLx": 0.15, "fLy": 0.18, "fLpitch": 0.0,
+                "hx": 0.0, "hy": 0.0, "hz": -0.09, "hpitch": 5.0, "hyaw": 0.0, "hroll": 0.0,
+                "sflex": 6.0, "cflex": 1.0, "ctwist": 0.0, "look_down": 10.0}),
+        (1.20, {"fRx": -0.13, "fRy": -0.20, "fRyaw": -10.0, "fLx": 0.14, "fLy": 0.10, "hy": -0.03, "hz": -0.035}),
+    ]
+    shot = Shot(READY, 1.20, keys, lag={"aL": 0.05, "aR": 0.06, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSIDE_R, BALL + Vector((0.0, BALL_RADIUS, -0.02)), ("fRx", "fRy", "fRz"))
+    return Clip("tackle", int(round(1.20 * FPS)), shot, loop=False, contact=contact)
+
+
+def header_clip(solver):
+    contact = 0.56
+    air = {"fLpitch": -40.0, "fRpitch": -40.0, "fLflat": 0.0, "fRflat": 0.0}
+    keys = [
+        (0.22, {"hz": -0.20, "hpitch": 12.0, "sflex": 16.0, "cflex": 4.0, "look_down": -18.0,
+                "aLflex": -38.0, "aRflex": -38.0, "aLabd": 16.0, "aRabd": 16.0, "aLelbow": 30.0, "aRelbow": 30.0}),
+        (0.36, {"hz": 0.02, "hpitch": 2.0, "sflex": -8.0, "cflex": -8.0, "look_down": -32.0,
+                "fLpitch": -45.0, "fRpitch": -45.0, "fLz": 0.0, "fRz": 0.0, "fLflat": 1.0, "fRflat": 1.0,
+                "aLflex": 45.0, "aRflex": 45.0, "aLabd": 45.0, "aRabd": 45.0, "aLelbow": 85.0, "aRelbow": 85.0,
+                "aLtwist": -20.0, "aRtwist": -20.0}),
+        (0.42, {"fLz": 0.06, "fRz": 0.06, **air}),
+        (contact, {"hz": 0.28, "hpitch": 4.0, "sflex": 9.0, "cflex": 8.0, "look_down": 12.0,
+                   "fLz": 0.33, "fRz": 0.30, "fLy": 0.06, "fRy": 0.04,
+                   "aLflex": 20.0, "aRflex": 20.0, "aLabd": 72.0, "aRabd": 72.0, "aLelbow": 75.0, "aRelbow": 75.0,
+                   "aLtwist": -25.0, "aRtwist": -25.0}),
+        (0.70, {"hz": 0.13, "fLz": 0.14, "fRz": 0.13, "fLy": 0.02, "fRy": 0.0, "look_down": 20.0, "sflex": 12.0}),
+        (0.79, {"hz": -0.13, "fLz": 0.0, "fRz": 0.0, "fLpitch": -18.0, "fRpitch": -18.0, "fLflat": 1.0, "fRflat": 1.0,
+                "hpitch": 9.0, "sflex": 12.0, "look_down": 12.0,
+                "aLflex": 15.0, "aRflex": 15.0, "aLabd": 30.0, "aRabd": 30.0, "aLelbow": 30.0, "aRelbow": 30.0,
+                "aLtwist": 0.0, "aRtwist": 0.0}),
+        (0.88, {"fLpitch": 0.0, "fRpitch": 0.0, "hz": -0.15}),
+        (1.25, {"fLy": 0.01, "fRy": -0.01}),
+    ]
+    shot = Shot(READY, 1.25, keys, lag={"aL": 0.03, "aR": 0.03, "look": -0.02})
+    return Clip("header", int(round(1.25 * FPS)), shot, loop=False, contact=contact)
+
+
+def _hands_on(ball, spread=0.13, back=0.03):
+    """Wrist targets holding a ball between the palms."""
+    return {"aLik": 1.0, "aRik": 1.0,
+            "aLix": ball.x + spread, "aLiy": ball.y + back, "aLiz": ball.z,
+            "aRix": ball.x - spread, "aRiy": ball.y + back, "aRiz": ball.z}
+
+
+def throw_in_clip(solver):
+    release = 0.74
+    hold = Vector((0.0, -0.30, 1.22))
+    behind = Vector((0.0, 0.12, 1.80))
+    out = Vector((0.0, -0.30, 1.86))
+    after = Vector((0.0, -0.55, 1.40))
+    ik_on = {"aLik": 1.0, "aRik": 1.0, "aLpole": 55.0, "aRpole": 55.0}
+    keys = [
+        (0.12, {**ik_on, **_hands_on(hold), "look_down": 10.0, "hz": -0.05}),
+        (0.18, {"fLz": 0.05, "fLy": -0.10}),
+        (0.32, {"fLx": 0.11, "fLy": -0.30, "fLz": 0.0, "fLyaw": 4.0, "fLpitch": 6.0,
+                "fRx": -0.12, "fRy": 0.10, "fRpitch": -28.0, "fRflat": 1.0,
+                "hy": -0.06, "hz": -0.07}),
+        (0.38, {"fLpitch": 0.0}),
+        (0.50, {**_hands_on(behind, spread=0.135), "aLpole": 80.0, "aRpole": 80.0,
+                "hy": -0.02, "hz": -0.08, "hpitch": -6.0, "sflex": -10.0, "cflex": -12.0, "look_down": -12.0}),
+        (release, {**_hands_on(out, spread=0.13), "hy": -0.12, "hz": -0.06, "hpitch": 6.0,
+                   "sflex": 12.0, "cflex": 9.0, "look_down": 4.0, "fRpitch": -40.0}),
+        (0.95, {**_hands_on(after, spread=0.14, back=0.0), "aLpole": 30.0, "aRpole": 30.0,
+                "hy": -0.13, "sflex": 15.0, "cflex": 8.0, "look_down": 10.0, "fRpitch": -38.0}),
+        (1.15, {"aLik": 0.0, "aRik": 0.0, "fRpitch": 0.0, "hy": -0.12, "hz": -0.04, "hpitch": 2.0,
+                "sflex": 2.0, "cflex": 0.0, "look_down": 4.0}),
+        (1.40, {"fLx": 0.11, "fLy": -0.30, "fLyaw": 4.0, "fRx": -0.12, "fRy": 0.10, "hy": -0.10}),
+    ]
+    shot = Shot(READY, 1.40, keys, lag={"look": -0.03})
+    return Clip("throw_in", int(round(1.40 * FPS)), shot, loop=False, contact=release)
+
+
+def celebrate_clip(solver):
+    end = 4.0
+    up = {"aLabd": 150.0, "aRabd": 150.0, "aLflex": 25.0, "aRflex": 25.0, "aLelbow": 15.0, "aRelbow": 15.0,
+          "aLpron": -40.0, "aRpron": -40.0}
+    keys = [
+        (0.30, {"hz": -0.12, "hpitch": 8.0, "sflex": 10.0, "cflex": -6.0, "look_down": -10.0,
+                "aLflex": 35.0, "aRflex": 35.0, "aLelbow": 110.0, "aRelbow": 110.0, "aLabd": 30.0, "aRabd": 30.0,
+                "fLpitch": 0.0, "fRpitch": 0.0}),
+        (0.45, {"hz": 0.0, "fLpitch": -40.0, "fRpitch": -40.0, "fLz": 0.0, "fRz": 0.0, "fLflat": 1.0, "fRflat": 1.0}),
+        (0.50, {"fLflat": 1.0, "fRflat": 1.0}),
+        (0.56, {"fLz": 0.08, "fRz": 0.08, "fLflat": 0.0, "fRflat": 0.0}),
+        (0.70, {"hz": 0.26, "hpitch": 0.0, "sflex": -6.0, "cflex": -10.0, "look_down": -28.0,
+                "fLz": 0.26, "fRz": 0.22, "fLpitch": -45.0, "fRpitch": -40.0, "fLy": 0.06,
+                "aRflex": 172.0, "aRabd": 12.0, "aRelbow": 8.0, "aLflex": 40.0, "aLelbow": 120.0, "aLabd": 25.0}),
+        (0.88, {"hz": 0.10, "fLz": 0.08, "fRz": 0.07, "fLy": 0.02}),
+        (1.00, {"hz": -0.14, "fLz": 0.0, "fRz": 0.0, "fLpitch": -12.0, "fRpitch": -12.0, "fLflat": 1.0, "fRflat": 1.0,
+                "fLy": 0.01, "hpitch": 8.0, "sflex": 6.0, "look_down": -5.0}),
+        (1.15, {"fLpitch": 0.0, "fRpitch": 0.0, "hz": -0.08}),
+        (1.50, {**up, "hz": -0.04, "hpitch": 0.0, "sflex": -4.0, "cflex": -10.0, "look_down": -22.0}),
+        (1.90, {"aLabd": 158.0, "aRabd": 146.0, "look_tilt": 6.0, "hz": -0.05}),
+        (2.30, {"aLabd": 146.0, "aRabd": 156.0, "look_tilt": -4.0, "hz": -0.04}),
+        (2.55, {**up}),
+        (2.75, {"aLabd": 40.0, "aRabd": 40.0, "aLflex": 40.0, "aRflex": 40.0, "aLelbow": 120.0, "aRelbow": 120.0,
+                "hz": -0.09, "sflex": 10.0, "cflex": 2.0, "look_down": 5.0}),
+        (2.95, {"aLabd": 110.0, "aRabd": 110.0, "aLelbow": 70.0, "aRelbow": 70.0, "hz": -0.05, "sflex": 0.0,
+                "cflex": -6.0, "look_down": -15.0}),
+        (3.15, {"aLabd": 40.0, "aRabd": 40.0, "aLelbow": 120.0, "aRelbow": 120.0, "hz": -0.09, "sflex": 10.0,
+                "cflex": 2.0, "look_down": 5.0}),
+        (3.40, {"aLabd": 55.0, "aRabd": 55.0, "aLelbow": 60.0, "aRelbow": 60.0, "hz": -0.05}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.03, "aR": 0.05, "look": -0.03})
+    return Clip("celebrate", int(round(end * FPS)), shot, loop=False)
+
+
+# -- goalkeeper --------------------------------------------------------------
+
+
+def keeper_dive_clip(solver, side):
+    """A dive to the figure's own left (mirrored for the right).
+
+    The body leaves the ground and lies out horizontally over the root, the
+    page carrying the keeper across its goal; it lands on its side, gathers
+    the arms in and gets up where it fell."""
+    stretch = 0.46
+    end = 2.3
+    air = {"fLspace": 1.0, "fRspace": 1.0, "fLflat": 0.0, "fRflat": 0.0}
+    # Arms go up through the front, so on the ground they can come down in
+    # front of the chest without sweeping through the grass.
+    arms_up = {"aLabd": 14.0, "aRabd": 10.0, "aLflex": 172.0, "aRflex": 168.0, "aLelbow": 8.0, "aRelbow": 10.0,
+               "aLtwist": 0.0, "aRtwist": 0.0, "aLpron": 0.0, "aRpron": 0.0}
+    gather = {"aLabd": -14.0, "aRabd": 20.0, "aLflex": 85.0, "aRflex": 80.0, "aLelbow": 95.0, "aRelbow": 100.0,
+              "aLtwist": 10.0, "aRtwist": 10.0}
+    keys = [
+        (0.10, {"hz": -0.18, "hx": 0.04, "hpitch": 12.0, "fLz": 0.0, "fLx": 0.19, "fRx": -0.19}),
+        (0.13, {"fLz": 0.05, "fLflat": 0.0}),
+        (0.22, {"fLx": 0.36, "fLy": -0.06, "fLz": 0.0, "fLpitch": -8.0, "fLflat": 1.0,
+                "hx": 0.14, "hz": -0.15, "hroll": 12.0, "sside": 6.0, "cside": 4.0,
+                "aLabd": 45.0, "aRabd": 30.0, "aLflex": 100.0, "aRflex": 80.0, "aLelbow": 30.0, "aRelbow": 40.0}),
+        (0.30, {"fLpitch": -35.0, "fRpitch": -45.0, "fRflat": 1.0, "fLspace": 0.0, "fRspace": 0.0,
+                "hx": 0.22, "hz": -0.08, "hroll": 34.0, "sside": 10.0, "cside": 8.0, "look_body": 0.4,
+                "aLabd": 30.0, "aRabd": 24.0, "aLflex": 142.0, "aRflex": 130.0}),
+        (0.36, {**air,
+                "fLx": 0.12, "fLy": -0.02, "fLz": 0.10, "fLpitch": -35.0,
+                "fRx": -0.13, "fRy": 0.0, "fRz": 0.04, "fRpitch": -40.0}),
+        (stretch, {**air, **arms_up, "hx": 0.32, "hz": -0.20, "hroll": 80.0, "hpitch": 6.0, "hyaw": 0.0,
+                   "sside": 8.0, "cside": 8.0, "sflex": 4.0, "cflex": 0.0, "look_body": 0.85, "look_down": 0.0,
+                   "fLx": 0.10, "fLy": -0.02, "fLz": 0.12, "fLpitch": -30.0,
+                   "fRx": -0.12, "fRy": 0.02, "fRz": 0.04, "fRpitch": -35.0}),
+        (0.64, {"hx": 0.42, "hz": -0.50, "hroll": 87.0, **arms_up, "aLabd": 0.0, "fLx": 0.05}),
+        (0.80, {**arms_up, "hx": 0.46, "hz": -0.72, "hroll": 90.0, "sside": -3.0, "cside": -3.0,
+                "aLabd": -10.0, "fLx": 0.02, "fLz": 0.10, "fRz": 0.12}),
+        (1.05, {**gather, "hx": 0.46, "hz": -0.72, "hroll": 90.0, "look_body": 0.85, "fLx": 0.02,
+                "sside": -3.0, "cside": -3.0}),
+        (1.25, {**air, **gather, "hx": 0.45, "hz": -0.70, "hroll": 86.0, "fLx": 0.03, "fLz": 0.20, "fRz": 0.18}),
+        # Getting up: roll onto the knees and stand.
+        (1.40, {"fLspace": 0.35, "fRspace": 0.35, "fLz": 0.26, "fRz": 0.20, "fLpitch": -5.0, "fRpitch": -5.0,
+                "fLx": 0.22, "fRx": 0.05, "hroll": 66.0, "hz": -0.64}),
+        (1.55, {"hx": 0.40, "hz": -0.48, "hroll": 40.0, "hpitch": 30.0, "sflex": 20.0, "sside": 2.0, "cside": 0.0,
+                "look_body": 0.3, "look_down": 15.0,
+                "fLspace": 0.0, "fRspace": 0.0, "fLflat": 1.0, "fRflat": 1.0,
+                "fLx": 0.48, "fLy": 0.10, "fLz": 0.0, "fLpitch": -60.0,
+                "fRx": 0.20, "fRy": -0.10, "fRz": 0.0, "fRpitch": 0.0,
+                "aLabd": 30.0, "aRabd": 30.0, "aLflex": 40.0, "aRflex": 30.0, "aLelbow": 30.0, "aRelbow": 40.0,
+                "aLtwist": 0.0, "aRtwist": 0.0}),
+        (1.90, {"hx": 0.34, "hz": -0.16, "hroll": 4.0, "hpitch": 14.0, "sflex": 10.0, "look_body": 0.0,
+                "look_down": 0.0, "fLx": 0.50, "fLy": -0.02, "fLpitch": 0.0, "fRx": 0.17, "fRy": -0.02,
+                "aLabd": 26.0, "aRabd": 26.0, "aLflex": 30.0, "aRflex": 30.0, "aLelbow": 50.0, "aRelbow": 50.0}),
+        (end, {"hx": 0.34, "hz": -0.13, "hroll": 0.0, "hpitch": 10.0, "sflex": 9.0, "sside": 0.0, "cside": 0.0,
+               "fLx": 0.53, "fLy": -0.02, "fRx": 0.15, "fRy": -0.02}),
+    ]
+    shot = Shot(KEEPER_READY, end, keys, lag={"aL": 0.03, "aR": 0.05})
+    name = f"keeper_dive_{side}"
+    if side == "L":
+        return Clip(name, int(round(end * FPS)), shot, loop=False, contact=stretch)
+    return Clip(name, int(round(end * FPS)), lambda t: mirror(shot(t)), loop=False, contact=stretch)
+
+
+def keeper_dive_L_clip(solver):
+    return keeper_dive_clip(solver, "L")
+
+
+def keeper_dive_R_clip(solver):
+    return keeper_dive_clip(solver, "R")
+
+
+def keeper_catch_clip(solver):
+    contact = 0.32
+    end = 1.10
+    ball = Vector((0.0, -0.46, 1.10))
+    chest = Vector((0.0, -0.24, 1.12))
+    keys = [
+        (0.15, {"aLik": 1.0, "aRik": 1.0, **_hands_on(ball + Vector((0, -0.06, 0.0)), spread=0.12, back=0.05),
+                "aLpole": 5.0, "aRpole": 5.0, "aLpron": 70.0, "aRpron": 70.0, "aLwrist": -20.0, "aRwrist": -20.0,
+                "hy": -0.04, "hz": -0.15, "look_down": 8.0}),
+        (contact, {**_hands_on(ball, spread=0.11, back=0.06), "hy": -0.07, "hz": -0.16, "sflex": 14.0,
+                   "cflex": 6.0, "look_down": 14.0}),
+        (0.52, {**_hands_on(chest, spread=0.09, back=0.02), "aLpole": -10.0, "aRpole": -10.0,
+                "sflex": 18.0, "cflex": 8.0, "hz": -0.17, "look_down": 26.0}),
+        (end, {**_hands_on(chest, spread=0.09, back=0.02), "aLik": 1.0, "aRik": 1.0, "aLpole": -10.0,
+               "aRpole": -10.0, "aLpron": 70.0, "aRpron": 70.0, "aLwrist": -20.0, "aRwrist": -20.0,
+               "hy": -0.05, "hz": -0.08, "sflex": 10.0, "cflex": 4.0, "look_down": 18.0}),
+    ]
+    shot = Shot(KEEPER_READY, end, keys, lag={"look": -0.03})
+    return Clip("keeper_catch", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def keeper_catch_high_clip(solver):
+    contact = 0.50
+    end = 1.30
+    high = Vector((0.0, -0.24, 2.17))
+    chest = Vector((0.0, -0.24, 1.12))
+    air = {"fLflat": 0.0, "fRflat": 0.0}
+    keys = [
+        (0.20, {"hz": -0.21, "hpitch": 14.0, "sflex": 14.0, "look_down": -25.0,
+                "aLflex": -20.0, "aRflex": -20.0, "aLabd": 20.0, "aRabd": 20.0, "aLelbow": 35.0, "aRelbow": 35.0}),
+        (0.34, {"hz": 0.0, "hpitch": 4.0, "sflex": 0.0, "fLpitch": -45.0, "fRpitch": -45.0, "fLz": 0.0, "fRz": 0.0,
+                "fLflat": 1.0, "fRflat": 1.0,
+                "aLflex": 120.0, "aRflex": 120.0, "aLabd": 20.0, "aRabd": 20.0, "aLik": 0.0, "aRik": 0.0}),
+        (0.40, {"fLz": 0.06, "fRz": 0.06, **air}),
+        (contact, {**air, "hz": 0.22, "hpitch": 2.0, "sflex": -4.0, "cflex": -6.0, "look_down": -40.0,
+                   "fLz": 0.24, "fRz": 0.20, "fLy": 0.05, "fLpitch": -45.0, "fRpitch": -40.0,
+                   "aLik": 1.0, "aRik": 1.0, **_hands_on(high, spread=0.11, back=0.02),
+                   "aLpole": 30.0, "aRpole": 30.0, "aLpron": 80.0, "aRpron": 80.0, "aLwrist": -25.0, "aRwrist": -25.0}),
+        (0.66, {"hz": 0.06, "fLz": 0.07, "fRz": 0.06, "fLy": 0.01, **_hands_on(chest + Vector((0, -0.05, 0.25)),
+                                                                                  spread=0.10, back=0.02),
+                "look_down": 0.0, "sflex": 8.0}),
+        (0.76, {"hz": -0.15, "fLz": 0.0, "fRz": 0.0, "fLpitch": -15.0, "fRpitch": -15.0, "fLflat": 1.0, "fRflat": 1.0,
+                **_hands_on(chest, spread=0.09, back=0.02), "aLpole": -10.0, "aRpole": -10.0,
+                "sflex": 16.0, "cflex": 6.0, "hpitch": 12.0, "look_down": 22.0}),
+        (0.86, {"fLpitch": -6.0, "fRpitch": -6.0, "hz": -0.17}),
+        (end, {"hz": -0.08, "sflex": 10.0, "cflex": 4.0, "look_down": 18.0, "fLy": -0.02}),
+    ]
+    shot = Shot(KEEPER_READY, end, keys, lag={"look": -0.03}, settle=False)
+    return Clip("keeper_catch_high", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+# -- the touchline -------------------------------------------------------------
+
+
+def instruct_clip(solver):
+    end = 2.8
+    point = {"aRflex": 82.0, "aRabd": 16.0, "aRelbow": 6.0, "aRpron": 70.0, "aRwrist": 0.0, "aRtwist": 0.0}
+    hand_on_hip = {"aLik": 1.0, "aLix": 0.215, "aLiy": 0.03, "aLiz": 1.00, "aLpole": 75.0,
+                   "aLpron": 40.0, "aLwrist": 25.0}
+    keys = [
+        (0.28, {**point, **hand_on_hip, "sflex": 4.0, "cflex": 2.0, "stwist": -4.0, "ctwist": -6.0,
+                "hz": -0.04, "look_down": 0.0, "look_yaw": -6.0}),
+        (0.55, {"aRflex": 74.0, "aRelbow": 28.0, "cflex": 0.0}),
+        (0.75, {"aRflex": 86.0, "aRelbow": 4.0, "cflex": 4.0}),
+        (1.05, {"aRflex": 74.0, "aRelbow": 26.0, "cflex": 1.0}),
+        (1.25, {"aRflex": 86.0, "aRelbow": 4.0, "cflex": 4.0}),
+        (1.60, {"aRflex": 80.0, "aRelbow": 10.0}),
+        (2.20, {**point, **hand_on_hip, "aRflex": 78.0, "sflex": 4.0, "cflex": 2.0, "stwist": -4.0, "ctwist": -6.0,
+                "look_yaw": -6.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.05, "look": -0.04})
+    return Clip("instruct", int(round(end * FPS)), shot, loop=False)
+
+
+def _rolling(t, p, start, stop, centre, radius, rate, phase=0.0, spread=0.06):
+    """Forearms rolling round each other in front of the chest."""
+    w = smoothstep((t - start) / 0.3) * (1.0 - smoothstep((t - stop) / 0.3))
+    if w <= 0.0:
+        return
+    a = 2.0 * math.pi * rate * (t - start) + phase
+    for s, sign, off in (("L", 1.0, 0.0), ("R", -1.0, math.pi)):
+        p[f"a{s}ik"] = w
+        p[f"a{s}ix"] = centre.x + spread * sign
+        p[f"a{s}iy"] = centre.y + radius * math.sin(a + off)
+        p[f"a{s}iz"] = centre.z + radius * math.cos(a + off)
+        p[f"a{s}pole"] = 50.0
+        p[f"a{s}pron"] = 60.0
+
+
+def change_clip(solver):
+    end = 2.6
+    keys = [
+        (0.30, {"sflex": 4.0, "cflex": 2.0, "look_down": 0.0, "hz": -0.04}),
+        (2.25, {"sflex": 4.0, "cflex": 2.0}),
+    ]
+    centre = Vector((0.0, -0.36, 1.24))
+    shot = Shot(READY, end, keys, extra=lambda t, p: _rolling(t, p, 0.05, 2.25, centre, 0.075, 1.75))
+    return Clip("change", int(round(end * FPS)), shot, loop=False)
+
+
+def _clapping(t, p, start, stop, centre, rate):
+    w = smoothstep((t - start) / 0.3) * (1.0 - smoothstep((t - stop) / 0.3))
+    if w <= 0.0:
+        return
+    beat = 0.5 - 0.5 * math.cos(2.0 * math.pi * rate * (t - start))  # 0 apart .. 1 together
+    gap = lerp(0.20, 0.045, beat ** 1.5)
+    for s, sign in (("L", 1.0), ("R", -1.0)):
+        p[f"a{s}ik"] = w
+        p[f"a{s}ix"] = centre.x + gap * sign
+        p[f"a{s}iy"] = centre.y
+        p[f"a{s}iz"] = centre.z + 0.02 * beat
+        p[f"a{s}pole"] = 20.0
+        p[f"a{s}pron"] = 0.0
+        p[f"a{s}wrist"] = -10.0
+
+
+def clap_clip(solver):
+    end = 2.6
+    keys = [(0.30, {"sflex": 3.0, "look_down": -2.0, "hz": -0.04}), (2.25, {"sflex": 3.0})]
+    centre = Vector((0.0, -0.36, 1.28))
+    shot = Shot(READY, end, keys, extra=lambda t, p: _clapping(t, p, 0.05, 2.25, centre, 2.3))
+    return Clip("clap", int(round(end * FPS)), shot, loop=False)
+
+
+def protest_clip(solver):
+    end = 2.6
+    spread = {"aLabd": 42.0, "aRabd": 42.0, "aLflex": 34.0, "aRflex": 34.0, "aLelbow": 48.0, "aRelbow": 48.0,
+              "aLpron": -95.0, "aRpron": -95.0, "aLwrist": -20.0, "aRwrist": -20.0, "aLtwist": -20.0, "aRtwist": -20.0}
+    keys = [
+        (0.35, {**spread, "aLelev": 9.0, "aRelev": 9.0, "sflex": -3.0, "cflex": -4.0, "look_down": -6.0,
+                "look_yaw": 0.0, "hz": -0.04}),
+        (0.70, {"look_yaw": 12.0, "aLabd": 48.0, "aRabd": 48.0}),
+        (0.95, {"look_yaw": -12.0}),
+        (1.20, {"look_yaw": 10.0, "aLelev": 3.0, "aRelev": 3.0, "aLabd": 40.0, "aRabd": 40.0}),
+        (1.45, {"look_yaw": -6.0, "aLelev": 10.0, "aRelev": 10.0, "aLabd": 52.0, "aRabd": 52.0, "aLelbow": 40.0,
+                "aRelbow": 40.0}),
+        (1.80, {"look_yaw": 0.0, "aLabd": 46.0, "aRabd": 46.0}),
+        (2.20, {**spread, "aLelev": 4.0, "aRelev": 4.0, "sflex": -2.0, "cflex": -2.0, "look_down": -2.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aR": 0.03, "look": -0.02})
+    return Clip("protest", int(round(end * FPS)), shot, loop=False)
+
+
+def cheer_clip(solver):
+    end = 6.5
+    up = {"aLabd": 155.0, "aRabd": 155.0, "aLflex": 20.0, "aRflex": 20.0, "aLelbow": 20.0, "aRelbow": 20.0,
+          "aLpron": -30.0, "aRpron": -30.0}
+    keys = [(0.35, {**up, "hz": -0.05, "cflex": -8.0, "look_down": -18.0})]
+    t = 0.35
+    for i in range(3):  # three small jumps, arms up
+        keys += [
+            (t + 0.25, {"hz": -0.12, "fLpitch": 0.0, "fRpitch": 0.0, "fLz": 0.0, "fRz": 0.0,
+                        "aLabd": 150.0, "aRabd": 150.0}),
+            (t + 0.42, {"hz": 0.04, "fLpitch": -38.0, "fRpitch": -38.0}),
+            (t + 0.55, {"hz": 0.16, "fLz": 0.13, "fRz": 0.12, "aLabd": 162.0, "aRabd": 160.0}),
+            (t + 0.70, {"hz": 0.04, "fLz": 0.0, "fRz": 0.0, "fLpitch": -30.0, "fRpitch": -30.0}),
+            (t + 0.85, {"hz": -0.10, "fLpitch": 0.0, "fRpitch": 0.0}),
+        ]
+        t += 0.95
+    keys += [(3.40, {**up, "hz": -0.05, "aLflex": 30.0, "aRflex": 30.0})]
+    t = 3.5
+    for i in range(4):  # fists clenched and pumped
+        keys += [
+            (t + 0.12, {"aLabd": 45.0, "aRabd": 45.0, "aLflex": 30.0, "aRflex": 30.0, "aLelbow": 125.0,
+                        "aRelbow": 125.0, "hz": -0.08, "sflex": 10.0, "cflex": 2.0, "look_down": 4.0}),
+            (t + 0.32, {"aLabd": 100.0, "aRabd": 100.0, "aLelbow": 80.0, "aRelbow": 80.0, "hz": -0.04,
+                        "sflex": 0.0, "cflex": -8.0, "look_down": -16.0}),
+        ]
+        t += 0.55
+    keys += [(5.85, {"aLabd": 40.0, "aRabd": 40.0, "aLelbow": 60.0, "aRelbow": 60.0, "hz": -0.04,
+                     "sflex": 1.0, "cflex": -2.0, "look_down": 0.0})]
+    shot = Shot(READY, end, keys, lag={"aL": 0.02, "aR": 0.04, "look": -0.03})
+    return Clip("cheer", int(round(end * FPS)), shot, loop=False)
+
+
+def despair_clip(solver):
+    end = 5.5
+    on_head = {"aLik": 1.0, "aRik": 1.0, "aLix": 0.12, "aRix": -0.12, "aLiy": 0.06, "aRiy": 0.06,
+               "aLiz": 1.79, "aRiz": 1.79, "aLpole": 20.0, "aRpole": 20.0, "aLpron": 70.0, "aRpron": 70.0,
+               "aLwrist": 30.0, "aRwrist": 30.0}
+    on_hips = {"aLik": 1.0, "aRik": 1.0, "aLix": 0.215, "aRix": -0.215, "aLiy": 0.03, "aRiy": 0.03,
+               "aLiz": 1.0, "aRiz": 1.0, "aLpole": 75.0, "aRpole": 75.0, "aLpron": 40.0, "aRpron": 40.0,
+               "aLwrist": 25.0, "aRwrist": 25.0}
+    keys = [
+        (0.40, {**on_head, "sflex": -5.0, "cflex": -6.0, "look_down": -14.0, "hy": 0.02, "hz": -0.04}),
+        (0.90, {"look_tilt": 5.0, "look_down": -10.0, "sflex": -3.0}),
+        (1.45, {"look_tilt": -4.0, "look_down": -12.0}),
+        (1.80, {**on_head, "look_tilt": 0.0, "sflex": -4.0}),
+        (2.35, {**on_hips, "sflex": 9.0, "cflex": 6.0, "look_down": 34.0, "hy": 0.0, "hz": -0.03}),
+        (3.60, {"look_yaw": 8.0, "look_down": 30.0, "sflex": 10.0}),
+        (4.60, {**on_hips, "look_yaw": -3.0, "look_down": 34.0, "sflex": 9.0, "cflex": 6.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.03, "aR": 0.05, "look": -0.04})
+    return Clip("despair", int(round(end * FPS)), shot, loop=False)
+
+
+CLIP_BUILDERS = [
+    idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
+    pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
+    keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
+    instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
+]
 
 
 # --------------------------------------------------------------------------
