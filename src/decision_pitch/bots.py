@@ -211,11 +211,13 @@ def _pass_or_clear(m: Match, p: Player) -> Command:
     if best is None:
         return KickTo(p.x + direction * 40, p.y * 0.5, 26.0, 0.5)
     dist = math.hypot(best.x - p.x, best.y - p.y)
-    # lead the receiver a little; long balls go in the air
-    tx, ty = best.x + direction * 2, best.y
+    # long balls go in the air
     if dist > 25:
-        return KickTo(tx, ty, min(26.0, 9 + dist * 0.45), 0.5)
-    return KickTo(tx, ty, min(24.0, math.sqrt(2 * ROLLING * dist) * 1.4 + 4), 0.0)
+        speed, loft = min(26.0, 9 + dist * 0.45), 0.5
+    else:
+        speed, loft = min(24.0, math.sqrt(2 * ROLLING * dist) * 1.4 + 4), 0.0
+    travel = dist / speed  # aim where the receiver will be when the ball gets there
+    return KickTo(best.x + best.vx * travel, best.y + best.vy * travel, speed, loft)
 
 
 def _pressed(m: Match, p: Player) -> bool:
