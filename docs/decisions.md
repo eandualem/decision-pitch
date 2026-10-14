@@ -577,7 +577,8 @@ before the first match is built, and clones it per player and per touchline
 figure; geometry and clips are shared, and materials are shared per team and
 per skin or hair tone. Each figure has an animation mixer. The snapshot sends a
 player's heading and speed but not the direction it travels, so the page takes
-travel from the drawn positions, ignoring it at a walk's pace or less.
+travel from the drawn positions, smoothed, and ignores it only below about
+0.3 m/s: a player slowing to turn often moves well off its heading at a walk.
 Locomotion blends the loops by ground speed and by the direction of travel
 against the way the figure faces, with all loops on one shared phase, and
 plays them at the rate that matches the stride to the speed, so feet plant
