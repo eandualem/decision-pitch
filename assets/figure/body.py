@@ -618,7 +618,21 @@ def build_coat(figure, collection):
     verts, quads = keep_vertices(verts, quads, NECK.at(verts) > 0.004)
     obj = mesh_object("coat", smooth(verts, quads, 1), quads, collection)
     collapse(obj, COAT_TRIANGLES)
-    obj.data.materials.append(material("coat"))
+    # The jacket and the trousers are separate materials, so the page can colour them apart,
+    # split along a clean cut just under the jacket's hem.
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    near = [f for f in bm.faces if abs(f.calc_center_median().z - JACKET_HEM) < 0.03]
+    chosen = set(near)
+    bmesh.ops.bisect_plane(bm, geom=[v for v in bm.verts if any(f in chosen for f in v.link_faces)]
+                           + [e for e in bm.edges if any(f in chosen for f in e.link_faces)] + near,
+                           dist=1e-5, plane_co=Vector((0.0, 0.0, JACKET_HEM - 0.003)), plane_no=Vector((0.0, 0.0, 1.0)))
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    bm.to_mesh(obj.data)
+    bm.free()
+    centres = np.array([p.center for p in obj.data.polygons])
+    legs = centres[:, 2] < JACKET_HEM - 0.003  # the jacket ends at its hem; below it are the trousers
+    _assign(obj, ["coat", "trousers"], np.where(legs, "trousers", "coat"))
     for poly in obj.data.polygons:
         poly.use_smooth = True
     return obj
@@ -773,7 +787,7 @@ def build_body(armature):
         "coat": coat.name,
         "number": number.name,
         "hair": [obj.name for obj in hair],
-        "materials": {"regions": list(REGIONS), "fixed": list(FIXED)},
+        "materials": {"regions": list(REGIONS), "fixed": list(FIXED), "coat": ["coat", "trousers"]},
         "morphs": {name: morphs[name] for name in MORPHS if name in morphs},
         "triangles": {p.name: sum(len(f.vertices) - 2 for f in p.data.polygons) for p in parts},
     }

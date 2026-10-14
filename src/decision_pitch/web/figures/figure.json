@@ -157,6 +157,10 @@
  ],
  "height": 1.8,
  "materials": {
+  "coat": [
+   "coat",
+   "trousers"
+  ],
   "fixed": [
    "eyes"
   ],
@@ -214,13 +218,13 @@
  "number": "number",
  "triangles": {
   "body": 8978,
-  "coat": 3799,
+  "coat": 3951,
   "eyes": 264,
   "hair_bald": 160,
-  "hair_bun": 1000,
-  "hair_buzz": 520,
-  "hair_curly": 1399,
-  "hair_short": 900,
+  "hair_bun": 999,
+  "hair_buzz": 519,
+  "hair_curly": 1400,
+  "hair_short": 899,
   "hair_swept": 1000,
   "number": 128
  }
