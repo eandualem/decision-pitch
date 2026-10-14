@@ -222,6 +222,12 @@ def test_turns_cuts_and_the_brake_say_how_far_they_turn_and_when_they_plant(info
     assert clips["brake"]["loop"] is False and 0 < clips["brake"]["contact"] < clips["brake"]["duration"]
 
 
+def test_there_are_idles_to_vary_the_standing(info):
+    idles = [name for name, meta in info["clips"].items()
+             if name.startswith("idle") and meta["loop"] and "speed" not in meta and "set" not in meta]
+    assert "idle" in idles and len(idles) >= 4
+
+
 def test_the_side_shuffles_are_jockeying(info):
     assert info["clips"]["strafe_L"]["set"] == info["clips"]["strafe_R"]["set"] == "jockey"
 

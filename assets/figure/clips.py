@@ -2300,7 +2300,7 @@ def despair_clip(solver):
 
 
 CLIP_BUILDERS = [
-    idle_clip,
+    idle_clip, idle_shift_clip, idle_hips_clip, idle_look_clip,
     walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
     walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
     dribble_clips, jockey_clips, shield_clips, turn_clips, cut_clips,

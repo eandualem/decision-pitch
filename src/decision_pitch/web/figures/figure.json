@@ -125,6 +125,18 @@
    "duration": 3.0,
    "loop": true
   },
+  "idle_hips": {
+   "duration": 4.0,
+   "loop": true
+  },
+  "idle_look": {
+   "duration": 4.5,
+   "loop": true
+  },
+  "idle_shift": {
+   "duration": 4.0,
+   "loop": true
+  },
   "instruct": {
    "duration": 2.8,
    "loop": false
