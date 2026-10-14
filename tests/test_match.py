@@ -165,6 +165,16 @@ def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
     assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
 
 
+def test_a_chaser_close_behind_a_rolling_ball_catches_it():
+    m = in_play(ball=(0.0, 0.0), velocity=(6.0, 0.0, 0.0))
+    chaser = m.player(9)
+    chaser.x, chaser.y, chaser.vx = -2.0, 0.5, 4.0  # 2 m behind, running after it
+    for _ in range(round(1.6 / STEP)):
+        bots.play(m)
+        m.step()
+    assert m.owner == chaser.id  # not alongside it until the ball slows down
+
+
 def test_the_team_shape_moves_up_with_the_ball_but_not_into_its_own_six_yard_box():
     m = in_play(ball=(20.0, 0.0))
     m.owner = 10  # a home forward has the ball 20 m into the opponents' half

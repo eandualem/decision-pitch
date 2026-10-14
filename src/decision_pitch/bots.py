@@ -27,6 +27,9 @@ ROUND_INTERCEPT = 2.0  # s ahead, at most, that it aims to meet the ball once in
 ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the ball
 CHASE_AHEAD = 3.0  # s of a loose ball's path searched for the player who reaches it first
 CHASE_STEP = 0.1  # s between the points of that path
+RUN_THROUGH = 3.0  # m beyond its meeting spot that a chaser close to a moving ball aims
+RUN_THROUGH_NEAR = 6.0  # m from the ball within which it does
+RUN_THROUGH_SPEED = 1.0  # m/s the ball moves at, at least
 SAVE_MARGIN = 1.0  # m outside a post within which a goalkeeper still covers a shot
 SHAPE_FOLLOW = 0.9  # how far the team's shape moves with the ball, as a share of the ball's move
 SHAPE_DEEPEST = 8.0  # m from its own goal line that an outfield player's place goes back to at most
@@ -67,7 +70,7 @@ def command(m: Match, p: Player) -> Command:
     if m.owner is None:
         chaser, spot = _chase(m, p.team)
         if p.id == chaser.id:
-            return MoveTo(*spot)
+            return MoveTo(*_run_through(m, p, spot))
     elif p.id == _nearest(m, p.team, outfield=True).id:
         return MoveTo(*_press_spot(m, p))
     return MoveTo(*_home(m, p), JOG)
@@ -101,6 +104,17 @@ def _chase(m: Match, team: int) -> tuple[Player, tuple[float, float]]:
             found[side] = best[1:]
         _chases = (key, found)
     return _chases[1][team]
+
+
+def _run_through(m: Match, p: Player, spot: tuple[float, float]) -> tuple[float, float]:
+    """Where `p`, chasing the loose ball, runs: close to a moving ball, on beyond its meeting
+    spot, so it arrives at full speed rather than slowing to stop there as the ball rolls on."""
+    b = m.ball
+    dx, dy = spot[0] - p.x, spot[1] - p.y
+    dist = math.hypot(dx, dy)
+    if math.hypot(b.vx, b.vy) < RUN_THROUGH_SPEED or math.hypot(b.x - p.x, b.y - p.y) > RUN_THROUGH_NEAR or dist == 0:
+        return spot
+    return spot[0] + dx / dist * RUN_THROUGH, spot[1] + dy / dist * RUN_THROUGH
 
 
 def _meet(
