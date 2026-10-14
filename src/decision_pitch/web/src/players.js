@@ -163,6 +163,7 @@ export function createPlayers(scene, teams, figure, camera = null) {
   let spinRate = 0; // rad/s
   const seen = new Map(); // touches already posed, by time and player, with their time
   let taker = null; // the player picking the ball up for a throw-in
+  let throwTeam = null; // the team the last throw-in was given to
   let thrower = null; // the player with a throw-in under way
   let keeping = null; // a goalkeeper holding the ball it caught
   const hands = new THREE.Vector3();
@@ -360,15 +361,18 @@ export function createPlayers(scene, teams, figure, camera = null) {
       if (latest !== after) notice(latest, time);
     }
     for (const actor of actors.values()) actor.group.visible = false;
-    // At a throw-in, whoever comes to the ball picks it up.
+    // At a throw-in, whoever of the team it was given to comes to the ball picks it up;
+    // an opponent standing nearer, the player who put it out, say, does not.
     taker = null;
     if (after.phase === 'throw_in' && !reset) {
       let nearest = THROWER;
       for (const player of after.players) {
+        const candidate = actors.get(player.id);
+        if (!candidate || (throwTeam !== null && candidate.team !== throwTeam)) continue;
         const d = Math.hypot(player.x - after.ball.x, player.y - after.ball.y);
         if (d < nearest) {
           nearest = d;
-          taker = actors.get(player.id) ?? null;
+          taker = candidate;
         }
       }
       if (taker?.throwing?.anchor) taker = null; // already thrown
@@ -600,6 +604,7 @@ export function createPlayers(scene, teams, figure, camera = null) {
       for (const [id, actor] of actors) if (actor.group.visible) visit(id, actor.group.position);
     },
     handleEvent(event, now) {
+      if (event.kind === 'throw_in') throwTeam = event.team ?? null;
       if (event.kind !== 'goal') return;
       for (const actor of actors.values()) {
         if (actor.team === event.team) actor.celebrateAt = now;

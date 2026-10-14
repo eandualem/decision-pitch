@@ -407,7 +407,8 @@ function sameSkin(a, b) {
 const SLOTS = 4; // one-shots a figure can show at once, fading into each other
 
 // Makes the people of one match from `template` (see loadFigure). Materials are shared
-// between them and freed by dispose(); the template's geometry and clips are never freed.
+// between them; dispose() frees them and the people's skeletons. The template's geometry
+// and clips are never freed.
 export function createFigures(template) {
   const paints = new Map();
   const owned = new Set();
@@ -431,6 +432,8 @@ export function createFigures(template) {
     const palette = outfit(role, colours, look);
     const object = cloneScene(template.scene);
     shareSkeletons(template.scene, object);
+    // Each clone has skeletons of its own (one, once shared), with a bone texture each.
+    object.traverse((node) => { if (node.isSkinnedMesh) owned.add(node.skeleton); });
     const scale = look.height / FIGURE_HEIGHT;
     object.scale.setScalar(scale);
     const hair = template.hairs[look.hair];

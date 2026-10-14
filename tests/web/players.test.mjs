@@ -777,3 +777,18 @@ test('the number above a player fades out as the camera comes close, and its fac
   assert.equal(actors.getPlayerVelocity(99, new THREE.Vector3()), null);
   actors.dispose();
 });
+
+test('a throw-in is taken by the team it was given to, even with an opponent nearer the ball', () => {
+  const scene = new THREE.Scene();
+  const actors = createPlayers(scene, [
+    { colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' }, players: [{ id: 1, number: 9, position: 'FW' }] },
+    { colours: { shirt: '#654321', shorts: '#000000', keeper: '#00ccff' }, players: [{ id: 2, number: 4, position: 'DF' }] },
+  ], figure);
+  // Player 1 put it out and stands nearest; the throw is player 2's team's.
+  actors.handleEvent({ kind: 'throw_in', team: 1 }, 1);
+  const s = (t) => snap(t, [player(1, 0, 33.6), player(2, 0.9, 33.3)], { x: 0, y: 34 }, 'throw_in');
+  for (let i = 0; i < 10; i++) actors.update(s(1 + i / 30), s(1 + (i + 1) / 30), 0.5, 1 / 30, 1 + i / 30);
+  assert.deepEqual(actors.inspect(1).acts, [], 'the opponent does not pick it up');
+  assert.deepEqual(actors.inspect(2).acts.map(a => a.name.split(':')[0]), ['throw_in'], 'the restarting team does');
+  actors.dispose();
+});

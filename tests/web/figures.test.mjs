@@ -436,3 +436,25 @@ test('built figure: the toe reaches through the carried ball as far as each loop
   const between = person.reach() / person.scale;
   assert.ok(between > Math.min(reach.walk, reach.jog) - 1e-9 && between < Math.max(reach.walk, reach.jog) + 1e-9, 'between a walk and a jog');
 });
+
+test('disposing a match frees each person\'s skeleton, and not the template\'s', () => {
+  const template = fixture();
+  const made = createFigures(template);
+  const people = [made.create({ seed: 1 }), made.create({ seed: 2, role: 'manager' })];
+  const freed = new Set();
+  const skeletons = new Set();
+  for (const person of people) {
+    person.object.traverse(node => {
+      if (!node.isSkinnedMesh || skeletons.has(node.skeleton)) return;
+      skeletons.add(node.skeleton);
+      const own = node.skeleton.dispose.bind(node.skeleton);
+      node.skeleton.dispose = () => { freed.add(node.skeleton); own(); };
+    });
+  }
+  let templateFreed = 0;
+  template.scene.traverse(node => { if (node.isSkinnedMesh) node.skeleton.dispose = () => templateFreed++; });
+  made.dispose();
+  assert.equal(skeletons.size, 2, 'one skeleton per person');
+  assert.ok([...skeletons].every(skeleton => freed.has(skeleton)) && freed.size === skeletons.size, 'each freed once');
+  assert.equal(templateFreed, 0);
+});
