@@ -1,11 +1,23 @@
+// Run with node --test tests/web/touchline.test.mjs; no npm dependencies required.
+import './three-resolve.mjs';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import vm from 'node:vm';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
+import { fixtureGltf } from './figure-fixture.mjs';
 
-const source = readFileSync(new URL('../../src/decision_pitch/web/src/touchline.js', import.meta.url), 'utf8')
-  .replace(/^import .*;$/gm, '').replaceAll('export function', 'function');
+const texts = [];
+const context2d = {
+  measureText: (text) => ({ width: text.length * 28 }),
+  beginPath() {}, roundRect() {}, fill() {}, fillRect() {}, fillText(text) { texts.push(text); }, strokeText() {},
+};
+globalThis.document ??= { createElement: () => ({ getContext: () => context2d }) };
+const { prepareFigure } = await import('../../src/decision_pitch/web/src/figures.js');
+const { createTouchline, technicalArea } = await import('../../src/decision_pitch/web/src/touchline.js');
+
+const figure = (() => {
+  const { scene, animations, info } = fixtureGltf();
+  return prepareFigure(scene, animations, info);
+})();
 
 const PITCH = { length: 105, width: 68, goalWidth: 7.32, goalHeight: 2.44 };
 const TEAMS = [
@@ -13,37 +25,25 @@ const TEAMS = [
   { name: 'Ridge', colours: { shirt: '#e0562b', shorts: '#1b1b1b', keeper: '#3fbf6f' },
     manager: 'gpt-5.4-mini', assistants: ['gpt-5.4-nano', 'gpt-5.4-nano'] },
 ];
+const POINTING = 0.45; // rad: the instruct clip points the right arm this far right of facing
 
 function setup(teams = TEAMS) {
-  const texts = [];
-  const context2d = {
-    measureText: (text) => ({ width: text.length * 28 }),
-    beginPath() {}, roundRect() {}, fill() {}, fillRect() {}, fillText(text) { texts.push(text); },
-  };
-  const document = { createElement: () => ({ getContext: () => context2d }) };
-  const context = { THREE, document };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  texts.length = 0;
   const scene = new THREE.Scene();
-  const touchline = context.createTouchline(scene, teams, PITCH);
+  const touchline = createTouchline(scene, teams, PITCH, figure);
   const players = new Map();
   const actors = { getPlayerPosition: (id) => players.get(id) ?? null };
   const ball = new THREE.Vector3();
   let now = 0;
-  const world = new THREE.Vector3();
   const find = (name) => scene.getObjectByName(name);
-  const shoulders = (name) => find(name).children[1].children[0].children.filter(child => child.isGroup);
-  // The figure's hands, the right first, in scene coordinates.
-  const hands = (name) => {
-    scene.updateMatrixWorld(true);
-    return shoulders(name)
-      .map(shoulder => shoulder.children.find(child => child.isGroup).children[1].getWorldPosition(world).clone());
-  };
+  // The gestures a figure shows, by clip name, with their clip times and weights.
+  const acts = (name) => touchline.inspect(name).acts.filter(a => a.weight > 0);
+  const showing = (name) => [...new Set(acts(name).map(a => a.name.split(':')[0]))];
   return {
-    scene, touchline, players, actors, ball, find, hands, shoulders, texts, technicalArea: context.technicalArea,
+    scene, touchline, players, actors, ball, find, acts, showing, texts,
     get now() { return now; },
     run(seconds, step = 1 / 60) {
-      for (let t = 0; t < seconds; t += step) {
+      for (let t = 0; t < seconds - 1e-9; t += step) {
         now += step;
         touchline.update(ball, step, now, actors);
       }
@@ -51,8 +51,9 @@ function setup(teams = TEAMS) {
   };
 }
 
-const heading = (figure, target) => {
-  const facing = new THREE.Vector3(Math.sin(figure.rotation.y), 0, Math.cos(figure.rotation.y));
+const heading = (figure, target, offset = 0) => {
+  const angle = figure.rotation.y - offset;
+  const facing = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
   return facing.dot(target.clone().sub(figure.position).setY(0).normalize());
 };
 
@@ -63,10 +64,15 @@ test('each team has a labelled manager in its own technical area beside the half
     const away = t.find('manager-1');
     assert.ok(home && away, 'one manager each');
     assert.ok(home.position.x < 0 && away.position.x > 0, 'home left of halfway, away right');
-    for (const manager of [home, away]) {
+    for (const [name, manager] of [['manager-0', home], ['manager-1', away]]) {
       assert.ok(manager.position.z > PITCH.width / 2 + 1, 'outside the near touchline');
       assert.ok(Math.abs(manager.position.x) < 15, 'beside the halfway line');
-      assert.equal(manager.children.filter(child => child.isSprite).length, 1, 'a name label');
+      const labels = manager.children.filter(child => child.isSprite);
+      assert.equal(labels.length, 1, 'a name label');
+      const height = t.touchline.inspect(name).height;
+      assert.ok(height >= 1.7 && height <= 1.95, `a person's height: ${height}`);
+      assert.ok(labels[0].position.y - labels[0].scale.y / 2 > height + 0.3, 'the label clears the head');
+      assert.ok(manager.children.some(child => child.getObjectByName?.('rig')), 'the human figure');
     }
   } finally {
     t.touchline.dispose();
@@ -96,18 +102,25 @@ test('assistant figures stand behind the manager only for listed assistant model
   }
 });
 
-test('a manager follows the ball along its technical area and faces play', () => {
+test('a manager walks along its technical area after the ball on the walk loop and faces play', () => {
   const t = setup();
   try {
     const home = t.find('manager-0');
     const away = t.find('manager-1');
-    const homeArea = t.technicalArea(PITCH, 0);
-    const awayArea = t.technicalArea(PITCH, 1);
+    const homeArea = technicalArea(PITCH, 0);
+    const awayArea = technicalArea(PITCH, 1);
     t.ball.set(-40, 0.3, 10);
-    t.run(8);
+    t.run(1);
+    const walking = t.touchline.inspect('manager-0');
+    assert.ok(walking.speed > 1, `walking: ${walking.speed}`);
+    const loops = Object.entries(walking.loops).filter(([name]) => name !== 'idle');
+    assert.ok(loops.reduce((sum, [, w]) => sum + w, 0) > 0.9, `on the loops: ${JSON.stringify(walking.loops)}`);
+    assert.ok(walking.rate > 0, 'the stride keeps time with the walk');
+    t.run(7);
     assert.ok(Math.abs(home.position.x - homeArea.minX) < 0.2, `home at the edge nearest play: ${home.position.x}`);
     assert.ok(Math.abs(away.position.x - awayArea.minX) < 0.2, 'away walks towards play but stays in its area');
     assert.ok(heading(home, t.ball) > 0.98 && heading(away, t.ball) > 0.98, 'both face the ball');
+    assert.deepEqual(t.touchline.inspect('manager-0').loops, { idle: 1 }, 'standing still');
     t.ball.set(30, 0.3, -20);
     t.run(12);
     assert.ok(Math.abs(home.position.x - homeArea.maxX) < 0.2);
@@ -122,82 +135,72 @@ test('a manager follows the ball along its technical area and faces play', () =>
   }
 });
 
-test('an instruction turns the manager to point at its player; other messages are ignored', () => {
+test('an instruction has the manager point at its player; other messages are ignored', () => {
   const t = setup();
   try {
     const home = t.find('manager-0');
     const player = new THREE.Vector3(-30, 0, 25);
     t.players.set(7, player);
-    t.ball.set(10, 0.3, -10);
+    t.ball.set(-8, 0.3, -10); // in front of the home manager, who stays where it is
     t.run(2);
-    const resting = t.hands('manager-0');
-    assert.ok(resting.every(hand => hand.y < 1.4), 'arms folded at rest');
+    assert.deepEqual(t.showing('manager-0'), [], 'standing at rest');
     t.touchline.handleMessage({ type: 'decision', player: 7, model: 'Laya', action: 'pass', ms: 180 }, t.now);
     t.touchline.handleMessage({ type: 'manager', team: 1, kind: 'instruction', player: 15, text: 'Press.' }, t.now);
     t.touchline.handleMessage({ type: 'manager', team: 0, kind: 'instruction', player: 7, text: 'Stay wide.' }, t.now);
     t.run(1.2);
-    assert.ok(heading(home, player) > 0.97, 'turned towards the instructed player, not the ball');
-    const [right] = t.hands('manager-0');
-    const shoulder = t.shoulders('manager-0')[0].getWorldPosition(new THREE.Vector3());
-    const arm = right.clone().sub(shoulder);
-    assert.ok(arm.length() > 0.5 && right.y > 1.45, 'right arm raised and extended');
-    assert.ok(arm.setY(0).normalize().dot(player.clone().sub(home.position).setY(0).normalize()) > 0.9,
-      'pointing at the player');
+    const [instruct] = t.acts('manager-0');
+    assert.equal(instruct.name.split(':')[0], 'instruct');
+    assert.ok(instruct.weight > 0.9 && Math.abs(instruct.time - 1.2) < 0.05, `the clip, at its time: ${JSON.stringify(instruct)}`);
+    assert.ok(heading(home, player, POINTING) > 0.97, 'the pointing arm aims at the instructed player');
+    assert.ok(heading(home, player) < 0.95, 'the body turned so the arm, not the chest, points');
+    assert.deepEqual(t.showing('manager-1'), ['instruct']);
     assert.ok(heading(t.find('manager-1'), t.ball) > 0.98, 'a manager whose player is not drawn keeps watching play');
     t.run(3);
     assert.ok(heading(home, t.ball) > 0.98, 'back to watching play');
-    assert.ok(t.hands('manager-0').every(hand => hand.y < 1.4), 'arms folded again');
+    assert.deepEqual(t.showing('manager-0'), [], 'and at rest');
   } finally {
     t.touchline.dispose();
   }
 });
 
-test('a substitution request rolls the arms, and the substitution made is applauded', () => {
+test('a substitution request signals a change, and the substitution made is applauded', () => {
   const t = setup();
   try {
     t.ball.set(0, 0.3, 0);
     t.run(1);
     t.touchline.handleMessage({ type: 'manager', team: 1, kind: 'substitution', off: 15, on: 30, model: 'laya', text: '' }, t.now);
     t.run(0.6);
-    const first = t.hands('manager-1');
-    t.run(0.13);
-    const second = t.hands('manager-1');
-    const manager = t.find('manager-1').position;
-    for (const hand of [...first, ...second]) {
-      assert.ok(hand.y > 1.0 && hand.y < 1.9, 'hands in front of the chest');
-    }
-    assert.ok(first.some((hand, i) => hand.distanceTo(second[i]) > 0.08), 'and rolling');
-    assert.ok(first.every(hand => hand.distanceTo(manager.clone().setY(hand.y)) > 0.25), 'reaching forward');
+    assert.deepEqual(t.showing('manager-1'), ['change']);
+    assert.deepEqual(t.showing('manager-0'), []);
     t.run(3);
+    assert.deepEqual(t.showing('manager-1'), [], 'the change signal is over');
+    const coming = new THREE.Vector3(20, 0, 30);
+    t.players.set(30, coming);
     t.touchline.handleEvent({ type: 'event', kind: 'substitution', team: 1, off: 15, on: 30, model: 'Laya' }, t.now);
-    let closest = Infinity;
-    for (let i = 0; i < 40; i++) {
-      t.run(1 / 60);
-      const [right, left] = t.hands('manager-1');
-      closest = Math.min(closest, right.distanceTo(left));
-    }
-    assert.ok(closest < 0.2, `hands meet in a clap: ${closest}`);
-    const [right, left] = t.hands('manager-0');
-    assert.ok(right.distanceTo(left) > 0.15 && right.y < 1.4, 'the other manager is unmoved');
+    t.run(1);
+    assert.deepEqual(t.showing('manager-1'), ['clap']);
+    assert.ok(heading(t.find('manager-1'), coming) > 0.97, 'applauding the player coming on');
+    assert.deepEqual(t.showing('manager-0'), [], 'the other manager is unmoved');
   } finally {
     t.touchline.dispose();
   }
 });
 
-test('a card against its player has the manager protest, arms spread', () => {
+test('a card against its player has the manager protest', () => {
   const t = setup();
   try {
     t.ball.set(0, 0.3, 0);
     t.run(1);
     t.touchline.handleEvent({ type: 'event', kind: 'yellow', t: 20, team: 0, player: 4 }, t.now);
-    t.run(0.8);
-    const [right, left] = t.hands('manager-0');
-    assert.ok(right.distanceTo(left) > 1.2, `arms spread: ${right.distanceTo(left)}`);
-    assert.ok(right.y > 1.0 && right.y < 1.8 && left.y > 1.0 && left.y < 1.8, 'at chest height');
-    const [otherRight, otherLeft] = t.hands('manager-1');
-    assert.ok(otherRight.distanceTo(otherLeft) < 0.6, 'the other manager keeps its arms folded');
+    t.run(0.1);
+    const early = t.acts('manager-0')[0].weight;
+    t.run(0.7);
+    const [protest] = t.acts('manager-0');
+    assert.equal(protest.name.split(':')[0], 'protest');
+    assert.ok(early < protest.weight, 'the gesture fades in');
+    assert.deepEqual(t.showing('manager-1'), [], 'the other manager stays at rest');
     t.run(2.5);
-    assert.ok(t.hands('manager-0').every(hand => hand.y < 1.4));
+    assert.deepEqual(t.showing('manager-0'), []);
   } finally {
     t.touchline.dispose();
   }
@@ -209,47 +212,44 @@ test('a substitution at the stoppage of a card does not cut the protest short', 
     t.ball.set(0, 0.3, 0);
     t.run(1);
     t.touchline.handleEvent({ type: 'event', kind: 'red', t: 20, team: 0, player: 4 }, t.now);
-    t.run(0.017);
+    t.run(1 / 60);
     t.touchline.handleEvent({ type: 'event', kind: 'substitution', t: 20, team: 0, off: 8, on: 26 }, t.now);
     t.touchline.handleMessage({ type: 'manager', team: 0, kind: 'instruction', player: 7, text: 'Calm.' }, t.now);
     for (const at of [0.8, 1.6, 2.4]) {
       t.run(0.8);
-      const [right, left] = t.hands('manager-0');
-      assert.ok(right.distanceTo(left) > 1.2, `still protesting after ${at} s: ${right.distanceTo(left)}`);
+      assert.deepEqual(t.showing('manager-0'), ['protest'], `still protesting after ${at} s`);
     }
     t.touchline.handleEvent({ type: 'event', kind: 'goal', t: 30, team: 1, player: 20 }, t.now);
-    t.run(0.8);
-    const head = new THREE.Vector3();
-    t.find('manager-0').children[1].children[0].children[3].getWorldPosition(head);
-    assert.ok(t.hands('manager-0').every(hand => hand.distanceTo(head) < 0.4), 'a goal still interrupts it');
+    t.run(0.1);
+    assert.deepEqual(t.showing('manager-0').sort(), ['despair', 'protest'], 'the protest fades under the goal');
+    t.run(0.7);
+    assert.deepEqual(t.showing('manager-0'), ['despair'], 'a goal still interrupts it');
   } finally {
     t.touchline.dispose();
   }
 });
 
-test('a goal sets the scoring staff celebrating and the other manager holding its head', () => {
+test('a goal sets the scoring staff cheering and the other manager in despair', () => {
   const t = setup();
   try {
-    t.ball.set(0, 0.3, 0);
+    t.ball.set(-8, 0.3, 0);
     t.run(1);
     t.touchline.handleEvent({ type: 'event', kind: 'goal', t: 30, team: 1, player: 20 }, t.now);
     t.run(1.0);
     for (const name of ['manager-1', 'assistant-1-0', 'assistant-1-1']) {
-      assert.ok(t.hands(name).every(hand => hand.y > 2.0), `${name} arms up`);
+      assert.deepEqual(t.showing(name), ['cheer'], `${name} cheers`);
     }
+    assert.deepEqual(t.showing('manager-0'), ['despair']);
     const home = t.find('manager-0');
-    const head = new THREE.Vector3();
-    home.children[1].children[0].children[3].getWorldPosition(head);
-    assert.ok(t.hands('manager-0').every(hand => hand.distanceTo(head) < 0.4), 'hands on head');
     // An instruction does not interrupt a goal reaction.
     t.touchline.handleMessage({ type: 'manager', team: 1, kind: 'instruction', player: 15, text: 'Again.' }, t.now);
     t.run(0.2);
-    assert.ok(t.hands('manager-1').every(hand => hand.y > 2.0));
+    assert.deepEqual(t.showing('manager-1'), ['cheer']);
     t.run(1.6);
     assert.ok(Math.cos(home.rotation.y) > 0.9, 'then turns away from the pitch');
     t.run(4);
     for (const name of ['manager-0', 'manager-1', 'assistant-1-0']) {
-      assert.ok(t.hands(name).every(hand => hand.y < 1.4), `${name} back at rest`);
+      assert.deepEqual(t.showing(name), [], `${name} back at rest`);
     }
     assert.ok(heading(home, t.ball) > 0.98);
   } finally {
@@ -258,22 +258,13 @@ test('a goal sets the scoring staff celebrating and the other manager holding it
 });
 
 test('the managers applaud at half time and a level full time; a winner celebrates', () => {
-  const clapping = (t, name) => {
-    let closest = Infinity;
-    for (let i = 0; i < 40; i++) {
-      t.run(1 / 60);
-      const [right, left] = t.hands(name);
-      closest = Math.min(closest, right.distanceTo(left));
-    }
-    return closest < 0.2;
-  };
   for (const [kind, score] of [['half_time', [1, 0]], ['full_time', [2, 2]], ['full_time', undefined]]) {
     const t = setup();
     try {
       t.run(1);
       t.touchline.handleEvent({ type: 'event', kind, team: null, score }, t.now);
-      t.run(0.3);
-      assert.ok(clapping(t, 'manager-0') && clapping(t, 'manager-1'), `${kind} ${score}: both applaud`);
+      t.run(0.5);
+      assert.deepEqual([t.showing('manager-0'), t.showing('manager-1')], [['clap'], ['clap']], `${kind} ${score}: both applaud`);
     } finally {
       t.touchline.dispose();
     }
@@ -284,16 +275,20 @@ test('the managers applaud at half time and a level full time; a winner celebrat
     t.touchline.handleEvent({ type: 'event', kind: 'full_time', team: null, score: [0, 1] }, t.now);
     t.run(1);
     for (const name of ['manager-1', 'assistant-1-0', 'assistant-1-1']) {
-      assert.ok(t.hands(name).every(hand => hand.y > 2.0), `${name} celebrates the win`);
+      assert.deepEqual(t.showing(name), ['cheer'], `${name} celebrates the win`);
     }
-    assert.ok(t.hands('manager-0').every(hand => hand.y > 1.6 && hand.y < 2.1), 'the loser holds its head');
+    assert.deepEqual(t.showing('manager-0'), ['despair'], 'the loser despairs');
   } finally {
     t.touchline.dispose();
   }
 });
 
-test('dispose removes the touchline and releases everything it created', () => {
+test('dispose removes the touchline and releases what it made, not the shared figure', () => {
   const t = setup();
+  const shared = new Set();
+  figure.scene.traverse((object) => {
+    for (const item of [object.geometry, object.material]) if (item) shared.add(item);
+  });
   const disposed = new Set();
   const owned = new Set();
   t.scene.traverse((object) => {
@@ -310,8 +305,10 @@ test('dispose removes the touchline and releases everything it created', () => {
   t.run(1);
   t.touchline.dispose();
   assert.equal(t.scene.children.length, 0, 'removed from the scene');
-  assert.ok(owned.size > 10);
-  assert.equal(disposed.size, owned.size, 'every geometry, material and label texture released');
+  const made = [...owned].filter(item => !shared.has(item));
+  assert.ok(made.length > 8);
+  assert.deepEqual(made.filter(item => !disposed.has(item)), [], 'every material, label texture and shadow released');
+  assert.deepEqual([...owned].filter(item => shared.has(item) && disposed.has(item)), [], 'the figure template kept');
 });
 
 test('a hello without a manager name or assistants still gets a labelled manager', () => {
@@ -319,6 +316,7 @@ test('a hello without a manager name or assistants still gets a labelled manager
   try {
     assert.ok(t.find('manager-0') && t.find('manager-1'));
     assert.equal(t.scene.getObjectByName('touchline').children.length, 2);
+    assert.deepEqual(t.texts, ['Manager', 'Manager']);
   } finally {
     t.touchline.dispose();
   }
