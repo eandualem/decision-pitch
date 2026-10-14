@@ -433,6 +433,15 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
   const turned = 9 * 5 / 60; // rad since the turn began
   assert.ok(near(state.move.time, 0.05 + 0.4 * turned / (Math.PI / 2), 0.02), `following the turn: ${state.move.time}`);
   assert.ok(turner.state().acts.some(a => a.name === 'turn_L' && a.weight > 0), 'it shows');
+  // Turning on round, past the clip's 90 degrees, the clip begins again, the last fading
+  // out under it.
+  let twice = false;
+  for (let i = 6; i < 24; i++) {
+    turner.object.rotation.y = 9 * i / 60;
+    turner.update(1 / 60, 0, 0);
+    twice ||= turner.state().acts.filter(a => a.name === 'turn_L' && a.weight > 0).length === 2;
+  }
+  assert.ok(twice, 'a long turn steps round again');
   // Turning right, the other way.
   const other = made.create({ seed: 4 });
   for (let i = 0; i < 6; i++) {

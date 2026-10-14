@@ -750,6 +750,7 @@ const BRAKING_SPEED = 3;
 const PLANT = 0.1; // s from seeing a cut or a brake to its plant
 const MOVE_SHARE = { turn: 1, cut: 0.7, brake: 0.75 }; // of the body each takes
 const MOVE_AGAIN = { turn: 0, cut: 0.5, brake: 1 }; // s before the same kind again
+const AGAIN_FADE = 0.1; // s a turn that has gone as far as its clip fades under the next
 // Idle variants (gait.idles): a person stands in its own and changes now and then.
 const IDLE_CHANGE = [6, 14]; // s between changes, least and most
 const IDLE_FADE = 0.8; // s
@@ -970,7 +971,8 @@ export function createFigures(template, { footLock = true } = {}) {
     let idleChange = mix(...IDLE_CHANGE, hash01(idleSeed, 100));
     // The move under way (turn, cut or brake), the heading and travel last frame, and when
     // each kind last began.
-    const move = { kind: null, name: null, time: 0, turned: 0, total: 0, from: 0, to: 0, rate: 1, began: 0, share: 0, ending: false };
+    const move = { kind: null, name: null, time: 0, turned: 0, total: 0, from: 0, to: 0, began: 0, ending: false };
+    const fadingTurn = { name: null, time: 0, began: 0 }; // a turn begun again, fading out
     const lastMove = { turn: -Infinity, cut: -Infinity, brake: -Infinity };
     let clock = 0;
     let lastYaw = null;
@@ -1109,18 +1111,29 @@ export function createFigures(template, { footLock = true } = {}) {
         else if (speed > CUTTING_SPEED && Math.abs(running) > CUTTING) begin('cut', running > 0 ? 'cut_L' : 'cut_R', speed);
         else if (speed > BRAKING_SPEED && slowing > BRAKING) begin('brake', 'brake', speed);
       }
-      if (!move.kind) return;
+      if (!move.kind) {
+        fadingTurn.name = null;
+        return;
+      }
       const clip = template.described[move.name];
       if (move.kind === 'turn') {
         // The clip turns as far as the figure does, then steps out of the turn at its own
         // pace; a longer turn begins another.
         const along = Math.sign(move.total) * turning * step;
+        if (Math.abs(turning) < TURNING_DONE || along < 0 || speed > TURNING_SLOW * 2) move.ending = true;
         if (!move.ending) {
           move.turned += Math.max(0, along);
+          if (move.turned >= Math.abs(move.total)) {
+            // Turned as far as its clip, and turning still: the clip begins again, the last
+            // fading out under it.
+            fadingTurn.name = move.name;
+            fadingTurn.time = move.to;
+            fadingTurn.began = clock;
+            move.turned -= Math.abs(move.total);
+            move.began = clock;
+          }
           move.time = move.from + (move.to - move.from) * Math.min(1, move.turned / Math.abs(move.total));
-        }
-        if (Math.abs(turning) < TURNING_DONE || along < 0 || speed > TURNING_SLOW * 2 || move.turned >= Math.abs(move.total)) move.ending = true;
-        if (move.ending) move.time += step;
+        } else move.time += step;
       } else move.time = contactTime(clock - move.began - PLANT, -PLANT, clip.contact ?? 0);
       const left = clip.duration - move.time;
       if (left <= 0) {
@@ -1129,6 +1142,12 @@ export function createFigures(template, { footLock = true } = {}) {
       }
       const share = MOVE_SHARE[move.kind] * clamp((clock - move.began) / 0.08, 0, 1) * clamp(left / 0.2, 0, 1) * (1 - others);
       person.act(move.name, move.time, share, 'whole');
+      if (fadingTurn.name) {
+        fadingTurn.time += step;
+        const fading = MOVE_SHARE.turn * (1 - (clock - fadingTurn.began) / AGAIN_FADE) * (1 - others);
+        if (fading > 0) person.act(fadingTurn.name, fadingTurn.time, fading, 'whole');
+        else fadingTurn.name = null;
+      }
     }
 
     function begin(kind, name, speed) {
