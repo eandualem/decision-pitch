@@ -203,6 +203,30 @@ test('a card against its player has the manager protest, arms spread', () => {
   }
 });
 
+test('a substitution at the stoppage of a card does not cut the protest short', () => {
+  const t = setup();
+  try {
+    t.ball.set(0, 0.3, 0);
+    t.run(1);
+    t.touchline.handleEvent({ type: 'event', kind: 'red', t: 20, team: 0, player: 4 }, t.now);
+    t.run(0.017);
+    t.touchline.handleEvent({ type: 'event', kind: 'substitution', t: 20, team: 0, off: 8, on: 26 }, t.now);
+    t.touchline.handleMessage({ type: 'manager', team: 0, kind: 'instruction', player: 7, text: 'Calm.' }, t.now);
+    for (const at of [0.8, 1.6, 2.4]) {
+      t.run(0.8);
+      const [right, left] = t.hands('manager-0');
+      assert.ok(right.distanceTo(left) > 1.2, `still protesting after ${at} s: ${right.distanceTo(left)}`);
+    }
+    t.touchline.handleEvent({ type: 'event', kind: 'goal', t: 30, team: 1, player: 20 }, t.now);
+    t.run(0.8);
+    const head = new THREE.Vector3();
+    t.find('manager-0').children[1].children[0].children[3].getWorldPosition(head);
+    assert.ok(t.hands('manager-0').every(hand => hand.distanceTo(head) < 0.4), 'a goal still interrupts it');
+  } finally {
+    t.touchline.dispose();
+  }
+});
+
 test('a goal sets the scoring staff celebrating and the other manager holding its head', () => {
   const t = setup();
   try {

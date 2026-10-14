@@ -9,7 +9,11 @@ const WALK = 1.5; // m/s
 // Seconds each gesture lasts. A goal reaction outlasts the camera's close-up of the
 // scorer, so the reaction shot that follows it still finds the managers reacting.
 const GESTURES = { instruct: 2.8, change: 2.6, clap: 2.6, protest: 2.6, celebrate: 6.5, despair: 5.5 };
-const REACTIONS = new Set(['celebrate', 'despair']); // a goal outranks other gestures
+// A gesture under way gives way only to one of at least its rank: a goal's reaction
+// outranks a card's protest, which outranks the rest, so a substitution made at the
+// same stoppage as a card does not cut the protest short.
+const RANK = { celebrate: 2, despair: 2, protest: 1 };
+const rank = (kind) => RANK[kind] ?? 0;
 const ASSISTANT_REACTION = 3.5; // s: assistants react more briefly than the manager
 
 export function technicalArea(pitch, team) {
@@ -165,8 +169,7 @@ export function createTouchline(scene, teams, pitch) {
   });
 
   function gesture(f, kind, now, target = null) {
-    const busy = now < f.gestureUntil;
-    if (busy && REACTIONS.has(f.gesture) && !REACTIONS.has(kind)) return;
+    if (now < f.gestureUntil && rank(f.gesture) > rank(kind)) return;
     f.gesture = kind;
     f.gestureAt = now;
     f.gestureUntil = now + (f.role === 'manager' ? GESTURES[kind] : Math.min(GESTURES[kind], ASSISTANT_REACTION));
