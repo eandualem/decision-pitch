@@ -185,6 +185,18 @@ def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
     assert isinstance(bots.command(m, carrier), KickTo)
 
 
+def test_a_pass_is_aimed_where_its_receiver_is_running_to():
+    m = in_play(ball=(0.5, 0.0))
+    carrier, receiver, opponent = m.player(7), m.player(8), m.player(18)
+    carrier.x, carrier.y = 0.0, 0.0
+    m.owner = carrier.id
+    opponent.x, opponent.y = 2.0, 1.0  # pressed: it passes
+    receiver.x, receiver.y, receiver.vx, receiver.vy = 15.0, 5.0, 0.0, 6.0
+    kick = bots.command(m, carrier)
+    travel = math.hypot(15.0, 5.0) / kick.speed
+    assert (kick.x, kick.y) == pytest.approx((15.0, 5.0 + 6.0 * travel))
+
+
 def test_a_snapshot_lists_every_player_and_the_ball():
     m = Match()
     m.command(1, Hold())
