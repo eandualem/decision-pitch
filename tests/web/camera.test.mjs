@@ -57,20 +57,20 @@ test('the wide shot follows play from the stand like a broadcast main camera', (
     t.ball.set(x, 0.3, z);
     t.run(8);
     // It follows part of the ball's way, but keeps the ball well inside the frame.
-    const lookZ = Math.max(z - 12, Math.min(z + 30, Math.max(-PITCH.width * 0.35, Math.min(PITCH.width * 0.35, z * 0.5))));
+    const lookZ = Math.max(z - 12, Math.min(z + 30, Math.max(-PITCH.width * 0.35, Math.min(PITCH.width * 0.35, z * 0.55))));
     const side = 15 - 0.3 * Math.max(0, z - lookZ);
-    const lookX = Math.max(x - side, Math.min(x + side, Math.max(-PITCH.length * 0.42, Math.min(PITCH.length * 0.42, x * 0.75))));
+    const lookX = Math.max(x - side, Math.min(x + side, Math.max(-PITCH.length * 0.42, Math.min(PITCH.length * 0.42, x * 0.85))));
     const expected = new THREE.Vector3(lookX, 72 * Math.sin(down), lookZ + 72 * Math.cos(down));
     assert.ok(t.camera.position.distanceTo(expected) < 0.02, `ball (${x}, ${z}): ${t.camera.position.toArray()}`);
     const centre = t.screen(lookX, 0, lookZ);
     assert.ok(Math.abs(centre.x) < 0.01 && Math.abs(centre.y) < 0.01, 'aimed at the look point');
-    assert.ok(Math.abs(t.camera.fov - 20) < 1e-6, 'through a longer lens than the close-ups');
-    // A player at the look point stands 40-50 px tall in a 720p frame.
+    assert.ok(Math.abs(t.camera.fov - 22) < 1e-6, 'through a longer lens than the close-ups');
+    // A player at the look point stands about 43 px tall in a 720p frame.
     const height = (t.screen(lookX, 1.8, lookZ).y - t.screen(lookX, 0, lookZ).y) / 2 * 720;
-    assert.ok(height > 40 && height < 52, `a player ${height.toFixed(1)} px tall`);
-    // And the frame shows 35-45 m of pitch across at that depth.
-    const across = 2 * 72 * Math.tan(THREE.MathUtils.degToRad(10)) * (16 / 9);
-    assert.ok(across > 35 && across < 47, `${across.toFixed(1)} m across`);
+    assert.ok(height > 40 && height < 47, `a player ${height.toFixed(1)} px tall`);
+    // And the frame shows about 50 m of pitch across at that depth.
+    const across = 2 * 72 * Math.tan(THREE.MathUtils.degToRad(11)) * (16 / 9);
+    assert.ok(across > 45 && across < 52, `${across.toFixed(1)} m across`);
   }
 });
 
@@ -111,7 +111,7 @@ test('a ball placed for a restart is not led as if it had been kicked', () => {
   t.ball.set(-30, 0.3, 10);
   t.run(3);
   t.ball.set(0, 0.3, 0); // the kick-off spot, in one frame
-  t.run(4);
+  t.run(6);
   const down = THREE.MathUtils.degToRad(22);
   const spot = new THREE.Vector3(0, 72 * Math.sin(down), 72 * Math.cos(down));
   assert.ok(t.camera.position.distanceTo(spot) < 0.05, `settled on the spot: ${t.camera.position.toArray()}`);
@@ -327,4 +327,23 @@ test('one shot at a time, and none without the touchline or the drawn phase', ()
   unknown.event('substitution', { team: 0 });
   for (let i = 0; i < 30; i++) unknown.broadcast.update(unknown.ball, 1 / 60, unknown.now + i / 60);
   assert.ok(unknown.wide(), 'no phase: no cut');
+});
+
+test('each match starts from the page\'s own lens, whatever the last one left', () => {
+  const first = setup();
+  first.run(2);
+  assert.ok(first.camera.fov < 30, 'the wide shot narrows the lens');
+  first.broadcast.dispose();
+  assert.equal(first.camera.fov, 40, 'and dispose hands it back');
+  // The same page camera for the next match, after a hello or a reconnect.
+  const context = { THREE };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  first.camera.fov = 22; // even if it was left narrow
+  first.camera.updateProjectionMatrix();
+  const next = context.createCamera(first.camera, PITCH);
+  const actors = { ballPosition: new THREE.Vector3(), getPlayerPosition: () => new THREE.Vector3(10, 0, 5) };
+  next.handleEvent({ type: 'event', kind: 'goal', team: 0, player: 9 }, 0, actors, null);
+  for (let i = 1; i <= 60; i++) next.update(actors.ballPosition, 1 / 60, i / 60, 'kickoff');
+  assert.ok(Math.abs(first.camera.fov - 40) < 0.5, `the goal close-up through the page's lens: ${first.camera.fov}`);
 });

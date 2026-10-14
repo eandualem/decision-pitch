@@ -13,24 +13,25 @@ const DEAD = new Set(['kickoff', 'goal_kick', 'corner', 'free_kick', 'penalty', 
 const LONG = new Set(['kickoff', 'goal_kick', 'corner', 'half_time', 'full_time']);
 // A shot asked for replaces one on screen or waiting only if it ranks higher.
 const RANK = { restart: 0, manager: 1, personal: 1, period: 2, goal: 3 };
-const VIEW = Math.tan(THREE.MathUtils.degToRad(20)); // half the camera's vertical field of view
+const LENS = 40; // deg: the vertical field of view of the close-ups and the manager shots
+const VIEW = Math.tan(THREE.MathUtils.degToRad(LENS / 2));
 // The wide shot, like a broadcast main camera: from the stand, looking down at play at a
 // shallow angle through a longer lens than the close-ups', so the players are seen from the
 // side and stand out as people, and the ball, at its real size, reads as a ball, while the
-// frame still shows a stretch of pitch around it. It follows part of the ball's way and
-// settles gently, so the ball moves within the frame rather than the frame rushing after it.
+// frame still shows about 50 m of pitch around it. It follows most of the ball's way, and
+// leads it, so the ball sits near the middle of the frame, and settles gently.
 const WIDE = {
-  fov: 20, // deg, vertical
+  fov: 22, // deg, vertical
   down: 22, // deg below the horizontal to the point it looks at
   distance: 72, // m from that point
-  follow: [0.75, 0.5], // share of the ball's x and z the look point follows
+  follow: [0.85, 0.55], // share of the ball's x and z the look point follows
   reach: [0.42, 0.35], // and how far it goes, as a share of the pitch's length and width
-  rate: 2.4, // 1/s: how quickly it settles on play (twice over, see below)
+  rate: 2, // 1/s: how quickly it settles on play (twice over, see below)
 };
-// A fast ball (a long pass, a switch of play) is led a little along its way, so the receiver
-// comes into view early, and the shot pulls back a little while it travels.
-const LEAD = 0.15; // s of the ball's velocity the look point runs ahead by
-const LEAD_MAX = 6; // m
+// The frame runs ahead of the ball the way it is going, so a pass's receiver comes into view
+// early and the ball stays near the middle; the shot pulls back a little for a fast ball.
+const LEAD = 0.4; // s of the ball's velocity the look point runs ahead by
+const LEAD_MAX = 10; // m
 const PULL = { from: 12, to: 25, by: 0.3 }; // m/s of ball speed, and how much further back at the top
 // However gently it follows, the look point keeps the ball this far inside the frame on the
 // ground: m to either side, towards the camera and away from it. The frame narrows towards
@@ -40,7 +41,6 @@ const TELEPORT = 50; // m/s: faster than any kick, so the ball was placed, not m
 
 // Presentation only: follow the rendered ball, never predict match outcomes.
 export function createCamera(camera, pitch) {
-  const baseFov = camera.fov; // the close-ups' and cutaways' field of view
   const wideDown = THREE.MathUtils.degToRad(WIDE.down);
   const target = new THREE.Vector3();
   const desired = new THREE.Vector3();
@@ -156,9 +156,9 @@ export function createCamera(camera, pitch) {
         lead.copy(velocity).multiplyScalar(LEAD);
         if (lead.length() > LEAD_MAX) lead.setLength(LEAD_MAX);
         look.set(
-          THREE.MathUtils.clamp((ballPosition.x + lead.x) * WIDE.follow[0], -pitch.length * WIDE.reach[0], pitch.length * WIDE.reach[0]),
+          THREE.MathUtils.clamp(ballPosition.x * WIDE.follow[0], -pitch.length * WIDE.reach[0], pitch.length * WIDE.reach[0]) + lead.x,
           0,
-          THREE.MathUtils.clamp((ballPosition.z + lead.z) * WIDE.follow[1], -pitch.width * WIDE.reach[1], pitch.width * WIDE.reach[1]),
+          THREE.MathUtils.clamp(ballPosition.z * WIDE.follow[1], -pitch.width * WIDE.reach[1], pitch.width * WIDE.reach[1]) + lead.z,
         );
         look.z = THREE.MathUtils.clamp(look.z, ballPosition.z - SAFE.near * portrait, ballPosition.z + SAFE.far * portrait);
         const side = SAFE.side - SAFE.narrow * Math.max(0, ballPosition.z - look.z);
@@ -179,7 +179,7 @@ export function createCamera(camera, pitch) {
       const blend = cut ? 1 : 1 - Math.exp(-step * (cutting ? 4 : WIDE.rate));
       camera.position.lerp(desired, blend);
       target.lerp(look, blend);
-      const fov = camera.fov + ((wide ? WIDE.fov : baseFov) - camera.fov) * blend;
+      const fov = camera.fov + ((wide ? WIDE.fov : LENS) - camera.fov) * blend;
       if (Math.abs(fov - camera.fov) > 1e-4) {
         camera.fov = fov;
         camera.updateProjectionMatrix();
@@ -188,6 +188,9 @@ export function createCamera(camera, pitch) {
       initialized = true;
     },
     dispose() {
+      // The page keeps its camera for the next match: hand it back with its own lens.
+      camera.fov = LENS;
+      camera.updateProjectionMatrix();
       closeActors = null;
       shot = request = null;
     },
