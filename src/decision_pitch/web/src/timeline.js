@@ -12,13 +12,11 @@ const KEEP = 4; // s of snapshots kept: a hidden page's backlog is dropped beyon
 const LATE = 1; // s behind the render time after which a released event is stale
 const MOST_EVENTS = 1000;
 const MOST_ARRIVALS = 512;
-const RESTARTS = new Set(['kickoff', 'throw_in', 'goal_kick', 'corner', 'free_kick', 'penalty']);
 
-// Two snapshots may be blended only within one phase of one period, going forward, or from
-// a restart into the play its kick starts: a change that places players must not sweep
-// them across the pitch.
-export const continuous = (a, b) => a.period === b.period && b.t > a.t
-  && (a.phase === b.phase || (b.phase === 'play' && RESTARTS.has(a.phase)));
+// Two snapshots may be blended within one period, going forward, across a restart too, so
+// play does not hitch as it stops. A restart puts players right by inches; a player or
+// ball it places far off is drawn there at once (players.js), never swept across the pitch.
+export const continuous = (a, b) => a.period === b.period && b.t > a.t;
 
 export function createTimeline({ delay = DELAY, window = WINDOW, slew = SLEW, snap = SNAP, keep = KEEP } = {}) {
   let snapshots = []; // oldest first; the first is at or before the render time
@@ -105,8 +103,8 @@ export function createTimeline({ delay = DELAY, window = WINDOW, slew = SLEW, sn
 
     // The two snapshots around the render time at page time `now`, and how far between
     // them it is, or null before the first snapshot. Holds a snapshot rather than blend
-    // across a restart, and holds the newest when none has come after it. The result is
-    // reused by the next call.
+    // into the next period, and holds the newest when none has come after it. The result
+    // is reused by the next call.
     sample(now) {
       if (!snapshots.length) return null;
       const rate = drift(now);

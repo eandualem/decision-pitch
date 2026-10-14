@@ -54,7 +54,7 @@ function resetMatch(message) {
   timeline.reset();
   shown = null;
   stadium = createStadium(scene, renderer, message.pitch);
-  actors = createPlayers(scene, message.teams, figure, camera);
+  actors = createPlayers(scene, message.teams, figure);
   touchline = createTouchline(scene, message.teams, message.pitch, figure);
   // The camera is kept between matches; the last one's shots may have changed its lens.
   camera.fov = LENS;
@@ -92,10 +92,10 @@ function receive(message, now = performance.now() / 1000) {
 }
 
 // An event the drawn match has reached. One left behind by a stall only updates the
-// overlay's records: its moment has passed.
+// overlay's records and who takes the next throw-in: its moment has passed.
 function show(event, now, late) {
+  actors.handleEvent(event, now, late);
   if (!late) {
-    actors.handleEvent(event, now);
     broadcast.handleEvent(event, now, actors, touchline);
     moments.handleEvent(event, now);
     touchline.handleEvent(event, now);
@@ -178,7 +178,7 @@ function draw(frameTime) {
     for (const event of timeline.release()) show(event, now, timeline.late(event));
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
-    actors.fadeNumbers(); // by where the camera is this frame, after a cut too
+    actors.showNumbers(broadcast.wide); // by this frame's shot, after a cut too
     touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }

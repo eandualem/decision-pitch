@@ -140,9 +140,11 @@ test('the ball stays comfortably in frame anywhere on the pitch', () => {
 test('after the scorer close-up a goal cuts to the scoring manager while the ball is dead, then back', () => {
   const t = setup();
   t.run(1);
+  assert.ok(t.broadcast.wide);
   t.event('goal', { team: 1, player: 9 });
   t.run(3, 'kickoff');
   assert.ok(t.camera.position.distanceTo(t.actors.getPlayerPosition(9)) < 30, 'close on the scorer');
+  assert.ok(!t.broadcast.wide, 'the close-up is not the wide shot');
   t.run(1, 'kickoff');
   assert.equal(t.on(), 1, 'cut to the scoring manager');
   assert.equal(t.camera.fov, 40, 'through the close-ups\' lens');
@@ -270,10 +272,10 @@ test('the whistles: both managers at half time and a level finish, the winner at
     t.event('half_time', { team: null, score: [1, 0] });
     t.run(0.5, 'half_time');
     assert.ok(t.camera.position.y < 10 && both(t), `half time: a two-shot at ${aspect}`);
-    t.run(1.5, 'kickoff');
-    assert.ok(!t.wide(), 'held into the second-half kick-off');
-    t.run(1, 'kickoff');
-    assert.ok(t.wide());
+    t.run(3, 'half_time');
+    assert.ok(both(t) && !t.broadcast.wide, 'for the whole break, longer than a cutaway');
+    t.run(1 / 60, 'kickoff');
+    assert.ok(t.wide() && t.broadcast.wide, 'back on the wide shot as the second half kicks off');
   }
   const level = setup();
   level.run(1);

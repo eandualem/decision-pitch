@@ -36,13 +36,14 @@ function play(timeline, { seconds, jitter = 0.06, latency = 0.02, seed = 7, unti
   return frames;
 }
 
-test('continuous blends within one phase and period, or a restart into play, going forward', () => {
+test('continuous blends within one period, into and out of a restart, going forward', () => {
   assert.equal(continuous(snapshot(1), snapshot(1.1)), true);
-  assert.equal(continuous(snapshot(1), snapshot(1.1, 'corner')), false);
   for (const restart of ['kickoff', 'throw_in', 'goal_kick', 'corner', 'free_kick', 'penalty']) {
+    assert.equal(continuous(snapshot(1), snapshot(1.1, restart)), true, `play stopped for a ${restart}`);
     assert.equal(continuous(snapshot(1, restart), snapshot(1.1)), true, `${restart} kicked into play`);
   }
-  assert.equal(continuous(snapshot(1, 'half_time'), snapshot(1.1)), false);
+  assert.equal(continuous(snapshot(1), snapshot(1.1, 'half_time')), true, 'the whistle for half time');
+  assert.equal(continuous(snapshot(1, 'half_time', 1), snapshot(1.1, 'kickoff', 2)), false);
   assert.equal(continuous(snapshot(1, 'corner', 1), snapshot(1.1, 'play', 2)), false);
   assert.equal(continuous(snapshot(1, 'kickoff', 1), snapshot(1.1, 'kickoff', 2)), false);
   assert.equal(continuous(snapshot(1.1), snapshot(1)), false);
@@ -161,20 +162,20 @@ test('sampling and releasing reuse their results', () => {
   assert.equal(due.length, 0);
 });
 
-test('a change of phase or period is held, never blended', () => {
+test('play stopping for a restart is blended, and a change of period is held', () => {
   const timeline = createTimeline({ delay: 0 });
   timeline.push(snapshot(1, 'play'), 1);
-  timeline.push(snapshot(1 + STEP, 'kickoff'), 1 + STEP);
-  let frame = timeline.sample(1.01);
+  timeline.push(snapshot(1 + STEP, 'throw_in'), 1 + STEP);
+  let frame = timeline.sample(1 + STEP / 2);
   assert.equal(frame.before.phase, 'play');
-  assert.equal(frame.after, frame.before);
-  assert.equal(frame.alpha, 1);
-  frame = timeline.sample(1 + STEP);
-  assert.equal(frame.before.phase, 'kickoff');
-  timeline.push(snapshot(1 + 2 * STEP, 'kickoff', 2), 1 + 2 * STEP);
-  frame = timeline.sample(1 + 1.5 * STEP);
+  assert.equal(frame.after.phase, 'throw_in', 'no held frame as play stops');
+  assert.ok(Math.abs(frame.alpha - 0.5) < 1e-9);
+  timeline.push(snapshot(1 + 2 * STEP, 'half_time'), 1 + 2 * STEP);
+  timeline.push(snapshot(1 + 3 * STEP, 'kickoff', 2), 1 + 3 * STEP);
+  frame = timeline.sample(1 + 2.5 * STEP);
   assert.equal(frame.before.period, 1);
-  assert.equal(frame.after, frame.before, 'half time to the second half is held too');
+  assert.equal(frame.after, frame.before, 'half time to the second half is held');
+  assert.equal(frame.alpha, 1);
 });
 
 test('a clock that goes back starts a new stream instead of blending backwards', () => {

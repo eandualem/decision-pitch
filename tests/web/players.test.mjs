@@ -745,28 +745,19 @@ test('every drawn player\'s position can be read, and only theirs', () => {
   assert.deepEqual(seen, [[2, 3, -4]], 'the goalkeeper is not in this snapshot');
 });
 
-test('the number above a player fades out as the camera comes close, and its facing can be read', () => {
+test('the number above a player shows on the wide shot only, and its facing can be read', () => {
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.2, 600);
   const actors = createPlayers(scene, [{ colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' },
-    players: [{ id: 2, number: 9, position: 'FW' }] }], figure, camera);
+    players: [{ id: 2, number: 9, position: 'FW' }] }], figure);
   const badge = scene.children[0].children[0].children.find(child => child.isSprite);
   const s = snap(1, [player(2, 0, 0, { heading: 0.5 })], { x: 5, y: 0 });
-  camera.position.set(0, 35, 60); // the wide shot, far off
   actors.update(s, s, 1, 1 / 60, 1);
-  actors.fadeNumbers();
-  assert.equal(badge.visible, true);
-  assert.equal(badge.material.opacity, 1);
-  // A cut to a close-up, 7 m away: the camera moves after the players have, in the same
-  // frame, and the numbers go with this frame's camera.
+  actors.showNumbers(true);
+  assert.equal(badge.visible, true, 'on the wide shot');
+  // A cut to a close-up or a cutaway: gone in the frame of the cut.
   actors.update(s, s, 1, 1 / 60, 1.02);
-  camera.position.set(4, 2, 5);
-  actors.fadeNumbers();
-  assert.equal(badge.visible, false, 'gone in the frame of the cut');
-  camera.position.set(0, 10, 16); // in between
-  actors.update(s, s, 1, 1 / 60, 1.04);
-  actors.fadeNumbers();
-  assert.ok(badge.material.opacity > 0 && badge.material.opacity < 1, `fading: ${badge.material.opacity}`);
+  actors.showNumbers(false);
+  assert.equal(badge.visible, false);
   assert.ok(Math.abs(actors.getPlayerFacing(2) - (0.5 + Math.PI / 2)) < 1e-9, 'facing its heading');
   assert.equal(actors.getPlayerFacing(99), null);
   const a = snap(2, [player(2, 0, 0)], { x: 5, y: 0 });
@@ -790,5 +781,34 @@ test('a throw-in is taken by the team it was given to, even with an opponent nea
   for (let i = 0; i < 10; i++) actors.update(s(1 + i / 30), s(1 + (i + 1) / 30), 0.5, 1 / 30, 1 + i / 30);
   assert.deepEqual(actors.inspect(1).acts, [], 'the opponent does not pick it up');
   assert.deepEqual(actors.inspect(2).acts.map(a => a.name.split(':')[0]), ['throw_in'], 'the restarting team does');
+  actors.dispose();
+});
+
+test('a throw-in left behind by a stall still sets the throwing team; a late goal is not celebrated', () => {
+  const scene = new THREE.Scene();
+  const actors = createPlayers(scene, [
+    { colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' }, players: [{ id: 1, number: 9, position: 'FW' }] },
+    { colours: { shirt: '#654321', shorts: '#000000', keeper: '#00ccff' }, players: [{ id: 2, number: 4, position: 'DF' }] },
+  ], figure);
+  actors.handleEvent({ kind: 'throw_in', team: 0 }, 1);
+  actors.handleEvent({ kind: 'goal', team: 1 }, 2, true);
+  actors.handleEvent({ kind: 'throw_in', team: 1 }, 2, true);
+  const s = (t) => snap(t, [player(1, 0, 33.6), player(2, 0.9, 33.3)], { x: 0, y: 34 }, 'throw_in');
+  for (let i = 0; i < 10; i++) actors.update(s(2 + i / 30), s(2 + (i + 1) / 30), 0.5, 1 / 30, 2 + i / 30);
+  assert.deepEqual(actors.inspect(1).acts, [], 'not the team of the throw-in before');
+  assert.deepEqual(actors.inspect(2).acts.map(a => a.name.split(':')[0]), ['throw_in']);
+  actors.dispose();
+});
+
+test('the throw-in is not picked up while play is still being drawn to a stop', () => {
+  const scene = new THREE.Scene();
+  const actors = createPlayers(scene, [
+    { colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' }, players: [{ id: 1, number: 9, position: 'FW' }] },
+  ], figure);
+  actors.handleEvent({ kind: 'throw_in', team: 0 }, 1);
+  const before = snap(2, [player(1, 0, 33.6)], { x: 0, y: 33.9 });
+  const after = snap(2 + STEP, [player(1, 0, 33.6)], { x: 0, y: 34 }, 'throw_in');
+  for (let i = 1; i <= 9; i++) actors.update(before, after, i / 10, 1 / 60, 2 + i / 60);
+  assert.deepEqual(actors.inspect(1).acts, [], 'the last throw-in\'s team is not used for this one');
   actors.dispose();
 });
