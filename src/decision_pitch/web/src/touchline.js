@@ -29,7 +29,12 @@ export function createTouchline(scene, teams, pitch) {
   const textures = new Set();
   const geometry = (value) => { geometries.add(value); return value; };
   const material = (value) => { materials.add(value); return value; };
-  const paint = (color) => material(new THREE.MeshLambertMaterial({ color }));
+  // Figures of one team share their coat and trouser materials.
+  const paints = new Map();
+  const paint = (color) => {
+    if (!paints.has(color)) paints.set(color, material(new THREE.MeshLambertMaterial({ color })));
+    return paints.get(color);
+  };
   const box = geometry(new THREE.BoxGeometry(1, 1, 1));
   const head = geometry(new THREE.IcosahedronGeometry(0.23, 1));
   const disc = geometry(new THREE.CircleGeometry(1, 24));
@@ -334,6 +339,7 @@ export function createTouchline(scene, teams, pitch) {
       for (const value of textures) value.dispose();
       figures.length = 0;
       managers.length = 0;
+      paints.clear();
     },
   };
 }
