@@ -3,6 +3,53 @@ import * as THREE from 'three';
 // Bodies face local +z. Match headings turn anticlockwise from match +x.
 const mix = (a, b, t) => a + (b - a) * t;
 const angle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+const smooth = (t) => t * t * (3 - 2 * t);
+
+export const DRIBBLE = 0.6; // m ahead of a player's centre that the engine carries the ball
+const BALL_RADIUS = 0.11; // the engine's ball
+const DRAWN_RADIUS = 0.3; // enlarged to read on a broadcast camera
+const HALF_STEP = 1 / 120; // s: a touch happens within the engine step that records it
+const LOOSE = 0.5; // m between a carried ball and the drawn feet beyond which it is drawn as sent
+const SETTLE = 0.08; // s for the drawn ball to settle onto a new path without a jump
+
+// Where `keys` ([u, value] pairs, u ascending) are at `u`: eased between each pair, or
+// straight into a key marked 'linear', for a swing that does not slow through contact.
+export function track(keys, u) {
+  if (u <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    const [u1, v1, ease] = keys[i];
+    if (u <= u1) {
+      const [u0, v0] = keys[i - 1];
+      const f = (u - u0) / (u1 - u0);
+      return mix(v0, v1, ease === 'linear' ? f : smooth(f));
+    }
+  }
+  return keys.at(-1)[1];
+}
+
+// Each touch's pose, around the moment of contact (u = 0, in s). Leg and arm angles turn
+// about the body's x axis: negative swings forwards. `reach` is a goalkeeper's.
+const KICK = [[-0.2, 0], [-0.07, 0.9], [0.05, -1.4, 'linear'], [0.45, 0]]; // the foot meets the ball at 0
+const POSES = {
+  kick: { end: 0.45, leg: KICK, arm: [[-0.2, 0], [0, -0.8], [0.45, 0]], pitch: [[-0.2, 0], [0, -0.12], [0.45, 0]] },
+  control: { end: 0.3, leg: [[-0.12, 0], [0, -0.6], [0.3, 0]] },
+  tackle: { end: 0.55, leg: [[-0.15, 0], [0, -1.25], [0.2, -1.2], [0.55, 0]], pitch: [[-0.15, 0], [0, 0.3], [0.55, 0]], lift: [[-0.15, 0], [0, -0.12], [0.55, 0]] },
+  deflect: { end: 0.35, leg: [[-0.08, 0], [0, -0.45], [0.35, 0]], pitch: [[-0.08, 0], [0, -0.18], [0.35, 0]] },
+  throw: { end: 0.5, arms: [[-0.25, 0], [-0.1, -3.4], [0, -2.5], [0.2, -1.2], [0.5, 0]], pitch: [[-0.25, 0], [-0.1, -0.15], [0, 0.12], [0.5, 0]] },
+};
+const KEEPER_POSE = { end: 0.95, envelope: [[-0.16, 0], [0, 1], [0.4, 1], [0.95, 0]] };
+
+// What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up.
+export function reach(lateral, height, diving) {
+  if (diving || Math.abs(lateral) > 0.7) {
+    const roll = -Math.sign(lateral || 1) * Math.min(1.35, Math.asin(clamp(Math.abs(lateral) / 2.2, 0, 1)) + 0.55);
+    return { roll, arms: -2.9, pitch: 0, lift: 0.15 };
+  }
+  if (height > 1.6) return { roll: 0, arms: -3, pitch: 0, lift: 0.3 };
+  if (height > 0.8) return { roll: 0, arms: -1.6, pitch: 0.1, lift: 0 };
+  return { roll: 0, arms: -0.9, pitch: 0.45, lift: -0.08 };
+}
 
 export function createPlayers(scene, teams) {
   const root = new THREE.Group();
@@ -110,9 +157,10 @@ export function createPlayers(scene, teams) {
       badge.position.y = 2.4;
       badge.scale.set(0.88, 0.88, 1);
       group.add(badge);
+      body.rotation.order = 'YXZ'; // turn to face, then lean forwards, then roll sideways
       actors.set(player.id, {
-        group, body, limbs, team: teamIndex, stride: index * 0.8,
-        celebrateUntil: -Infinity, kickAt: -Infinity, kicking: false,
+        group, body, limbs, team: teamIndex, stride: index * 0.8, heading: 0, pace: 0,
+        celebrateUntil: -Infinity, pose: null, lean: 0,
       });
     });
   });
@@ -120,7 +168,7 @@ export function createPlayers(scene, teams) {
   // Faceted white shell and dark pentagonal panels use only procedural geometry.
   const ball = new THREE.Group();
   root.add(ball);
-  const shell = mesh(geometry(new THREE.IcosahedronGeometry(0.3, 2)), paint('#fff9df'), ball, 0, 0, 0);
+  const shell = mesh(geometry(new THREE.IcosahedronGeometry(DRAWN_RADIUS, 2)), paint('#fff9df'), ball, 0, 0, 0);
   const panelShape = geometry(new THREE.CircleGeometry(0.082, 5));
   const panelMaterial = paint('#263344');
   const normal = new THREE.Vector3();
@@ -137,8 +185,39 @@ export function createPlayers(scene, teams) {
   ballShadow.material = material(shadowMaterial.clone());
   ball.visible = ballShadow.visible = false;
   let ballReady = false;
+  let carried = false; // drawn at its carrier's feet last frame
+  const settle = new THREE.Vector3(); // what is left of a change of path, fading out
+  const travel = new THREE.Vector3();
+  const spinAxis = new THREE.Vector3(1, 0, 0);
+  const up = new THREE.Vector3(0, 1, 0);
+  const turn = new THREE.Quaternion();
+  let spinRate = 0; // rad/s
+  const seen = new Map(); // touches already posed, by key, with their time
 
-  function update(before, after, alpha, dt, now) {
+  // Start the pose for a touch the engine reports, timed to its moment of contact. A
+  // touch in a snapshot still ahead of the render time gets its wind-up.
+  function notice(touch, snapshot, time) {
+    if (!touch) return;
+    const key = `${touch.t}:${touch.player}:${touch.kind}`;
+    if (seen.has(key)) return;
+    seen.set(key, touch.t);
+    if (seen.size > 32) for (const [old, t] of seen) if (t < time - 2) seen.delete(old);
+    const at = touch.t - HALF_STEP;
+    const actor = actors.get(touch.player);
+    const keeper = touch.kind === 'save' || touch.kind === 'catch';
+    if (!actor || at < time - 0.3 || (actor.pose && actor.pose.at > at) || !(keeper || POSES[touch.kind])) return;
+    const pose = { kind: touch.kind, at, from: time - at, end: keeper ? KEEPER_POSE.end : POSES[touch.kind].end };
+    if (keeper) {
+      const player = snapshot.players.find(p => p.id === touch.player);
+      if (!player) return;
+      const dx = touch.x - player.x;
+      const dy = touch.y - player.y;
+      pose.reach = reach(-dx * Math.sin(player.heading) + dy * Math.cos(player.heading), touch.z, Boolean(player.dive));
+    }
+    actor.pose = pose;
+  }
+
+  function update(before, after, alpha, dt, now, latest = after) {
     if (!after) return;
     const from = before || after;
     if (previousSnapshot !== from) {
@@ -147,10 +226,16 @@ export function createPlayers(scene, teams) {
       previousSnapshot = from;
     }
     const reset = from.period !== after.period || from.phase !== after.phase || after.t < from.t;
-    const blend = reset ? 1 : THREE.MathUtils.clamp(alpha, 0, 1);
-    const step = THREE.MathUtils.clamp(dt, 0, 0.1);
+    const blend = reset ? 1 : clamp(alpha, 0, 1);
+    const time = mix(from.t, after.t, blend); // where the drawn match is on the server's clock
+    const span = after.t - from.t;
+    const step = clamp(dt, 0, 0.1);
     // The engine preserves its last velocities and commands at the interval/whistle.
     const stopped = after.phase === 'half_time' || after.phase === 'full_time';
+    if (!stopped) {
+      notice(after.ball.touch, after, time);
+      if (latest && latest !== after) notice(latest.ball?.touch, latest, time);
+    }
     for (const actor of actors.values()) actor.group.visible = false;
     for (const player of after.players) {
       const actor = actors.get(player.id);
@@ -161,40 +246,114 @@ export function createPlayers(scene, teams) {
       const { group, body, limbs } = actor;
       group.visible = true;
       group.position.set(mix(old.x, player.x, k), 0, -mix(old.y, player.y, k));
-      body.rotation.y = angle(old.heading, player.heading, k) + Math.PI / 2;
+      actor.heading = angle(old.heading, player.heading, k);
+      body.rotation.y = actor.heading + Math.PI / 2;
       const speed = stopped ? 0 : Math.max(0, mix(old.speed, player.speed, k));
+      actor.pace = Math.min(speed / 6, 1);
       actor.stride += speed * step * 2.7;
-      const swing = Math.sin(actor.stride) * Math.min(speed / 6, 1) * 0.7;
+      const swing = Math.sin(actor.stride) * actor.pace * 0.7;
       const celebrating = now < actor.celebrateUntil;
-      const kicking = !stopped && player.action === 'kick' && Math.hypot(player.x - after.ball.x, player.y - after.ball.y) < 2.5;
-      if (kicking && !actor.kicking) actor.kickAt = now;
-      actor.kicking = kicking;
-      const kickAge = now - actor.kickAt;
-      const kick = !stopped && kickAge >= 0 && kickAge < 0.4 ? Math.sin(kickAge / 0.4 * Math.PI) * 1.3 : 0;
-      limbs[0].rotation.x = swing;
-      limbs[1].rotation.x = -swing - kick;
-      limbs[2].rotation.x = -swing * 0.7;
-      limbs[3].rotation.x = swing * 0.7;
+      let legs = [swing, -swing];
+      let arms = [-swing * 0.7, swing * 0.7];
+      let pitch = 0;
+      let lift = celebrating ? Math.abs(Math.sin(now * 7)) * 0.3 : Math.abs(Math.sin(actor.stride)) * actor.pace * 0.06;
+
+      // A goalkeeper diving across its goal leans into the dive as it gathers pace.
+      let lean = 0;
+      if (!stopped && player.dive && !teleport && span > 0) {
+        const lateral = (-(player.x - old.x) * Math.sin(actor.heading) + (player.y - old.y) * Math.cos(actor.heading)) / span;
+        lean = -Math.sign(lateral) * Math.min(1, Math.abs(lateral) / 5) * 0.9;
+      }
+      actor.lean = stopped ? 0 : mix(actor.lean, lean, 1 - Math.exp(-step * (player.dive ? 10 : 4)));
+      let roll = actor.lean;
+      const stretch = Math.abs(actor.lean) / 0.9;
+      arms = arms.map(arm => mix(arm, -2.9, stretch));
+
+      // The body meets the ball at the touch's moment of contact.
+      const pose = stopped ? null : actor.pose;
+      if (stopped) actor.pose = null;
+      const u = pose ? time - pose.at : 0;
+      if (pose && u > pose.end) actor.pose = null;
+      else if (pose) {
+        const w = Math.min(clamp((u - pose.from) / 0.06, 0, 1), clamp((pose.end - u) / 0.15, 0, 1));
+        if (pose.reach) {
+          const e = track(KEEPER_POSE.envelope, u) * w;
+          roll = mix(roll, pose.reach.roll, e);
+          arms = arms.map(arm => mix(arm, pose.reach.arms, e));
+          pitch = mix(pitch, pose.reach.pitch, e);
+          lift += pose.reach.lift * e;
+        } else {
+          const shape = POSES[pose.kind];
+          if (shape.leg) legs[1] = mix(legs[1], track(shape.leg, u), w);
+          if (shape.arm) arms[0] = mix(arms[0], track(shape.arm, u), w);
+          if (shape.arms) arms = arms.map(arm => mix(arm, track(shape.arms, u), w));
+          if (shape.pitch) pitch = mix(pitch, track(shape.pitch, u), w);
+          if (shape.lift) lift += track(shape.lift, u) * w;
+        }
+      }
+      limbs[0].rotation.x = legs[0];
+      limbs[1].rotation.x = legs[1];
+      limbs[2].rotation.x = arms[0];
+      limbs[3].rotation.x = arms[1];
       limbs[2].rotation.z = celebrating ? -2.55 : -0.13;
       limbs[3].rotation.z = celebrating ? 2.55 : 0.13;
-      body.position.y = celebrating ? Math.abs(Math.sin(now * 7)) * 0.3 : Math.abs(Math.sin(actor.stride)) * Math.min(speed / 6, 1) * 0.06;
+      body.rotation.x = pitch;
+      body.rotation.z = roll;
+      body.position.y = lift;
     }
+
+    // The ball as the engine sends it, through the point of any touch at its moment.
     const oldBall = from.ball;
     const newBall = after.ball;
     const ballTeleport = Math.hypot(newBall.x - oldBall.x, newBall.y - oldBall.y) > 10;
-    const k = ballTeleport ? 1 : blend;
-    const x = mix(oldBall.x, newBall.x, k);
-    const y = Math.max(0.3, mix(oldBall.z, newBall.z, k));
-    const z = -mix(oldBall.y, newBall.y, k);
-    if (ballReady && !reset && !ballTeleport) {
-      shell.rotation.z -= (x - ball.position.x) / 0.3;
-      shell.rotation.x += (z - ball.position.z) / 0.3;
+    const touch = newBall.touch;
+    const contact = touch ? touch.t - HALF_STEP : NaN;
+    let path;
+    let f;
+    if (!reset && !ballTeleport && contact > from.t && contact < after.t) {
+      [path, f] = time <= contact ? [[oldBall, touch], (time - from.t) / (contact - from.t)]
+        : [[touch, newBall], (time - contact) / (after.t - contact)];
+    } else [path, f] = [[oldBall, newBall], ballTeleport ? 1 : blend];
+    let x = mix(path[0].x, path[1].x, f);
+    let z = -mix(path[0].y, path[1].y, f);
+    const height = mix(path[0].z, path[1].z, f);
+    // Carried, it is drawn at the drawn feet, nudged ahead by each touch of the stride.
+    const owner = newBall.owner;
+    const carrier = after.phase === 'play' && !reset && owner != null && oldBall.owner === owner ? actors.get(owner) : null;
+    let carrying = false;
+    if (carrier?.group.visible) {
+      const ahead = DRIBBLE + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(carrier.stride - Math.PI / 2));
+      const cx = carrier.group.position.x + Math.cos(carrier.heading) * ahead;
+      const cz = carrier.group.position.z - Math.sin(carrier.heading) * ahead;
+      // The goal frame can stop a carried ball short of the feet: then draw it as sent.
+      if (Math.hypot(cx - x, cz - z) < LOOSE) [x, z, carrying] = [cx, cz, true];
     }
-    ball.position.set(x, y, z);
+    const y = Math.max(DRAWN_RADIUS, height - BALL_RADIUS + DRAWN_RADIUS);
+    const jump = !ballReady || reset || ballTeleport
+      || Math.hypot(x - (ball.position.x - settle.x), z - (ball.position.z - settle.z)) > 3; // from last frame's path
+    if (jump) settle.set(0, 0, 0);
+    else if (carrying !== carried) settle.set(ball.position.x - x, ball.position.y - y, ball.position.z - z);
+    else settle.multiplyScalar(Math.exp(-step / SETTLE));
+    carried = carrying;
+    x += settle.x;
+    z += settle.z;
+    const drawnY = Math.max(DRAWN_RADIUS, y + settle.y);
+    // It rolls without slipping on the grass and keeps its spin in the air.
+    if (!jump && step > 0) {
+      travel.set(x - ball.position.x, 0, z - ball.position.z);
+      const distance = travel.length();
+      if (stopped) spinRate = 0;
+      else if (height < BALL_RADIUS + 0.05) {
+        if (distance > 1e-6) spinAxis.crossVectors(up, travel).normalize();
+        spinRate = distance / DRAWN_RADIUS / step;
+      } else spinRate *= Math.exp(-step * 0.5);
+      if (spinRate > 0) shell.quaternion.premultiply(turn.setFromAxisAngle(spinAxis, spinRate * step));
+    }
+    ball.position.set(x, drawnY, z);
     ballShadow.position.set(x, 0.027, z);
-    const size = 0.4 + Math.min(y, 10) * 0.035;
+    const size = 0.4 + Math.min(drawnY, 10) * 0.035;
     ballShadow.scale.set(size, size, 1);
-    ballShadow.material.opacity = 0.3 / (1 + y * 0.18);
+    ballShadow.material.opacity = 0.3 / (1 + drawnY * 0.18);
     ball.visible = ballShadow.visible = ballReady = true;
   }
 
@@ -218,6 +377,7 @@ export function createPlayers(scene, teams) {
       for (const value of textures) value.dispose();
       actors.clear();
       previous.clear();
+      seen.clear();
     },
   };
 }

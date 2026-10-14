@@ -5,7 +5,8 @@ import vm from 'node:vm';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
 
 const source = readFileSync(new URL('../../src/decision_pitch/web/src/players.js', import.meta.url), 'utf8')
-  .replace(/^import .*;$/gm, '').replace('export function', 'function');
+  .replace(/^import .*;$/gm, '').replace(/^export /gm, '');
+const STEP = 1 / 30;
 
 function setup() {
   const document = { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
@@ -15,22 +16,34 @@ function setup() {
   const scene = new THREE.Scene();
   const actors = context.createPlayers(scene, [{
     colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' },
-    players: [{ id: 1, number: 1, position: 'GK' }],
+    players: [{ id: 1, number: 1, position: 'GK' }, { id: 2, number: 9, position: 'FW' }],
   }]);
-  const body = scene.children[0].children[0].children[1];
-  const limbs = body.children.filter(child => child.isGroup);
+  const root = scene.children[0];
+  const parts = (index) => {
+    const group = root.children[index];
+    const body = group.children[1];
+    return { group, body, limbs: body.children.filter(child => child.isGroup) };
+  };
+  const ball = root.children.find(child => child.isGroup && child.children[0]?.geometry?.type === 'IcosahedronGeometry');
   return {
-    actors, body, limbs,
+    context, scene, actors, ball, shell: ball.children[0], keeper: parts(0), forward: parts(1),
+    ...parts(0),
     frame(phase, now, action = 'move') {
       const snapshot = {
         phase, t: 1, period: 1,
         players: [{ id: 1, x: 0, y: 0, heading: 0, speed: 6, action }],
-        ball: { x: 0, y: 0, z: 0.11 },
+        ball: { x: 0, y: 0, z: 0.11, owner: null, touch: null },
       };
       actors.update(snapshot, snapshot, 1, 0.1, now);
     },
   };
 }
+
+const player = (id, x, y, fields = {}) => ({ id, x, y, heading: 0, speed: 0, action: 'move', ...fields });
+const snap = (t, players, ball, phase = 'play') => ({
+  phase, t, period: 1, players, ball: { z: 0.11, owner: null, touch: null, ...ball },
+});
+const worldOf = (object) => object.getWorldPosition(new THREE.Vector3());
 
 for (const phase of ['half_time', 'full_time']) {
   test(`${phase} suppresses retained locomotion and preserves stride for resumed play`, () => {
@@ -56,21 +69,260 @@ for (const phase of ['half_time', 'full_time']) {
     }
   });
 
-  test(`${phase} retains intentional celebration but suppresses stale kick commands`, () => {
-    const player = setup();
+  test(`${phase} retains intentional celebration but stops a kick in progress`, () => {
+    const ui = setup();
     try {
-      player.frame('play', 1, 'kick');
-      player.frame(phase, 1.1, 'kick');
-      assert.ok(player.limbs[1].rotation.x === 0, 'in-progress kick stops at whistle');
-      player.actors.handleEvent({ kind: 'goal', team: 0 }, 1.1);
-      player.frame(phase, 1.2, 'kick');
-      assert.ok(player.body.position.y > 0, 'goal bounce remains intentional');
-      assert.ok(Math.abs(player.limbs[2].rotation.z) > 2, 'celebration arms raised');
-      for (const limb of player.limbs) assert.ok(limb.rotation.x === 0);
-      player.frame(phase, 6, 'kick');
-      assert.equal(player.body.position.y, 0, 'celebration expires to a standing pose');
+      const touch = { player: 1, kind: 'kick', t: 1, x: 0.6, y: 0, z: 0.11 };
+      const ready = snap(0.9, [player(1, 0, 0)], { x: 0.6, y: 0, owner: 1 });
+      const kicked = snap(1, [player(1, 0, 0)], { x: 0.9, y: 0, touch });
+      ui.actors.update(ready, ready, 1, 0.016, 0.9, kicked);
+      ui.actors.update(ready, kicked, 0.95, 0.016, 0.995, kicked);
+      assert.ok(ui.limbs[1].rotation.x < -0.3, `the kick is under way: ${ui.limbs[1].rotation.x}`);
+      const whistle = { ...kicked, phase };
+      ui.actors.update(whistle, whistle, 1, 0.016, 1.1);
+      assert.ok(ui.limbs[1].rotation.x === 0, 'in-progress kick stops at whistle');
+      ui.actors.handleEvent({ kind: 'goal', team: 0 }, 1.1);
+      ui.actors.update(whistle, whistle, 1, 0.1, 1.2);
+      assert.ok(ui.body.position.y > 0, 'goal bounce remains intentional');
+      assert.ok(Math.abs(ui.limbs[2].rotation.z) > 2, 'celebration arms raised');
+      for (const limb of ui.limbs) assert.ok(limb.rotation.x === 0);
+      ui.actors.update(whistle, whistle, 1, 0.1, 6);
+      assert.equal(ui.body.position.y, 0, 'celebration expires to a standing pose');
     } finally {
-      player.actors.dispose();
+      ui.actors.dispose();
     }
   });
 }
+
+test('track eases between keys and runs straight into a linear key', () => {
+  const ui = setup();
+  const { track } = ui.context;
+  const keys = [[0, 0], [1, 1], [2, 3, 'linear']];
+  assert.equal(track(keys, -1), 0);
+  assert.equal(track(keys, 0.5), 0.5);
+  assert.ok(track(keys, 0.25) < 0.25, 'eased');
+  assert.equal(track(keys, 1.5), 2, 'linear');
+  assert.equal(track(keys, 3), 3);
+});
+
+test('a carried ball stays at the drawn feet between snapshots', () => {
+  const ui = setup();
+  const dribble = vm.runInContext('DRIBBLE', ui.context);
+  // The engine's ball is a little off where it should be: the drawn one still never slides.
+  const a = snap(1, [player(2, 0, 0, { speed: 6 })], { x: 0.6, y: 0, owner: 2 });
+  const b = snap(1 + STEP, [player(2, 0.2, 0.05, { speed: 6, heading: 0.3 })], { x: 0.78, y: 0.27, owner: 2 });
+  for (let i = 0; i <= 10; i++) {
+    ui.actors.update(a, b, i / 10, 1 / 60, 1 + i / 60);
+    const feet = ui.forward.group.position;
+    const heading = ui.forward.body.rotation.y - Math.PI / 2;
+    const dx = ui.ball.position.x - feet.x;
+    const dz = ui.ball.position.z - feet.z;
+    const ahead = dx * Math.cos(heading) - dz * Math.sin(heading);
+    const side = dx * Math.sin(heading) + dz * Math.cos(heading);
+    assert.ok(ahead >= dribble - 1e-9 && ahead <= dribble + 0.15, `just ahead of the feet: ${ahead}`);
+    assert.ok(Math.abs(side) < 1e-9, `straight ahead: ${side}`);
+  }
+});
+
+test('the touch rhythm moves a carried ball with the stride, not against it', () => {
+  const ui = setup();
+  const aheads = [];
+  for (let i = 0; i < 60; i++) {
+    const t = 1 + i * STEP;
+    const a = snap(t, [player(2, i * 0.2, 0, { speed: 6 })], { x: i * 0.2 + 0.6, y: 0, owner: 2 });
+    const b = snap(t + STEP, [player(2, (i + 1) * 0.2, 0, { speed: 6 })], { x: (i + 1) * 0.2 + 0.6, y: 0, owner: 2 });
+    ui.actors.update(a, b, 0.5, STEP, t);
+    aheads.push(ui.ball.position.x - ui.forward.group.position.x);
+  }
+  const most = Math.max(...aheads.slice(5));
+  const least = Math.min(...aheads.slice(5));
+  assert.ok(most - least > 0.05 && most - least < 0.16, `a gentle touch rhythm: ${least}..${most}`);
+  for (let i = 6; i < aheads.length; i++) assert.ok(Math.abs(aheads[i] - aheads[i - 1]) < 0.05, 'no jumps');
+});
+
+test('the ball keeps the engine height: on the grass at rest and raised in flight', () => {
+  const ui = setup();
+  const ground = snap(1, [], { x: 3, y: 4 });
+  ui.actors.update(ground, ground, 1, 0.016, 1);
+  assert.equal(ui.ball.position.y, 0.3, 'the enlarged ball sits on the grass');
+  assert.deepEqual([ui.ball.position.x, ui.ball.position.z], [3, -4]);
+  const flight = snap(1 + STEP, [], { x: 3.5, y: 4, z: 2.11 });
+  ui.actors.update(flight, flight, 1, 0.016, 1.1);
+  assert.ok(Math.abs(ui.ball.position.y - 2.3) < 1e-9, 'its height above the grass is as sent');
+});
+
+test('a rolling ball turns by the distance over its drawn radius; in the air it keeps spinning', () => {
+  const ui = setup();
+  const a = snap(1, [], { x: 0, y: 0 });
+  const b = snap(1 + STEP, [], { x: 0.6, y: 0 });
+  ui.actors.update(a, b, 0, 1 / 60, 1);
+  const start = ui.shell.quaternion.clone();
+  ui.actors.update(a, b, 1, 1 / 60, 1 + 1 / 60);
+  const turned = start.clone().invert().premultiply(ui.shell.quaternion);
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(turned.w)));
+  assert.ok(Math.abs(angle - 0.6 / 0.3) < 1e-6, `rolled ${angle} rad`);
+  const axis = new THREE.Vector3(turned.x, turned.y, turned.z).normalize().multiplyScalar(Math.sign(turned.w));
+  assert.ok(axis.distanceTo(new THREE.Vector3(0, 0, -1)) < 1e-6, 'about the axis across its travel');
+  const up = snap(1 + 2 * STEP, [], { x: 0.6, y: 0, z: 1.5 });
+  const before = ui.shell.quaternion.clone();
+  ui.actors.update(up, up, 1, 1 / 60, 1.05);
+  ui.actors.update(up, up, 1, 1 / 60, 1.07);
+  assert.ok(ui.shell.quaternion.angleTo(before) > 0.5, 'a ball in the air keeps its spin');
+  const rest = snap(1 + 3 * STEP, [], { x: 0.6, y: 0 });
+  ui.actors.update(rest, rest, 1, 1 / 60, 1.1);
+  const still = ui.shell.quaternion.clone();
+  ui.actors.update(rest, rest, 1, 1 / 60, 1.12);
+  assert.ok(ui.shell.quaternion.angleTo(still) < 1e-9, 'a ball at rest on the grass is still');
+});
+
+test('a kick: the leg winds up, meets the ball as it leaves and follows through', () => {
+  const ui = setup();
+  const t0 = 1;
+  const contactT = t0 + STEP;
+  const touch = { player: 2, kind: 'kick', t: contactT, x: 0.6, y: 0, z: 0.11 };
+  const a = snap(t0, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2 });
+  const b = snap(contactT, [player(2, 0, 0)], { x: 0.9, y: 0, touch });
+  const c = snap(contactT + STEP, [player(2, 0, 0)], { x: 1.5, y: 0, touch });
+  // The newest snapshot already has the kick 0.1 s before the drawn match reaches it.
+  const z = snap(t0 - 3 * STEP, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2 });
+  ui.actors.update(z, a, 0, 1 / 60, 0.9, b);
+  assert.equal(ui.forward.limbs[1].rotation.x + 0, 0, 'standing, before the wind-up');
+  ui.actors.update(z, a, 0.6, 1 / 60, 0.94, b);
+  assert.ok(ui.forward.limbs[1].rotation.x > 0.3, `leg drawn back: ${ui.forward.limbs[1].rotation.x}`);
+  const contact = touch.t - 1 / 120;
+  const at = (time) => {
+    const alpha = (time - a.t) / STEP;
+    ui.actors.update(alpha <= 1 ? a : b, alpha <= 1 ? b : c, alpha <= 1 ? alpha : alpha - 1, 1 / 120, time, c);
+    return { leg: ui.forward.limbs[1].rotation.x, ball: ui.ball.position.x };
+  };
+  const early = at(contact - 0.01);
+  assert.ok(Math.abs(early.ball - 0.6) < 1e-9, 'the ball waits at the boot until contact');
+  const met = at(contact);
+  assert.ok(Math.abs(met.ball - 0.6) < 1e-9, 'contact at the touch point');
+  assert.ok(met.leg < -0.2 && met.leg > early.leg - 1, `swinging through: ${met.leg}`);
+  const gone = at(contact + 0.01);
+  assert.ok(gone.ball > 0.6, 'the ball leaves on contact');
+  assert.ok(gone.leg < met.leg, 'the leg follows through');
+});
+
+test('control, tackle and deflection each move the toucher at the moment of contact', () => {
+  for (const kind of ['control', 'tackle', 'deflect']) {
+    const ui = setup();
+    const touch = { player: 2, kind, t: 2, x: 0.6, y: 0, z: 0.11 };
+    const s = snap(2, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch });
+    const before = snap(1.9, [player(2, 0, 0)], { x: 2, y: 0 });
+    ui.actors.update(before, s, 0.5, 1 / 60, 1);
+    const resting = ui.forward.limbs[1].rotation.x;
+    ui.actors.update(s, s, 1, 1 / 60, 1.1);
+    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch }), 0.5, 1 / 60, 1.15);
+    assert.ok(ui.forward.limbs[1].rotation.x < resting - 0.2, `${kind}: the leg goes to the ball`);
+    ui.actors.update(s, snap(2.1, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch }), 1, 1 / 60, 2);
+    const late = snap(3, [player(2, 0, 0)], { x: 0.6, y: 0, owner: 2, touch });
+    ui.actors.update(late, late, 1, 1 / 60, 3);
+    assert.equal(ui.forward.limbs[1].rotation.x + 0, 0, `${kind}: the pose ends`);
+  }
+});
+
+test('a throw-in swings both arms over the head', () => {
+  const ui = setup();
+  const touch = { player: 2, kind: 'throw', t: 2, x: 0, y: 34, z: 0.11 };
+  const waiting = snap(1.9, [player(2, 0, 33.5)], { x: 0, y: 34, owner: 2 }, 'throw_in');
+  const thrown = snap(2, [player(2, 0, 33.5)], { x: 0, y: 33.8, touch });
+  ui.actors.update(waiting, waiting, 1, 1 / 60, 1, thrown);
+  ui.actors.update(waiting, waiting, 1, 1 / 60, 1.1, thrown);
+  // 0.02 s before the ball leaves the hands
+  const alpha = (2 - 1 / 120 - 0.02 - 1.9) / 0.1;
+  ui.actors.update({ ...waiting, phase: 'play' }, thrown, alpha, 1 / 60, 1.17, thrown);
+  assert.ok(ui.forward.limbs[2].rotation.x < -1.5 && ui.forward.limbs[3].rotation.x < -1.5, 'both arms high');
+});
+
+// Renders a goalkeeper touch from 0.1 s before contact to `after` s past it, as the page would.
+function keeperTouch(ui, touch, keeperAt, ball) {
+  const before = snap(touch.t - 0.1, [player(1, ...keeperAt)], ball);
+  const after = snap(touch.t, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touch });
+  const later = snap(touch.t + 1.5, [player(1, ...keeperAt)], { x: touch.x, y: touch.y, z: touch.z, touch });
+  ui.actors.update(before, before, 1, 1 / 60, 1, after);
+  return (since) => {
+    const time = touch.t - 1 / 120 + since;
+    if (time <= touch.t) ui.actors.update(before, after, (time - before.t) / 0.1, 1 / 60, 1 + since, later);
+    else ui.actors.update(after, later, (time - touch.t) / 1.5, 1 / 60, 1 + since, later);
+  };
+}
+
+test('a goalkeeper reaches across to a save on its left and dives the right way', () => {
+  const ui = setup();
+  const head = ui.keeper.body.children[2];
+  // Facing +x, its left is +y: the ball meets it 1.2 m to its left.
+  const at = keeperTouch(ui, { player: 1, kind: 'save', t: 2, x: 0.3, y: 1.2, z: 0.6 }, [0, 0], { x: 4, y: 1.3, z: 0.7 });
+  const standing = worldOf(head);
+  at(0);
+  const meeting = worldOf(head);
+  at(0.2);
+  const reaching = worldOf(head);
+  // Match +y is three.js −z.
+  assert.ok(standing.z - meeting.z > 0.5, `across to the ball at contact: ${standing.z - meeting.z}`);
+  assert.ok(standing.z - reaching.z > 0.8, `full stretch after: ${standing.z - reaching.z}`);
+  assert.ok(reaching.y < standing.y, 'it leaves its feet sideways');
+  assert.ok(ui.keeper.limbs[2].rotation.x < -2, 'arms stretched');
+  at(1.2);
+  assert.ok(Math.abs(ui.keeper.body.rotation.z) < 1e-9, 'and it gets up');
+});
+
+test('a goalkeeper gathers a ball straight at it without diving', () => {
+  const ui = setup();
+  const at = keeperTouch(ui, { player: 1, kind: 'catch', t: 2, x: 0.7, y: 0.1, z: 0.11 }, [0, 0], { x: 2, y: 0.1 });
+  at(0.1);
+  assert.equal(ui.keeper.body.rotation.z, 0, 'no dive');
+  assert.ok(ui.keeper.body.rotation.x > 0.2, 'bends to the ball');
+});
+
+test('a goalkeeper reaches up for a high ball', () => {
+  const ui = setup();
+  const at = keeperTouch(ui, { player: 1, kind: 'catch', t: 2, x: 0.5, y: 0, z: 2.2 }, [0, 0], { x: 3, y: 0, z: 2.4 });
+  at(0.1);
+  assert.equal(ui.keeper.body.rotation.z, 0, 'no dive');
+  assert.ok(ui.keeper.limbs[2].rotation.x < -2.5 && ui.keeper.body.position.y > 0.2, 'arms up, off the ground');
+});
+
+test('a diving goalkeeper leans into its dive', () => {
+  const ui = setup();
+  for (let i = 0; i < 10; i++) {
+    const a = snap(1 + i * STEP, [player(1, 0, i * 0.1, { dive: true })], { x: 10, y: 0, z: 0.5 });
+    const b = snap(1 + (i + 1) * STEP, [player(1, 0, (i + 1) * 0.1, { dive: true })], { x: 9, y: 0, z: 0.5 });
+    ui.actors.update(a, b, 0.5, STEP, 1 + i * STEP);
+  }
+  // Moving to its left (+y): it rolls left, which is negative about its forward axis.
+  assert.ok(ui.keeper.body.rotation.z < -0.3, `leaning left: ${ui.keeper.body.rotation.z}`);
+  const rest = snap(2, [player(1, 0, 1)], { x: 9, y: 0, z: 0.5 });
+  for (let i = 0; i < 60; i++) ui.actors.update(rest, rest, 1, 1 / 60, 2 + i / 60);
+  assert.ok(Math.abs(ui.keeper.body.rotation.z) < 0.02, 'and gets up again');
+});
+
+test('a touch from before the page joined is not replayed', () => {
+  const ui = setup();
+  const touch = { player: 2, kind: 'kick', t: 1, x: 0.6, y: 0, z: 0.11 };
+  const s = snap(9, [player(2, 0, 0)], { x: 20, y: 0, touch });
+  ui.actors.update(s, s, 1, 1 / 60, 1);
+  ui.actors.update(s, s, 1, 1 / 60, 1.1);
+  assert.equal(ui.forward.limbs[1].rotation.x + 0, 0);
+});
+
+test('picking up a loose ball settles it onto the feet without a jump', () => {
+  const ui = setup();
+  const touch = { player: 2, kind: 'control', t: 1 + STEP, x: 0.9, y: 0.1, z: 0.11 };
+  const frames = [
+    snap(1, [player(2, 0, 0, { speed: 3 })], { x: 1.6, y: 0.2 }),
+    snap(1 + STEP, [player(2, 0.1, 0, { speed: 3 })], { x: 0.7, y: 0, owner: 2, touch }),
+    snap(1 + 2 * STEP, [player(2, 0.2, 0, { speed: 3 })], { x: 0.8, y: 0, owner: 2, touch }),
+    snap(1 + 3 * STEP, [player(2, 0.3, 0, { speed: 3 })], { x: 0.9, y: 0, owner: 2, touch }),
+  ];
+  let last = null;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 4; j++) {
+      ui.actors.update(frames[i], frames[i + 1], j / 4, STEP / 4, 1 + (i * 4 + j) / 120);
+      const here = ui.ball.position.clone();
+      if (last) assert.ok(here.distanceTo(last) < 0.25, `no jump: ${here.distanceTo(last)}`);
+      last = here;
+    }
+  }
+});
