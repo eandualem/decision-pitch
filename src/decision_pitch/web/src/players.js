@@ -19,6 +19,7 @@ const SETTLE = 0.15; // s for the drawn ball to settle onto a new path without a
 // m/s: faster than any kick. A path this fast is the engine pulling a ball it has just
 // taken to the feet within one step, and is settled onto rather than drawn as a jump.
 const SNAP = 40;
+const FASTEST = 35; // m/s: no kick leaves faster (the engine's cap is 30)
 
 // Where `keys` ([u, value] pairs, u ascending) are at `u`: eased between each pair, or
 // straight into a key marked 'linear', for a swing that does not slow through contact.
@@ -232,7 +233,10 @@ export function createPlayers(scene, teams) {
     const playing = actor.pose;
     if (playing && (playing.at > at || (at - playing.at < REPOSE && WEIGHT[touch.kind] <= WEIGHT[playing.kind]))) return;
     const pose = { kind: touch.kind, touch, at, from: time - at, end: keeper ? KEEPER_POSE.end : POSES[touch.kind].end };
-    if (touch.kind === 'kick' || touch.kind === 'throw') pose.aim = null;
+    if (touch.kind === 'kick' || touch.kind === 'throw') {
+      pose.aim = aim(pose, snapshot); // the first snapshot to report the touch, if it can tell
+      pose.aimed = pose.from;
+    }
     if (keeper) {
       const player = snapshot.players.find(p => p.id === touch.player);
       if (!player) return;
@@ -244,13 +248,23 @@ export function createPlayers(scene, teams) {
     actor.pose = pose;
   }
 
-  // Which way a kick sends the ball: from the touch to where `snapshot` has it, once the
-  // snapshot is the one that reports the touch or a later one.
+  // Which way a kick sends the ball: from the touch to where `snapshot` has it, or null
+  // when the snapshot cannot tell. It must still report the touch, in play, with nobody
+  // touching the ball since: a goal or the ball going out restarts play in the same
+  // engine step, with the ball already placed at the restart.
   function aim(pose, snapshot) {
-    if (!snapshot || snapshot.t < pose.touch.t) return null;
-    const dx = snapshot.ball.x - pose.touch.x;
-    const dy = snapshot.ball.y - pose.touch.y;
-    return Math.hypot(dx, dy) > 0.15 ? Math.atan2(dy, dx) : null;
+    const { touch } = pose;
+    if (!snapshot || snapshot.t < touch.t || snapshot.phase !== 'play') return null;
+    let reported = false;
+    for (const other of snapshot.ball.touches ?? NONE) {
+      if (other.t > touch.t) return null;
+      if (other.t === touch.t && other.player === touch.player) reported = true;
+    }
+    const dx = snapshot.ball.x - touch.x;
+    const dy = snapshot.ball.y - touch.y;
+    const distance = Math.hypot(dx, dy);
+    if (!reported || distance <= 0.15 || distance > FASTEST * (snapshot.t - touch.t + STEP)) return null;
+    return Math.atan2(dy, dx);
   }
 
   function update(before, after, alpha, dt, now, latest = after) {

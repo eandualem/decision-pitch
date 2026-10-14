@@ -258,6 +258,57 @@ test('a dribbler passing backwards turns into the pass with the ball and kicks i
   assert.ok(turnBetween(frames.at(-1).facing, Math.PI) < turnBetween(0, Math.PI), 'turning back to its run afterwards');
 });
 
+// A kicker at (51.7, 0) facing +x, carrying the ball, kicks it at once; the snapshot that
+// first reports the kick is `next`. The page holds the last snapshot of play across a
+// restart, as the timeline does, and sees `next` 0.1 s ahead. Returns the drawn facings.
+function kickInto(ui, next) {
+  const t0 = 2;
+  const kicker = player(2, 51.7, 0);
+  const shots = [
+    snap(t0 - 3 * STEP, [kicker], { x: 52.3, y: 0, owner: 2 }),
+    snap(t0 - 2 * STEP, [kicker], { x: 52.3, y: 0, owner: 2 }),
+    snap(t0 - STEP, [kicker], { x: 52.3, y: 0, owner: 2 }),
+    snap(t0, [kicker], { x: 52.3, y: 0, owner: 2 }),
+    next,
+  ];
+  const facings = [];
+  let swung = false;
+  for (let time = t0 - 3 * STEP; time <= t0 + STEP + 0.3; time += 1 / 120) {
+    const i = Math.min(shots.length - 1, Math.floor((time - shots[0].t) / STEP + 1e-9));
+    const a = shots[i];
+    const b = shots[i + 1]?.phase === 'play' ? shots[i + 1] : a; // held across a restart
+    const latest = shots.findLast(s => s.t <= time + 0.1);
+    ui.actors.update(a, b, b === a ? 1 : (time - a.t) / STEP, 1 / 120, time, latest);
+    facings.push(ui.forward.body.rotation.y - Math.PI / 2);
+    swung ||= ui.forward.limbs[1].rotation.x < -0.5;
+  }
+  return { facings, swung };
+}
+
+test('a kick straight into the goal or out of play does not turn the kicker to the restart', () => {
+  const kick = { player: 2, kind: 'kick', t: 2 + 1 / 60, x: 52.3, y: 0, z: 0.11 };
+  const restarts = [
+    snap(2 + STEP, [player(2, 51.8, 0)], { x: 0, y: 0, touches: [kick] }, 'kickoff'), // a goal
+    snap(2 + STEP, [player(2, 51.8, 0)], { x: -30, y: -34, touches: [kick] }, 'throw_in'),
+  ];
+  for (const next of restarts) {
+    const ui = setup();
+    const { facings, swung } = kickInto(ui, next);
+    assert.ok(swung, `${next.phase}: the kick is still shown`);
+    for (const facing of facings) assert.ok(turnBetween(facing, 0) < 0.05, `${next.phase}: no turn, got ${facing}`);
+  }
+});
+
+test('a kick blocked at once does not turn the kicker towards the rebound', () => {
+  const ui = setup();
+  const kick = { player: 2, kind: 'kick', t: 2 + 1 / 60, x: 52.3, y: 0, z: 0.11 };
+  const block = { player: 1, kind: 'deflect', t: 2 + 2 / 60, x: 52.6, y: 0, z: 0.11 };
+  const next = snap(2 + STEP, [player(2, 51.8, 0), player(1, 53, 0)], { x: 51.5, y: 2, touches: [kick, block] });
+  const { facings, swung } = kickInto(ui, next);
+  assert.ok(swung);
+  for (const facing of facings) assert.ok(turnBetween(facing, 0) < 0.05, `no turn, got ${facing}`);
+});
+
 test('a pass along the run needs no turn', () => {
   const ui = setup();
   for (const frame of pass(ui, 0.1)) assert.ok(turnBetween(frame.facing, 0) < 0.11);
