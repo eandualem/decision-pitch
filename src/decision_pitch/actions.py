@@ -23,6 +23,7 @@ from decision_pitch.bots import (
     _on_the_ball,
     _pass_or_clear,
     _press_spot,
+    _save_spot,
     _space,
     _take_restart,
     _taker,
@@ -78,11 +79,11 @@ def command(m: Match, p: Player, action: str) -> Command:
         action = "support"  # a teammate has it
     if action == "hold":
         if p.position == "GK":
-            return MoveTo(*_goal_line_spot(m, p))
+            return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)))
         return MoveTo(*_home(m, p), JOG)
     if action == "support":
         if p.position == "GK":
-            return MoveTo(*_goal_line_spot(m, p))
+            return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)))
         return MoveTo(*_home(m, p, attacking=True), JOG)
     if action == "mark":
         opponents = [q for q in m.players if q.team != p.team and q.position != "GK"]

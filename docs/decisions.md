@@ -67,7 +67,12 @@ a test or from the command line without a browser.
   rules raised shots from 3.1 to 6.5 a match and goals from 0.6 to 2.7, with
   throw-ins unchanged. A check that no opponent could cut a pass out on its
   way was tried and left out: more passes went out of play and fewer attacks
-  reached a shot.
+  reached a shot. A goalkeeper keeps to its goal line, and when a loose ball
+  is heading into its goal it moves across to the ball's line; a model in
+  goal that holds or supports does the same. Over the same 16 matches, this
+  cut the share of shots scored from 35% to 16% (goals from 2.8 to 1.1 a
+  match), and from 41% to 9% (11 to 3.6 goals) with every outfield player
+  answering `shoot`, as Laya mostly does.
 - **Fairness.** Both teams run through the same code with the same physics.
   Each player's state is built by one function, mirrored for the team
   attacking the other way, so neither side gets a different view.
