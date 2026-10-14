@@ -62,6 +62,17 @@ def test_two_built_in_managers_play_a_full_match_with_substitutions():
     assert {(m["off"], m["on"]) for m in made} <= {(m["off"], m["on"]) for m in asked}
 
 
+def test_the_half_time_and_full_time_whistles_carry_the_score():
+    staff = staffed(match=Match(half_length=60.0, seed=3))
+    sent = play(staff)
+    events = [m for m in sent if m["type"] == "event"]
+    whistle = {m["kind"]: m for m in events if m["kind"] in ("half_time", "full_time")}
+    first_half = [m for m in events if m["kind"] == "goal" and m["t"] <= whistle["half_time"]["t"]]
+    assert whistle["half_time"]["score"] == [sum(g["team"] == team for g in first_half) for team in (0, 1)]
+    assert whistle["full_time"]["score"] == list(staff.match.score)
+    assert sum(whistle["full_time"]["score"]) == sum(m["kind"] == "goal" for m in events) > 0
+
+
 def test_the_built_in_line_up_puts_no_more_on_a_local_model_than_it_answers_quickly():
     laya = Fake("Laya")
     staff = staffed(options=({"bot": None, "laya": laya}, {"bot": None}))
