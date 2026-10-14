@@ -403,12 +403,12 @@ loop. Each module disposes its scene objects, textures and listeners when a new
 hello resets the match. Match coordinates map to `(x, z, -y)` in the scene.
 
 The stadium uses striped grass, regulation pitch markings, netted goals,
-stands and floodlights built from shared geometry and materials. Player bodies
-are articulated low-poly meshes; shirt numbers are drawn into canvas textures
-using the system font. Keepers use the supplied keeper colour. Running and
-kicking poses follow snapshot speed and action; celebrations follow goal events.
-The ball is slightly enlarged for broadcast readability, with a ground shadow.
-No additional external assets, fonts or three.js addons are needed.
+stands and floodlights built from shared geometry and materials. Shirt numbers
+are drawn into canvas textures using the system font. Keepers use the supplied
+keeper colour. Players and managers are human figures made in Blender, with
+animation clips, and the ball is drawn at its real size (see "Human figures
+made in Blender" below; this replaces the first version's box bodies and
+enlarged ball). No external fonts are needed.
 
 Rendering interpolates the last two snapshots one snapshot behind the server,
 with reusable lookup data rather than allocating maps during every frame.
@@ -435,8 +435,8 @@ substitution) and when the `substitution` event is made, celebrates its team's
 goals and holds its head at the other team's. The `hello` message lists each
 team's assistant models; one assistant figure stands behind the manager per
 assistant model, and none when there are none. There is no crowd. The wide
-shot stays on the match, at the same size as before, so the managers are in it
-when play comes near their touchline. While the ball is dead the camera cuts
+shot stays on the match, so the managers are in it when play comes near their
+touchline. (It kept its size here; the human figures below changed it.) While the ball is dead the camera cuts
 briefly to a manager: after the scorer's close-up, at a card, at a
 substitution, at half time and full time, when a manager gives advice
 during a stoppage and, at most about once in 25 seconds, at a goal kick,
@@ -490,6 +490,173 @@ and buys motion that stays even when the connection does not. Drawing from the
 engine's touches rather than guessing from the ball's path keeps the page a
 renderer of the match, not a second engine.
 
+### Human figures made in Blender
+
+**Choice.** Players, goalkeepers, managers and assistants are one original
+human figure, modelled, rigged and animated by Python scripts run in Blender
+5.2 headless, exported as glTF binary and drawn with three.js's `GLTFLoader`.
+Every person on screen is a clone of the same skinned mesh on the same
+skeleton, playing the same clips; kits, skin, hair and build are set per
+figure at run time. The ball is drawn at the engine's 0.11 m radius.
+
+**Source and build.** The scripts and the saved `.blend` live in
+`assets/figure/`: `rig.py` (the skeleton), `body.py` (the body, clothing
+regions, coat and variations, modelled as smooth signed-distance shapes in
+`shapes.py` and meshed with the helpers in `meshes.py`), `hair.py` (hair styles
+and brows), `clips.py` (the animation), `render.py` (stills for checking the
+figure) and `build.py`, which runs them in order and exports. Its README says
+how to restyle the figure. One command rebuilds everything:
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python assets/figure/build.py
+```
+
+It writes `assets/figure/figure.blend` and `src/decision_pitch/web/figures/figure.glb`
+with `figure.json` beside it, which describes the clips for the page. The
+scripts are the source of truth: a full rebuild regenerates the `.blend`. A
+person who restyles the figure by hand in the `.blend` exports it with the same
+script's export-only mode, which leaves the `.blend` as it is, and carries the
+change into the scripts if it should survive the next rebuild. A rebuild
+gives the same `.glb` and `figure.json` byte for byte, and the `.blend` the same
+content (Blender gives some internal ids random values). No
+third-party model, motion capture, texture or asset pack is used; colours are
+plain materials, so the `.glb` stays small.
+
+**The figure.** Metres, natural adult proportions, 1.80 m tall at scale 1 with
+the soles at the origin, facing Blender's −Y, so it faces +z in the page like
+the bodies before it. About 10,000 triangles with hair. The page scales a
+figure uniformly between 1.70 and 1.95 m. A simple modelled face (brow, nose,
+ears, eyes and mouth) holds up in the close-up after a goal; the body is
+modelled and reduced on one side and mirrored, so it is symmetric. Shape keys,
+exported as morph targets, vary build and face; six hair meshes (shaved,
+buzz, short, curly, swept and tied back), one shown per figure, vary the hair,
+and each carries the brows; the page picks skin tone, hair colour, hair style,
+build and height from each player's id, so a player looks the same in every
+browser and the 22 do not look repeated.
+
+**Clothing as material regions.** The body's surface is split into named
+material slots that the page recolours per team and per figure: `skin` (head
+and neck), `shirt` (torso and upper arms), `sleeve` (forearms), `hands`,
+`shorts`, `legs` (between shorts and socks), `socks` and `boots`, plus `hair`
+and one fixed `eyes` material, on its own small mesh, which also draws the
+mouth's line. A short-sleeved outfield kit paints `sleeve` and
+`legs` with the skin tone; a goalkeeper's long sleeves and gloves paint
+`sleeve` with the keeper colour and `hands` with a glove colour. A manager wears
+a separate mesh over the same body, a hip-length zip-up track jacket with a
+stand collar over straight track trousers, whose `coat`, `trousers` and `trim`
+(collar and zip) materials the page paints in the team's colour, a dark neutral
+and a light contrast; an assistant wears a tracksuit painted on the body's
+regions. Socks take the shirt colour, since the snapshot sends
+shirt, shorts and keeper colours. The shirt number is a small skinned panel on
+the back, with its own material, that the page maps with the number's canvas
+texture. In Blender each region is an ordinary material, so restyling a kit or
+an outfit is editing a material or a mesh.
+
+**The skeleton.** One armature whose bone names have no dots, since three.js
+drops dots from animation track names: `root`, `hips`, `spine`, `chest`,
+`neck`, `head`, and `shoulder`, `upper_arm`, `forearm`, `hand`, `thigh`,
+`shin`, `foot` and `toe`, each with `_L` and `_R`. `_L` is always the figure's
+own left: Blender's +X, and the page's local +x before the figure turns. The
+same holds for clip names: `strafe_L` steps and `keeper_dive_L` dives to the
+figure's left.
+
+**Clips.** All clips play on that skeleton, keyed at 30 frames per second,
+with the `root` bone fixed: the engine moves the player, the clip only moves
+the body around it. `figure.json` lists each clip's duration and, for a loop,
+the speed and direction of travel (forward, back, left or right) it was made
+for, `idle` having none, or, for a one-shot, the moment of contact.
+
+- Locomotion loops: `idle`, `walk`, `jog`, `sprint`, `backpedal`,
+  `strafe_L` and `strafe_R`. Each is one full cycle that starts as the left
+  foot plants and plants the right foot halfway, and the planted foot moves
+  opposite to the clip's direction of travel at exactly the clip's speed, so a
+  clip played at the ground speed over its speed (and the figure's scale)
+  keeps its feet planted.
+- Play: `pass`, `shot`, `control`, `tackle`, `header`, `throw_in` and
+  `celebrate`, kicked with the right foot. Each is made so that its upper
+  body and kicking leg also work alone over a running stride: the support leg
+  carries no part of the action.
+- Goalkeeper: `keeper_dive_L`, `keeper_dive_R`, `keeper_catch` and
+  `keeper_catch_high`.
+- Touchline: `instruct`, `change`, `clap`, `protest`, `cheer` and `despair`,
+  the gestures the managers already make.
+
+**On the page.** `GLTFLoader`, with `SkeletonUtils` for cloning skinned meshes
+and the `BufferGeometryUtils` it imports, is vendored from three.js 0.186.0
+under `vendor/three/addons/` with its notice. The page loads the figure once,
+before the first match is built, and clones it per player and per touchline
+figure; geometry and clips are shared, and materials are shared per team and
+per skin or hair tone. Each figure has an animation mixer. The snapshot sends a
+player's heading and speed but not the direction it travels, so the page takes
+travel from the drawn positions, smoothed, and ignores it only below about
+0.3 m/s: a player slowing to turn often moves well off its heading at a walk.
+Locomotion blends the loops by ground speed and by the direction of travel
+against the way the figure faces, with all loops on one shared phase, and
+plays them at the rate that matches the stride to the speed, so feet plant
+instead of sliding; a carried ball keeps time with that phase. The touches
+from the contact moments above play their clip so that its moment of contact
+lands on the touch: `kick` plays `shot` when the ball leaves fast and `pass`
+otherwise, `control`, `tackle` and `throw` play theirs, and `deflect` plays
+`control`. The engine keeps a player moving while it plays the ball, so a
+player above a walking pace plays only the clip's upper body and kicking leg
+over its running stride; the whole clip plays only near standstill, except
+the tackle, a slide that the engine carries along the grass. A carried ball is
+met by the boot at its back, not its centre, and during a throw-in the taker
+holds the ball in its hands until the clip releases it, where the engine has it
+at its feet: presentation only, like the carried ball. A
+goalkeeper starts its dive, to its left or right by its travel against its
+facing, when the snapshot first marks it diving, whether or not it reaches the
+ball; a `save` or `catch` then times the dive's full stretch to the touch, and
+a catch with no dive plays `keeper_catch` or `keeper_catch_high` by the ball's
+height. Goals play `celebrate`; managers play their gesture clips on the upper
+body over their walk. The ball keeps its contrast and its shadow to stay
+readable on the broadcast camera at its real size. The engine is unchanged:
+headers stay unplayed until the engine has them, and the `header` clip is ready
+for that.
+
+**A broadcast wide shot.** The wide shot now frames play like a broadcast main
+camera: it looks 22 degrees down from about 72 m through a 22 degree vertical
+lens, showing about 50 m of pitch across, instead of looking 40 degrees down
+from about 83 m through 40 degrees, which showed most of the pitch. From the
+old shot a 1280×720 recording drew a player about 17 pixels tall, seen mostly
+from above, and the real-size ball as a dot of two or three pixels, so the
+figures and the ball this section adds could not be read; now a player near
+the frame's centre is about 43 pixels tall, seen more from the side, and the
+ball about 6. The frame follows the ball and leads it by a fraction of a
+second of its velocity, so a long pass's receiver comes into view early, and
+it keeps the ball, and at a restart the taker, inside the frame. Replaying
+three recorded bot matches through the old and new camera, the ball stayed
+in frame in every frame of open play and every restart, and every receiver
+of a pass longer than 25 m was in view at least half a second before the ball
+arrived. Measured against the narrower frame, pans are faster than before
+(95th percentile 0.20 against 0.075 frame widths a second), while over the
+ground the frame moves as fast as it did; they ease in and out. The managers'
+cutaways keep their 40 degree lens.
+
+**The scorer's close-up.** After a goal the camera cuts in to the scorer, 7 m
+away and a little below eye height through a 30 degree lens, so the scorer
+fills about half the frame's height and the face can be seen; it eases in,
+follows the scorer for the close-up's 3.8 s and cuts away as before. It picks a
+side in front of the scorer where possible, swinging round, or cutting to the
+reverse angle, when the scorer turns, and only from places that stay on the
+pitch, outside the goals and nets and clear of every other player and of the
+line of sight. Across twelve goals in recorded bot matches the scorer stayed
+in frame throughout, the camera never entered a player, a goal or the stands,
+and it filmed the scorer's front most of the time. Close to the camera the
+numbers above the players fade out, and the moment banner sits in the lower
+left, clear of the scorer.
+
+**Why.** A modelled and animated human reads as a person on a broadcast
+camera and in a close-up in a way that articulated boxes cannot, and stride
+matched to speed is what removes the hovering. Building the figure from
+scripts keeps it original, reviewable and reproducible with one command, while
+the saved `.blend` keeps it editable by hand. Recolouring material regions
+rather than baking textures keeps kits a run-time choice and the download small.
+
+**Rejected.** A third-party character or motion-capture pack: not original,
+and its licence and style would not be ours. Procedural limbs with better
+curves: they still slide without clips made for a stride.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules
@@ -500,6 +667,11 @@ their notices.
 | Project | Licence | Studied or reused | Where |
 |---|---|---|---|
 | [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/`, copied from commit 770bb4a |
+| [three.js](https://threejs.org/) 0.186.0 addons: `GLTFLoader`, `SkeletonUtils`, `BufferGeometryUtils` | MIT | Reused unchanged, with notice | `src/decision_pitch/web/vendor/three/addons/` |
+
+The human figure, its skeleton, clothing and animation are original work,
+made for this project by the scripts in `assets/figure/` in Blender 5.2. No
+third-party model, motion capture, texture or asset pack is used.
 
 ## 8. The laws: fouls, offside, cards and substitutions
 

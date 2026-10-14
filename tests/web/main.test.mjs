@@ -8,7 +8,19 @@ import { createTimeline } from '../../src/decision_pitch/web/src/timeline.js';
 const source = readFileSync(new URL('../../src/decision_pitch/web/src/main.js', import.meta.url), 'utf8')
   .replace(/^import .*;$/gm, '');
 
-function setup(protocol = 'http:') {
+// The figure loads at once unless a test holds it: `figure.resolve()` / `figure.reject()`.
+const FIGURE = { name: 'figure' };
+const loaded = () => ({ then(resolve) { resolve(FIGURE); } });
+function deferred() {
+  const pending = [];
+  const result = () => ({ then(resolve, reject) { pending.push({ resolve, reject }); } });
+  result.resolve = () => pending.shift().resolve(FIGURE);
+  result.reject = (error) => pending.shift().reject(error);
+  result.pending = pending;
+  return result;
+}
+
+function setup(protocol = 'http:', loadFigure = loaded) {
   const calls = [];
   const handlers = {};
   const sockets = [];
@@ -16,10 +28,11 @@ function setup(protocol = 'http:') {
   let time = 1000;
   let renderLoop;
   const status = { textContent: '' };
-  const actors = () => ({
+  const actors = (...args) => (calls.push(['actors.create', ...args]), {
     ballPosition: { x: 1, y: 2, z: 3 },
     update: (...args) => calls.push(['actors.update', ...args]),
     handleEvent: (...args) => calls.push(['actors.event', ...args]),
+    fadeNumbers: () => calls.push(['actors.fade']),
     dispose: () => calls.push(['actors.dispose']),
   });
   const component = (name) => () => ({
@@ -38,13 +51,20 @@ function setup(protocol = 'http:') {
       },
       Scene: class {}, Color: class {},
       PerspectiveCamera: class {
+        constructor(fov) { this.fov = fov; }
         position = { set() {} };
         lookAt() {} updateProjectionMatrix() {}
       },
     },
     createStadium: component('stadium'), createPlayers: actors,
-    createCamera: component('camera'), createMoments: component('moments'),
-    createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline,
+    createCamera: (camera) => {
+      calls.push(['camera.create', camera.fov]);
+      camera.fov = 20; // a wide shot narrows the lens
+      return component('camera')();
+    },
+    createMoments: component('moments'),
+    createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline, loadFigure,
+    console: { error: (...args) => calls.push(['console.error', ...args]) },
     document: { getElementById: (id) => id === 'status' ? status : { appendChild() {} } },
     performance: { now: () => time }, devicePixelRatio: 2,
     innerWidth: 1440, innerHeight: 900, location: { protocol, host: 'localhost:8791' },
@@ -232,4 +252,69 @@ test('a previously queued reconnect cannot replace the restored socket', () => {
   app.handlers.pageshow({ persisted: true });
   queuedRetry();
   assert.equal(app.sockets.length, 2);
+});
+
+test('the match is built once the figure has loaded; what arrives before waits for it', () => {
+  const figure = deferred();
+  const app = setup('http:', figure);
+  app.send(hello);
+  app.send(snapshot(1));
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.send({ type: 'decision', player: 9, action: 'pass' });
+  app.tick(16);
+  assert.equal(named(app.calls, 'actors.create').length, 0, 'nothing is built before the figure');
+  assert.equal(named(app.calls, 'actors.update').length, 0);
+  assert.match(app.status.textContent, /Loading players/);
+  figure.resolve();
+  const [create] = named(app.calls, 'actors.create');
+  assert.equal(create[3], FIGURE, 'the players are cloned from the loaded figure');
+  assert.equal(named(app.calls, 'overlay.message').at(-1)[1].type, 'decision', 'held messages are replayed in order');
+  assert.equal(app.status.textContent, '');
+  app.tick(50); // 1.166 s on the page draws 1.066 s of match: the snapshots kept their arrival times
+  const update = named(app.calls, 'actors.update').at(-1);
+  assert.equal(update[1].t, 1);
+  assert.equal(update[2].t, 1.1);
+});
+
+test('a hello arriving again while the figure loads replaces the one held', () => {
+  const figure = deferred();
+  const app = setup('http:', figure);
+  app.send({ ...hello, teams: [{ name: 'old' }] });
+  app.send(snapshot(1));
+  app.send({ ...hello, teams: [{ name: 'new' }] });
+  figure.resolve();
+  const creates = named(app.calls, 'actors.create');
+  assert.equal(creates.length, 1);
+  assert.equal(creates[0][2][0].name, 'new');
+});
+
+test('a figure that fails to load says so and is tried again', () => {
+  const figure = deferred();
+  const app = setup('http:', figure);
+  app.send(hello);
+  figure.reject(new Error('404'));
+  assert.match(app.status.textContent, /Could not load the players/);
+  assert.equal(named(app.calls, 'console.error').length, 1);
+  app.timers.at(-1)();
+  figure.resolve();
+  assert.equal(named(app.calls, 'actors.create').length, 1, 'the held hello builds the match');
+});
+
+test('each match\'s camera starts from the same lens, whatever the last match left it at', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(hello); // a reconnect: the server sends a new hello
+  assert.deepEqual(named(app.calls, 'camera.create').map(([, fov]) => fov), [40, 40]);
+});
+
+test('the numbers above the players fade by the camera of this frame, after it moves', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.tick(50);
+  const order = app.calls.map(([name]) => name).filter(name => ['actors.update', 'camera.update', 'actors.fade'].includes(name));
+  assert.deepEqual(order.slice(-3), ['actors.update', 'camera.update', 'actors.fade']);
 });

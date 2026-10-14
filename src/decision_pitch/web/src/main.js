@@ -7,6 +7,7 @@ import { createMoments } from './moments.js';
 import { createOverlay } from './overlay.js';
 import { createTouchline } from './touchline.js';
 import { createTimeline } from './timeline.js';
+import { loadFigure } from './figures.js';
 
 const status = document.getElementById('status');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -18,7 +19,8 @@ document.getElementById('game').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x101f2b);
-const camera = new THREE.PerspectiveCamera(40, 1, 0.2, 600);
+const LENS = 40; // degrees: the vertical field of view each match's camera starts from
+const camera = new THREE.PerspectiveCamera(LENS, 1, 0.2, 600);
 camera.position.set(0, 62, 88);
 camera.lookAt(0, 0, 0);
 
@@ -36,6 +38,11 @@ let lastFrame = performance.now() / 1000;
 let socket;
 let reconnectTimer;
 let stopped = false;
+// The human figure every person on the pitch is a clone of, loaded once before the first
+// match is built. A hello that arrives first waits for it, with what follows it.
+let figure = null;
+let held = [];
+const HOLD = 900; // messages kept while it loads: half a minute of snapshots
 
 function resetMatch(message) {
   overlay?.dispose();
@@ -47,16 +54,28 @@ function resetMatch(message) {
   timeline.reset();
   shown = null;
   stadium = createStadium(scene, renderer, message.pitch);
-  actors = createPlayers(scene, message.teams);
-  touchline = createTouchline(scene, message.teams, message.pitch);
+  actors = createPlayers(scene, message.teams, figure, camera);
+  touchline = createTouchline(scene, message.teams, message.pitch, figure);
+  // The camera is kept between matches; the last one's shots may have changed its lens.
+  camera.fov = LENS;
+  camera.updateProjectionMatrix();
   broadcast = createCamera(camera, message.pitch);
   moments = createMoments(scene, message.teams);
   overlay = createOverlay(message.teams);
   status.textContent = '';
 }
 
-function receive(message) {
-  const now = performance.now() / 1000;
+function receive(message, now = performance.now() / 1000) {
+  if (!figure) {
+    if (message.type === 'hello') {
+      held = [[message, now]];
+      status.textContent = 'Loading players…';
+    } else if (held.length) {
+      held.push([message, now]);
+      if (held.length > HOLD) held.splice(1, 1); // keep the hello
+    }
+    return;
+  }
   if (message.type === 'hello') {
     resetMatch(message);
   } else if (message.type === 'snapshot' && actors) {
@@ -82,6 +101,21 @@ function show(event, now, late) {
     touchline.handleEvent(event, now);
   }
   overlay.handleMessage(event);
+}
+
+// Messages that waited for the figure are replayed with the times they arrived, so the
+// timeline places them as if the match had been built when they came.
+function load() {
+  loadFigure().then((loaded) => {
+    figure = loaded;
+    const waiting = held;
+    held = [];
+    for (const [message, at] of waiting) receive(message, at);
+  }, (error) => {
+    console.error('Could not load the figures', error);
+    status.textContent = 'Could not load the players · retrying…';
+    setTimeout(load, 3000);
+  });
 }
 
 function connect() {
@@ -144,6 +178,7 @@ function draw(frameTime) {
     for (const event of timeline.release()) show(event, now, timeline.late(event));
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
+    actors.fadeNumbers(); // by where the camera is this frame, after a cut too
     touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }
@@ -151,5 +186,6 @@ function draw(frameTime) {
 }
 
 resize();
+load();
 connect();
 renderer.setAnimationLoop(draw);
