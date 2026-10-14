@@ -328,6 +328,97 @@ test('a figure fades a loop set in and out, keeps the stances on their own clock
   made.dispose();
 });
 
+test('each person moves its own way: stride, arms and back from its id, and neighbours never in step for long', () => {
+  const options = { hairs: HAIRS.length, morphs: [] };
+  assert.deepEqual(variation(9, options).style, variation(9, options).style, 'the same everywhere');
+  const styles = Array.from({ length: 22 }, (_, i) => variation(i + 1, options).style);
+  for (const style of styles) {
+    assert.ok(style.stride >= 0.9 && style.stride <= 1.1 && style.arms >= 0 && style.arms <= 1 && style.lean >= -1 && style.lean <= 1);
+  }
+  const spread = (key) => Math.max(...styles.map(x => x[key])) - Math.min(...styles.map(x => x[key]));
+  assert.ok(spread('stride') > 0.12 && spread('arms') > 0.6 && spread('lean') > 1.2, 'a range of each');
+  // The style does not follow the look: heights and strides are not in step.
+  const looks = Array.from({ length: 200 }, (_, i) => variation(i, options));
+  const mean = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+  const [h, k] = [looks.map(l => l.height), looks.map(l => l.style.stride)];
+  const [mh, mk] = [mean(h), mean(k)];
+  const r = mean(h.map((x, i) => (x - mh) * (k[i] - mk))) / Math.sqrt(mean(h.map(x => (x - mh) ** 2)) * mean(k.map(x => (x - mk) ** 2)));
+  assert.ok(Math.abs(r) < 0.2, `height and stride unrelated: r = ${r}`);
+  // Eleven running side by side at the same speed are rarely within a twentieth of a
+  // stride of each other.
+  const made = createFigures(fixture());
+  const people = Array.from({ length: 11 }, (_, i) => made.create({ seed: i + 1 }));
+  let together = 0;
+  let pairs = 0;
+  for (let frame = 0; frame < 600; frame++) {
+    for (const person of people) person.update(1 / 60, 4, 0);
+    if (frame < 60) continue;
+    for (let a = 0; a < people.length; a++) {
+      for (let b = a + 1; b < people.length; b++) {
+        const apart = Math.abs(((people[a].phase - people[b].phase) % 1 + 1.5) % 1 - 0.5);
+        pairs++;
+        if (apart < 0.05) together++;
+      }
+    }
+  }
+  assert.ok(together / pairs < 0.15, `in step ${(100 * together / pairs).toFixed(1)}% of the time`);
+  const rates = people.map(person => person.rate);
+  assert.ok(Math.max(...rates) / Math.min(...rates) > 1.05, 'at different cadences');
+  made.dispose();
+});
+
+test('the page leans a body into its acceleration and turns its hips to the stride, over the clips', () => {
+  const made = createFigures(fixtureMore());
+  const run = (person, frames, step) => {
+    const group = person.object.parent ?? new THREE.Group().add(person.object);
+    for (let i = 0; i < frames; i++) step(i, group);
+    return group;
+  };
+  const upright = (person) => {
+    // Which way the base bone's up points in the figure's own space.
+    const base = person.object.getObjectByName('root');
+    person.object.updateMatrixWorld(true);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(base.getWorldQuaternion(new THREE.Quaternion()));
+    return up.applyQuaternion(person.object.getWorldQuaternion(new THREE.Quaternion()).invert());
+  };
+  // Speeding up along its facing, it leans forwards; running steadily, upright again.
+  const sprinter = made.create({ seed: 4 });
+  run(sprinter, 30, (i) => sprinter.update(1 / 60, Math.min(7, i * 4 / 60), 0));
+  assert.ok(upright(sprinter).z > 0.05, `leaning forwards: ${upright(sprinter).z}`);
+  run(sprinter, 120, () => sprinter.update(1 / 60, 2, 0));
+  assert.ok(upright(sprinter).length() > 0.99 && Math.abs(upright(sprinter).z) < 0.01, 'upright at a steady speed');
+  // Braking, it leans back.
+  run(sprinter, 20, (i) => sprinter.update(1 / 60, Math.max(0, 2 - i * 5 / 60), 0));
+  assert.ok(upright(sprinter).z < -0.05, 'leaning back as it brakes');
+  // Running round to its left, it leans to its left (+x), into the curve, and by more
+  // the faster it goes, up to a limit.
+  const curve = (speed) => {
+    const person = made.create({ seed: 5 });
+    run(person, 90, (i) => {
+      person.object.rotation.y = i / 60; // turning left at 1 rad/s
+      person.update(1 / 60, speed, 0);
+    });
+    return upright(person).x;
+  };
+  assert.ok(curve(3) > 0.03 && curve(6) > curve(3), `leaning in: ${curve(3)} at 3 m/s, ${curve(6)} at 6`);
+  assert.ok(Math.asin(curve(12)) < 0.21, 'never by more than its limit');
+  // Its own carriage: one carries its back further forwards than another.
+  const backOf = (seed) => {
+    const person = made.create({ seed });
+    person.update(1 / 60, 0, 0);
+    return person.object.getObjectByName('spine').quaternion.angleTo(fixtureMore().scene.getObjectByName('spine').quaternion);
+  };
+  const backs = [1, 2, 3, 4, 5, 6, 7, 8].map(backOf);
+  assert.ok(Math.max(...backs) - Math.min(...backs) > 0.03, `backs differ: ${backs}`);
+  // Travelling back and to the side with straight back's footwork, the hips turn by what
+  // the loop misses and the chest turns back.
+  const back = made.create({ seed: 6 });
+  run(back, 30, () => back.update(1 / 60, 2, 165 * Math.PI / 180));
+  const { hips } = back.state();
+  assert.ok(Math.abs(hips + 15 * Math.PI / 180) < 1e-6, `the hips turn: ${hips}`);
+  made.dispose();
+});
+
 test('a late-seen wind-up plays faster, at most twice, and contact lands on the touch', () => {
   assert.equal(contactTime(0, -0.1, 0.4), 0.4);
   assert.ok(near(contactTime(0.2, -0.1, 0.4), 0.6), 'its own pace after contact');
@@ -456,12 +547,14 @@ test('a one-shot plays whole near a standstill and only its upper body and kicki
   assert.ok(near(marker('hand_L').x, CODES.pass, 0.02), 'the arms play the pass');
   assert.ok(near(marker('thigh_R').x, CODES.pass, 0.02), 'so does the kicking leg');
   assert.ok(marker('foot_L').x < CODES.sprint + 0.01 && marker('foot_L').x > CODES.jog - 0.01, `the support leg keeps running: ${marker('foot_L').x}`);
+  // What the loops shown put the markers at.
+  const loopsAt = () => Object.entries(person.state().loops).reduce((sum, [name, w]) => sum + w * CODES[name], 0);
   person.act('instruct', 1, 1, 'gesture');
   person.update(1 / 60, 1.5, 0); // a walk
   assert.ok(near(marker('hand_L').x, CODES.instruct, 0.02), 'a gesture moves the arms');
-  assert.ok(near(marker('thigh_R').x, CODES.walk, 0.02), 'over the walk');
+  assert.ok(person.state().loops.walk > 0.8 && near(marker('thigh_R').x, loopsAt(), 1e-6), 'over the walk');
   person.update(1 / 60, 1.5, 0);
-  assert.ok(near(marker('hand_L').x, CODES.walk, 0.02), 'a one-shot not shown this frame stops');
+  assert.ok(near(marker('hand_L').x, loopsAt(), 1e-6), 'a one-shot not shown this frame stops');
   assert.deepEqual(person.state().acts, []);
   person.act('keeper_dive_L', 0.5, 1, 'whole');
   person.update(1 / 60, 6, Math.PI / 2);
@@ -475,13 +568,16 @@ test('the loops advance on one shared phase at the rate that plants the feet', (
   const made = createFigures(fixture());
   const person = made.create({ seed: 5 });
   person.phase = 0;
-  person.update(0.1, LOOPS.jog.speed * person.scale, 0);
-  assert.ok(near(person.phase, 0.1 / LOOPS.jog.duration), `one jog cycle per ${LOOPS.jog.duration} s at its speed`);
+  // A figure picks its loops at its speed times its stride (variation().style): at the
+  // jog's speed over that, the jog alone, its cycle as long as the stride is.
+  const { stride } = person.look.style;
+  person.update(0.1, LOOPS.jog.speed * person.scale / stride, 0);
+  assert.ok(near(person.phase, 0.1 / (stride * LOOPS.jog.duration)), `one jog cycle per ${LOOPS.jog.duration} s x ${stride}`);
   const marker = person.object.getObjectByName('foot_L').position;
   assert.ok(near(marker.x, CODES.jog), 'jogging');
   assert.ok(near(marker.y, person.phase * LOOPS.jog.duration, 1e-6), 'at the shared phase');
   person.update(0.25, 0, 0);
-  assert.ok(near(person.phase, 0.1 / LOOPS.jog.duration), 'the phase holds when it stops');
+  assert.ok(near(person.phase, 0.1 / (stride * LOOPS.jog.duration)), 'the phase holds when it stops');
 });
 
 test('the figure loads once from the glTF and its description', async () => {
@@ -698,7 +794,7 @@ test('built figure: the toe reaches through the carried ball as far as each loop
   for (const name of ['walk', 'jog', 'sprint']) assert.ok(reach[name] > 0.45 && reach[name] < 0.75, `${name} reaches ${reach[name]}`);
   const made = createFigures(template);
   const person = made.create({ seed: 7 });
-  person.update(1 / 60, template.described.sprint.speed * person.scale, 0);
+  person.update(1 / 60, template.described.sprint.speed * person.scale / person.look.style.stride, 0);
   assert.ok(Math.abs(person.reach() - reach.sprint * person.scale) < 1e-9, 'a sprint reaches as the sprint does');
   person.update(1 / 60, (template.described.walk.speed + template.described.jog.speed) / 2 * person.scale, 0);
   const between = person.reach() / person.scale;

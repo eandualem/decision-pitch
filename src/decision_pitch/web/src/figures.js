@@ -429,8 +429,20 @@ function seedOf(seed) {
   return hash % 1000003;
 }
 
+// A number in [0, 1) from integer `n` and stream `k`, by integer arithmetic only, so it is
+// the same in every browser and does not follow the look's picks.
+function hash01(n, k) {
+  let x = Math.imul(n + 1, 0x9e3779b1) ^ Math.imul(k + 1, 0x85ebca77);
+  x ^= x >>> 15;
+  x = Math.imul(x, 0x2c1b3c6d);
+  x ^= x >>> 12;
+  x = Math.imul(x, 0x297a2d39);
+  x ^= x >>> 15;
+  return (x >>> 0) / 4294967296;
+}
+
 // A person's look from its id: height, skin, hair style and colour, sleeves and the build
-// and face shape keys. The same seed gives the same look everywhere. `greying` people
+// and face shape keys, and the way it moves. The same seed gives the same look everywhere. `greying` people
 // (the managers and their assistants) are grey-haired about half the time.
 export function variation(seed, { hairs = 1, morphs = [], greying = false } = {}) {
   const n = seedOf(seed);
@@ -460,6 +472,12 @@ export function variation(seed, { hairs = 1, morphs = [], greying = false } = {}
     longSleeves: at(4) < 0.22,
     shapes,
     phase: fract(n * 0.7548776662),
+    // How it moves: `stride` below 1 takes shorter, quicker steps and above 1 longer,
+    // slower ones; `arms` how far out and bent it carries its arms (0 to 1); `lean` how far
+    // forwards (+) or upright (-) it holds its back; `idle` which idle it favours.
+    style: {
+      stride: 0.9 + 0.2 * hash01(n, 1), arms: hash01(n, 2), lean: 2 * hash01(n, 3) - 1, idle: hash01(n, 4),
+    },
   };
 }
 
@@ -569,13 +587,42 @@ export function prepareFigure(scene, animations, info = {}) {
   });
   const steps = gait(described);
   measureReach(scene, clips, steps);
+  const axes = poseAxes(scene);
   return {
-    scene, info, clips, described, hairs, morphs, soles,
+    scene, info, clips, described, hairs, morphs, soles, axes,
     gait: steps,
     layered: { play: new Map(), gesture: new Map() }, // clips with only that layer's tracks
     twins: new Map(),
     parts: { body: info.body ?? 'body', coat: info.coat ?? 'coat', number: info.number ?? 'number' },
   };
+}
+
+// The axes the page turns bones about over the clips, in each bone's own space at rest:
+// the back and neck bend forwards about `bend` and turn left about `twist`, an upper arm
+// swings out from the side about `out`, and a forearm bends at the elbow about `bend`.
+function poseAxes(scene) {
+  scene.updateMatrixWorld(true);
+  const turn = new THREE.Quaternion();
+  const local = (bone, axis) => axis.applyQuaternion(bone.getWorldQuaternion(turn).invert()).normalize();
+  const at = (bone) => new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld);
+  const axes = {};
+  for (const name of ['spine', 'chest', 'neck']) {
+    const bone = scene.getObjectByName(name);
+    if (bone) axes[name] = { bend: local(bone, new THREE.Vector3(1, 0, 0)), twist: local(bone, new THREE.Vector3(0, 1, 0)) };
+  }
+  for (const [side, outwards] of [['L', 1], ['R', -1]]) {
+    const upper = scene.getObjectByName(`upper_arm_${side}`);
+    const fore = scene.getObjectByName(`forearm_${side}`);
+    const hand = scene.getObjectByName(`hand_${side}`);
+    if (!upper || !fore || !hand) continue;
+    const arm = at(fore).sub(at(upper)).normalize();
+    const forearm = at(hand).sub(at(fore)).normalize();
+    const out = arm.clone().cross(new THREE.Vector3(outwards, 0, 0));
+    const bend = forearm.clone().cross(new THREE.Vector3(0, 0, 1));
+    if (out.lengthSq() > 1e-6) axes[`upper_arm_${side}`] = { out: local(upper, out.normalize()) };
+    if (bend.lengthSq() > 1e-6) axes[`forearm_${side}`] = { bend: local(fore, bend.normalize()) };
+  }
+  return axes;
 }
 
 export const REACH = 0.6; // m: the toe's reach when a clip cannot tell, at scale 1
@@ -673,6 +720,19 @@ const DUTY = 0.35; // the share of the cycle a foot is down, for a loop that doe
 // and lets go once it lifts, so letting go never drags a foot over the grass.
 const LOCK_OUT = [0.95, 1.3];
 const LOCK_REACH = [0.12, 0.25]; // m a foot is held over, beyond which the lock gives way
+// The pose the page adds over the clips. A body leans into its acceleration, along and
+// across its run (a curve is an acceleration across it), as a runner does, by TILT of the
+// angle that would balance it, at most TILT_MOST; the acceleration is smoothed over
+// ACCELERATION s. Each person carries its back and arms its own way (variation().style).
+const TILT = 0.45;
+const TILT_MOST = 0.2; // rad
+const ACCELERATION = 0.15; // s
+const HARDEST = 12; // m/s2: faster changes are a figure placed, not running
+const GRAVITY = 9.81;
+const POSTURE = [0.03, 0.05]; // rad the back bends forwards, and by how much more or less
+const ARMS_OUT = [0.03, 0.12]; // rad the upper arms are held out from the sides, least to most
+const ELBOWS = [0, 0.3]; // rad more the elbows bend, least to most
+const COUNTER = { chest: 0.5, neck: 0.3 }; // of the hips' turn the chest and neck turn back
 const HEEL = 0.35; // the heel's distance behind the ankle, over the ankle-to-toe length
 const ROCK = 0.01; // m lower the other end of the sole must be to take the weight
 const LIFTED = [0.03, 0.06]; // m up over which a sole is no longer on the ground
@@ -820,16 +880,42 @@ export function createFigures(template, { footLock = true } = {}) {
     // The bone the whole skeleton turns about, the hips' parent, and the way up in its
     // parent's space.
     const base = legs[0].thigh?.parent?.parent ?? null;
-    const up = new THREE.Vector3(0, 1, 0);
+    // From the figure's own space (+z ahead, +y up) to the base's parent's.
+    const toBase = new THREE.Quaternion();
     if (base?.parent) {
       template.scene.updateMatrixWorld(true);
       const rest = template.scene.getObjectByName(base.parent.name);
-      if (rest) up.applyQuaternion(rest.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize();
+      if (rest) rest.getWorldQuaternion(toBase).invert();
     }
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(toBase);
+    const tiltAxis = new THREE.Vector3();
+    // The bones the page bends over the clips, with their axes (poseAxes).
+    const { axes } = template;
+    const bent = (name) => (axes[name] ? object.getObjectByName(name) : null);
+    const [spine, chest, neck] = ['spine', 'chest', 'neck'].map(bent);
+    const arms = ['L', 'R'].map(side => ({
+      upper: bent(`upper_arm_${side}`), fore: bent(`forearm_${side}`),
+      out: axes[`upper_arm_${side}`]?.out, bend: axes[`forearm_${side}`]?.bend,
+    }));
+    const { style } = look;
+    const posture = POSTURE[0] + POSTURE[1] * style.lean;
+    const armsOut = mix(ARMS_OUT[0], ARMS_OUT[1], style.arms);
+    const elbows = mix(ELBOWS[0], ELBOWS[1], style.arms);
+    // The smoothed acceleration over the ground, in the scene (x, z), and the velocity it
+    // comes from.
+    let ax = 0;
+    let az = 0;
+    let lastVx = 0;
+    let lastVz = 0;
+    let moved = false;
+    let tilt = 0;
     const switching = switchingState(steps);
     // Bones the page poses over the clips start each frame from their rest, in case no
     // clip keys them.
-    const posed = [...(lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : []), ...(base ? [base] : [])];
+    const posed = [
+      ...(lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : []), ...(base ? [base] : []),
+      ...[spine, chest, neck].filter(Boolean), ...arms.flatMap(arm => [arm.upper, arm.fore]).filter(Boolean),
+    ];
     const rests = posed.map(bone => bone.quaternion.clone());
     const turn = new THREE.Quaternion();
     const palm = new THREE.Vector3();
@@ -933,6 +1019,35 @@ export function createFigures(template, { footLock = true } = {}) {
       }
     }
 
+    // Adds the page's pose over the clips: the hips turned to the stride (gait.yaw) with the
+    // chest and neck turned back, the body leant into its acceleration from the feet, and
+    // the person's own carriage of its back and arms.
+    function pose() {
+      if (base) {
+        if (hips !== 0) base.quaternion.premultiply(turn.setFromAxisAngle(up, hips));
+        const yaw = object.rotation.y;
+        const c = Math.cos(yaw);
+        const sn = Math.sin(yaw);
+        const across = ax * c - az * sn; // the acceleration to the figure's left
+        const ahead = ax * sn + az * c; // and ahead of it
+        const hard = Math.hypot(across, ahead);
+        tilt = Math.min(TILT_MOST, TILT * Math.atan(hard / GRAVITY));
+        if (tilt > 1e-4) {
+          // Leaning towards the acceleration: up tips over towards it.
+          tiltAxis.set(ahead / hard, 0, -across / hard).applyQuaternion(toBase);
+          base.quaternion.premultiply(turn.setFromAxisAngle(tiltAxis, tilt));
+        }
+      }
+      if (spine) spine.quaternion.multiply(turn.setFromAxisAngle(axes.spine.bend, posture));
+      if (chest && hips !== 0) chest.quaternion.multiply(turn.setFromAxisAngle(axes.chest.twist, -COUNTER.chest * hips));
+      if (neck && hips !== 0) neck.quaternion.multiply(turn.setFromAxisAngle(axes.neck.twist, -COUNTER.neck * hips));
+      for (let i = 0; i < arms.length; i++) {
+        const arm = arms[i];
+        if (arm.upper) arm.upper.quaternion.multiply(turn.setFromAxisAngle(arm.out, armsOut));
+        if (arm.fore) arm.fore.quaternion.multiply(turn.setFromAxisAngle(arm.bend, elbows));
+      }
+    }
+
     const person = {
       object,
       scale,
@@ -995,8 +1110,27 @@ export function createFigures(template, { footLock = true } = {}) {
           const target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
           setShares[s] += (target - setShares[s]) * follow;
         }
+        // The acceleration over the ground, from the velocity drawn, in the figure's space.
+        const way = object.rotation.y + travel;
+        const vx = speed * Math.sin(way);
+        const vz = speed * Math.cos(way);
+        if (moved && step > 0) {
+          let gx = (vx - lastVx) / step;
+          let gz = (vz - lastVz) / step;
+          const hard = Math.hypot(gx, gz);
+          if (hard > HARDEST) {
+            gx *= HARDEST / hard;
+            gz *= HARDEST / hard;
+          }
+          const follow = 1 - Math.exp(-step / ACCELERATION);
+          ax += (gx - ax) * follow;
+          az += (gz - az) * follow;
+        }
+        lastVx = vx;
+        lastVz = vz;
+        moved = true;
         switching.dt = step;
-        rate = blendLoops(steps, speed, travel, scale, weights, setShares, 1, switching);
+        rate = blendLoops(steps, speed, travel, scale, weights, setShares, style.stride, switching);
         hips = steps.yaw;
         phase = fract(phase + rate * step);
         idle += step; // the clock of the loops that do not travel
@@ -1038,7 +1172,7 @@ export function createFigures(template, { footLock = true } = {}) {
         acting = 0;
         for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(rests[i]);
         mixer.update(0);
-        if (base && hips !== 0) base.quaternion.premultiply(turn.setFromAxisAngle(up, hips));
+        pose();
         if (lockable) {
           let moving = 0;
           let duty = 0;
@@ -1061,7 +1195,7 @@ export function createFigures(template, { footLock = true } = {}) {
         steps.sets.forEach((set, s) => { if (s > 0 && setShares[s] > 0) shares[set.name] = setShares[s]; });
         return {
           speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach(),
-          feet: legs.map(leg => leg.held), duty: shownDuty, hips,
+          feet: legs.map(leg => leg.held), duty: shownDuty, hips, tilt, style,
         };
       },
     };
