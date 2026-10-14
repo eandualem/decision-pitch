@@ -10,22 +10,28 @@
 // URL: ?view=overview | station:NAME | follow:ID | follow:play, &side=fixed|side|front|behind,
 // &hud=0. From a browser tool: `await __motion.measure(10)` returns the numbers below.
 //
-// Foot sliding: a foot is planted while the ball of the foot (the toe bone's joint) is
-// within 1 cm of the lowest it has been over the last 1.5 s. `drift` is how far a planted
-// foot moves over the ground from plant to lift (cm, per stance of 4 frames or more);
-// `skate` its speed while planted (cm/s); `sliding` the share of planted frames it moves
-// faster than 20 cm/s, which shows in a close-up; `ratio` the planted feet's travel over
-// the body's while it moves (0 is planted, 1 is skating along with the body). Lockstep: for neighbours within 4 m moving
-// alike (both faster than 0.8 m/s, velocities within 0.8 m/s), how often their strides are
-// within 0.05 of a cycle of each other, and each one's cadence, stride, lean and arm swing.
+// Foot sliding, per stance: a stance is a run of 4 frames or more in which the ball of the
+// foot (the toe bone's joint) stays within 2.5 cm of the lowest it has been over the last
+// 1.5 s. `slip` is the foot's median speed over the ground through the stance (cm/s), so a
+// planted foot reads near 0 whatever its landing and lift; `drift` how far it moves over
+// the middle half of the stance (cm); `sliding` the share of stances slipping faster than
+// 20 cm/s, which shows in a close-up; `ratio` the feet's travel over the body's in those
+// middle halves (0 is planted, 1 is skating along with the body); `coverage` the stances
+// seen while moving over the two a cycle there should be (a foot that never comes down
+// does not make a stance, so low coverage is sliding too); `standing` the 95th percentile of
+// a down foot's speed while the body stands (cm/s): feet skating round a turn on the spot.
+// Lockstep: for neighbours within
+// 4 m moving alike (both faster than 0.8 m/s, velocities within 0.8 m/s), how often their
+// strides are within 0.05 of a cycle of each other, and each one's cadence, stride, lean
+// and arm swing.
 import * as THREE from 'three';
 
-const PLANTED = 0.01; // m above the foot's recent lowest: the foot flat, not landing or lifting
+const LOW = 0.025; // m above the foot's recent lowest within which it is down
 const MEMORY = 90; // frames of recent heights (1.5 s at 60 fps)
 const NEAR = 4; // m: neighbours
 const ALIKE = 0.8; // m/s
 const STEP_APART = 0.05; // of a cycle
-const SHORTEST = 4; // frames a stance lasts to count its drift
+const SHORTEST = 4; // frames a stance lasts to count
 const VISIBLE = 20; // cm/s a planted foot slides at that shows
 const SIDES = ['fixed', 'side', 'front', 'behind'];
 
@@ -71,7 +77,7 @@ function body(id) {
     const bone = (name) => group.getObjectByName(name);
     entry = {
       group, hips: bone('hips'), head: bone('head'), hand: bone('hand_L'),
-      feet: ['toe_L', 'toe_R'].map(name => ({ bone: bone(name), heights: [], planted: 0, last: new THREE.Vector3(), start: new THREE.Vector3() })),
+      feet: ['toe_L', 'toe_R'].map(name => ({ bone: bone(name), heights: [], stance: null })),
       last: new THREE.Vector3().copy(at), seen: false,
     };
     bodies.set(id, entry);
@@ -89,7 +95,10 @@ function newRecord(seconds) {
 function stats(id) {
   let s = record.players.get(id);
   if (!s) {
-    s = { drift: [], skate: [], footPath: 0, bodyPath: 0, moving: 0, lean: [], swing: [], stride: [], rate: [], handMin: Infinity, handMax: -Infinity, handCycle: 0 };
+    s = {
+      stances: [], standing: [], movingStances: 0, footPath: 0, bodyPath: 0, moving: 0, movingTime: 0,
+      lean: [], swing: [], stride: [], rate: [], handMin: Infinity, handMax: -Infinity, handCycle: 0,
+    };
     record.players.set(id, s);
   }
   return s;
@@ -116,22 +125,23 @@ function measureFrame(dt) {
       foot.bone.getWorldPosition(v);
       foot.heights.push(v.y);
       if (foot.heights.length > MEMORY) foot.heights.shift();
-      const low = Math.min(...foot.heights);
-      const planted = !jumped && v.y < low + PLANTED;
-      if (planted && foot.planted) {
-        const slip = Math.hypot(v.x - foot.last.x, v.z - foot.last.z);
-        if (s) {
-          s.footPath += slip;
-          if (state.speed > 0.3) s.bodyPath += moved;
-          s.skate.push(slip / dt * 100);
-        }
-      } else if (planted) foot.start.copy(v);
-      else if (foot.planted >= SHORTEST && s) s.drift.push(Math.hypot(foot.last.x - foot.start.x, foot.last.z - foot.start.z) * 100);
-      foot.planted = planted ? foot.planted + 1 : 0;
-      foot.last.copy(v);
+      const down = !jumped && v.y < Math.min(...foot.heights) + LOW;
+      if (down) {
+        foot.stance ??= { foot: [], body: [], dt: [], speed: [] };
+        const prior = foot.stance.foot.at(-1);
+        if (prior && s && state.speed < 0.3) s.standing.push(Math.hypot(v.x - prior[0], v.z - prior[1]) / dt * 100);
+        foot.stance.foot.push([v.x, v.z]);
+        foot.stance.body.push([b.group.position.x, b.group.position.z]);
+        foot.stance.dt.push(dt);
+        foot.stance.speed.push(state.speed);
+      } else {
+        if (foot.stance && s) stance(s, foot.stance);
+        foot.stance = null;
+      }
     }
     if (!s || state.speed < 0.8 || jumped) continue;
     s.moving++;
+    s.movingTime += dt;
     if (state.rate > 0) {
       s.rate.push(state.rate);
       s.stride.push(state.speed / state.rate);
@@ -187,29 +197,57 @@ function measureFrame(dt) {
   }
 }
 
+// A finished stance's slip, drift and share of the travel.
+function stance(s, { foot, body, dt, speed }) {
+  const n = foot.length;
+  if (n < SHORTEST) return;
+  const slips = [];
+  for (let i = 1; i < n; i++) slips.push(Math.hypot(foot[i][0] - foot[i - 1][0], foot[i][1] - foot[i - 1][1]) / dt[i] * 100);
+  const from = Math.floor(n / 4);
+  const to = Math.max(from + 1, Math.ceil(3 * n / 4) - 1);
+  let footPath = 0;
+  let bodyPath = 0;
+  for (let i = from + 1; i <= to; i++) {
+    footPath += Math.hypot(foot[i][0] - foot[i - 1][0], foot[i][1] - foot[i - 1][1]);
+    bodyPath += Math.hypot(body[i][0] - body[i - 1][0], body[i][1] - body[i - 1][1]);
+  }
+  const moving = quantile(speed, 0.5) > 0.8;
+  if (moving) s.movingStances++;
+  s.footPath += footPath;
+  if (quantile(speed, 0.5) > 0.3) s.bodyPath += bodyPath;
+  s.stances.push({ slip: quantile(slips, 0.5), drift: Math.hypot(foot[to][0] - foot[from][0], foot[to][1] - foot[from][1]) * 100 });
+}
+
 const quantile = (list, q) => {
   if (!list.length) return null;
   const sorted = [...list].sort((a, b) => a - b);
   return +sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))].toFixed(2);
 };
-const share = (skate) => (skate.length ? +(skate.filter(x => x > VISIBLE).length / skate.length).toFixed(3) : null);
+const share = (list) => (list.length ? +(list.filter(x => x.slip > VISIBLE).length / list.length).toFixed(3) : null);
 const mean = (list) => (list.length ? +(list.reduce((a, b) => a + b, 0) / list.length).toFixed(3) : null);
+
+// Foot numbers for a list of players' stats.
+function feet(list) {
+  const stances = list.flatMap(x => x.stances);
+  const foot = list.reduce((n, x) => n + x.footPath, 0);
+  const moved = list.reduce((n, x) => n + x.bodyPath, 0);
+  const expected = list.reduce((n, x) => n + 2 * (mean(x.rate) ?? 0) * x.movingTime, 0);
+  const slips = stances.map(x => x.slip);
+  const drifts = stances.map(x => x.drift);
+  return {
+    stances: stances.length, slipMedian: quantile(slips, 0.5), slipP90: quantile(slips, 0.9),
+    driftMedian: quantile(drifts, 0.5), driftP90: quantile(drifts, 0.9), driftMost: quantile(drifts, 1),
+    sliding: share(stances), ratio: moved > 0.5 ? +(foot / moved).toFixed(3) : null,
+    coverage: expected > 2 ? +(list.reduce((n, x) => n + x.movingStances, 0) / expected).toFixed(2) : null,
+    standing: quantile(list.flatMap(x => x.standing), 0.95),
+  };
+}
 
 function report(rec) {
   const players = {};
-  const all = { drift: [], skate: [], footPath: 0, bodyPath: 0 };
   for (const [id, s] of rec.players) {
-    all.drift.push(...s.drift);
-    all.skate.push(...s.skate);
-    all.footPath += s.footPath;
-    all.bodyPath += s.bodyPath;
     players[id] = {
-      name: names.get(id) ?? null,
-      stances: s.drift.length,
-      drift: { median: quantile(s.drift, 0.5), p90: quantile(s.drift, 0.9), most: quantile(s.drift, 1) },
-      skate: { median: quantile(s.skate, 0.5), p90: quantile(s.skate, 0.9) }, sliding: share(s.skate),
-      ratio: s.bodyPath > 0.5 ? +(s.footPath / s.bodyPath).toFixed(3) : null,
-      moving: s.moving,
+      name: names.get(id) ?? null, ...feet([s]), moving: s.moving,
       cadence: mean(s.rate), stride: mean(s.stride), lean: mean(s.lean), swing: mean(s.swing),
     };
   }
@@ -221,24 +259,9 @@ function report(rec) {
   const groups = {};
   for (const s of stations) {
     const list = s.players.map(id => rec.players.get(id)).filter(Boolean);
-    if (!list.length) continue;
-    const drift = list.flatMap(x => x.drift);
-    const foot = list.reduce((n, x) => n + x.footPath, 0);
-    const moved = list.reduce((n, x) => n + x.bodyPath, 0);
-    groups[s.name] = {
-      stances: drift.length, driftMedian: quantile(drift, 0.5), driftP90: quantile(drift, 0.9), driftMost: quantile(drift, 1),
-      skateP90: quantile(list.flatMap(x => x.skate), 0.9), sliding: share(list.flatMap(x => x.skate)),
-      ratio: moved > 0.5 ? +(foot / moved).toFixed(3) : null,
-    };
+    if (list.length) groups[s.name] = feet(list);
   }
-  return {
-    seconds: rec.seconds, frames: rec.frames,
-    all: {
-      stances: all.drift.length, driftMedian: quantile(all.drift, 0.5), driftP90: quantile(all.drift, 0.9), driftMost: quantile(all.drift, 1),
-      skateMedian: quantile(all.skate, 0.5), skateP90: quantile(all.skate, 0.9), sliding: share(all.skate), ratio: all.bodyPath > 0.5 ? +(all.footPath / all.bodyPath).toFixed(3) : null,
-    },
-    stations: groups, pairs, players,
-  };
+  return { seconds: rec.seconds, frames: rec.frames, all: feet([...rec.players.values()]), stations: groups, pairs, players };
 }
 
 let finished = null;
@@ -343,7 +366,7 @@ function drawPanel(now) {
   if (record) lines.push(`measuring… ${(record.until - now).toFixed(1)} s`);
   else if (lastReport) {
     const a = lastReport.all;
-    lines.push(`last measure: drift median ${a.driftMedian} cm, p90 ${a.driftP90}; sliding ${a.sliding}; ratio ${a.ratio} (console has the rest)`);
+    lines.push(`last measure: slip median ${a.slipMedian} cm/s, p90 ${a.slipP90}; sliding ${a.sliding}; coverage ${a.coverage}; ratio ${a.ratio} (console has the rest)`);
   }
   lines.push('keys: 0 page camera · o overview · n/p station · f/F follow · v side · [ ] distance · m measure 10 s · h panel');
   panel.textContent = lines.join('\n');
