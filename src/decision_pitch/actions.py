@@ -75,6 +75,8 @@ def command(m: Match, p: Player, action: str) -> Command:
             action = "hold"  # only the taker goes to the ball
     if m.owner == p.id and action in ("press", "hold", "support", "mark"):
         return _on_the_ball(m, p)  # it has the ball: it keeps playing it
+    if p.position == "GK" and action in ("press", "mark"):
+        return bot_command(m, p)  # a keeper keeps its goal, coming for the ball as the bot does
     if m.phase == "play" and m.owner != p.id and action in ("dribble", *KICKS):
         return bot_command(m, p)  # the nearest goes for the ball; the others keep their places
     if action == "press" and m.owner is not None and m.player(m.owner).team == p.team:
