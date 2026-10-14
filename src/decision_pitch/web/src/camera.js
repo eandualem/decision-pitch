@@ -283,7 +283,10 @@ export function createCamera(camera, pitch) {
         if (facing(actors, scorer, facingNow)) scorerFacing.copy(facingNow);
         else scorerFacing.set(0, 0, 0);
         gather(actors, scorer);
-        if (!pickSide(closeFollow, closeSide)) closeSide.set(0, 0, 1);
+        // Where the scorer is heading, when the page can tell, so the opening side is clear
+        // of where it will be, not only of where it is.
+        const heading = actors.getPlayerVelocity?.(scorer, moved) ? scorerVelocity.copy(moved).setY(0) : null;
+        if (!pickSide(closeFollow, closeSide, heading)) closeSide.set(0, 0, 1);
         shot = request = null;
         ask('goal', now, touchline, { team: event.team, from: closeUntil });
       } else if (event.kind === 'yellow' || event.kind === 'red' || event.kind === 'substitution') {

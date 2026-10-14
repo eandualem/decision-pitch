@@ -24,6 +24,7 @@ function setup(aspect = 16 / 9) {
     ballPosition: ball,
     getPlayerPosition: (id) => (id === 9 ? scorer : others[id - 100] ?? null),
     getPlayerFacing: (id) => (id === 9 ? look.yaw : null),
+    getPlayerVelocity: (id, out) => (id === 9 && look.velocity ? out.copy(look.velocity) : null),
     forEachPlayerPosition(visit) {
       visit(9, scorer);
       others.forEach((position, i) => visit(100 + i, position));
@@ -450,8 +451,11 @@ test('the close-up cuts in once and holds: no second cut as the scorer drifts ne
   // At a goal, the scorer stands beside the goal it scored in and drifts along the byline
   // (the first goal of the seed-0 match): the side the camera opens on comes close to the
   // area behind the goal, and the camera comes in closer rather than cutting away again.
+  for (const known of [false, true]) {
   const t = setup();
   t.scorer.set(44.9, 0, 1.66);
+  // Whether or not the page tells the camera where the scorer is heading.
+  if (known) t.look.velocity = new THREE.Vector3(2.4, 0, -0.9);
   t.run(1);
   t.event('goal', { team: 1, player: 9 });
   t.run(1 / 60, 'kickoff');
@@ -465,5 +469,6 @@ test('the close-up cuts in once and holds: no second cut as the scorer drifts ne
     assert.ok(!insideGoal(t.camera.position) && !(Math.abs(t.camera.position.x) > PITCH.length / 2 - 0.3 &&
       Math.abs(t.camera.position.z) < PITCH.goalWidth / 2 + 2), 'never behind the goal');
     last = t.camera.position.clone();
+  }
   }
 });
