@@ -327,8 +327,8 @@ class Match:
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
             deflects = self.owner is None and self._deflects(nearest)
-            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and nearest.position == "GK"):
-                self._end_half()  # this touch completes the penalty the half waited for; a parry does not
+            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and self._saves(nearest)):
+                self._end_half()  # this touch completes the penalty the half waited for; a save does not
                 return
             if nearest.id in self.offside:
                 self._offside(nearest)
@@ -369,13 +369,17 @@ class Match:
         b.vy = p.vy + ny * speed * DEFLECT_PUSH + (vy - along * ny) * DEFLECT_KEEP
         b.vz *= DEFLECT_KEEP
         self.offside = self._offside_positions(p) | {q for q in self.offside if self.player(q).team != p.team}
-        if p.position != "GK":
+        if not self._saves(p):
             self.penalty_live = False  # a goalkeeper's save does not complete a penalty
         if p.id != self.indirect:
             self.indirect = None
         self.last_touch = p.team
         self.owner = None
         self.recovering[p.id] = KICK_RECOVERY
+
+    def _saves(self, p: Player) -> bool:
+        """Whether `p` is the goalkeeper defending the goal the ball is at."""
+        return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
 
     def _may_kick(self, p: Player) -> bool:
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:

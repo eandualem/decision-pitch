@@ -236,6 +236,14 @@ def test_a_penalty_parried_after_time_can_still_go_in():
     assert kinds(m.drain_events()) == ["goal", "half_time"]
 
 
+def test_a_penalty_deflected_by_the_attacking_goalkeeper_after_time_ends_the_half():
+    m = penalty_after_time((51.8, 0.0), 24.0)
+    keeper = m.player(1)
+    keeper.x, keeper.y = 51.6, -0.65
+    run(m, 1.0)
+    assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
+
+
 def test_the_bot_shoots_a_penalty():
     m = in_play()
     on_the_ball(m, 10, 45.0, 5.0)
