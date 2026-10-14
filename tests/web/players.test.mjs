@@ -735,3 +735,12 @@ test('a goalkeeper holds the ball it caught at its chest until it kicks it', () 
   assert.equal(ui.keeper.act('keeper_catch'), undefined, 'it lets go to kick');
   assert.ok(kickOf(ui.keeper), 'and kicks');
 });
+
+test('every drawn player\'s position can be read, and only theirs', () => {
+  const ui = setup();
+  const s = snap(1, [player(2, 3, 4)], { x: 0, y: 0 });
+  ui.actors.update(s, s, 1, 1 / 60, 1);
+  const seen = [];
+  ui.actors.forEachPlayerPosition((id, position) => seen.push([id, position.x, position.z]));
+  assert.deepEqual(seen, [[2, 3, -4]], 'the goalkeeper is not in this snapshot');
+});

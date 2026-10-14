@@ -568,6 +568,11 @@ export function createPlayers(scene, teams, figure) {
       const actor = actors.get(id);
       return actor?.group.visible ? actor.group.position : null;
     },
+    // Calls `visit(id, position)` for every player drawn this frame, with its drawn feet
+    // (read-only, and reused: copy it to keep it).
+    forEachPlayerPosition(visit) {
+      for (const [id, actor] of actors) if (actor.group.visible) visit(id, actor.group.position);
+    },
     handleEvent(event, now) {
       if (event.kind !== 'goal') return;
       for (const actor of actors.values()) {
