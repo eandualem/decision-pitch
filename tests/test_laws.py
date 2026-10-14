@@ -430,6 +430,15 @@ def test_a_hard_ball_bounces_off_an_outfield_player_who_cannot_play_it_at_once()
     assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1 and blocker.id in m.recovering
 
 
+def test_a_ball_dropping_fast_onto_a_player_bounces_off_it():
+    m = in_play()
+    m.player(15).x, m.player(15).y = 30.0, 0.0
+    m.ball.place(29.4, 0.0)
+    m.ball.z, m.ball.vx, m.ball.vz = 0.8, 12.0, -16.0
+    m.step()
+    assert m.owner is None and m.last_touch == 1
+
+
 def test_a_deflection_off_an_opponent_leaves_an_offside_position_as_it_was():
     m = through_ball((30.0, 10.0))
     blocker = m.player(13)

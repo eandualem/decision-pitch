@@ -348,19 +348,20 @@ class Match:
         only at full stretch (docs/decisions.md, section 8)."""
         b = self.ball
         vx, vy = b.vx - p.vx, b.vy - p.vy
-        speed = math.hypot(vx, vy)
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
         if speed > CONTROL_SPEED:
             return True
-        if p.position != "GK" or speed <= PARRY_SPEED:
+        if p.position != "GK" or speed <= PARRY_SPEED or vx == vy == 0:
             return False
-        return abs((b.x - p.x) * vy - (b.y - p.y) * vx) / speed > CONTROL  # its path passes beyond
+        # its path passes beyond an outfield player's reach
+        return abs((b.x - p.x) * vy - (b.y - p.y) * vx) / math.hypot(vx, vy) > CONTROL
 
     def _deflect(self, p: Player) -> None:
         """The ball bounces off `p`: outwards from where it touched, keeping a little of its
         speed along the body. It counts as `p` playing it, except for the opponents' offside."""
         b = self.ball
         vx, vy = b.vx - p.vx, b.vy - p.vy
-        speed = math.hypot(vx, vy)
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
         dx, dy = b.x - p.x, b.y - p.y
         dist = math.hypot(dx, dy)
         nx, ny = (dx / dist, dy / dist) if dist > 0 else (-vx / speed, -vy / speed)
