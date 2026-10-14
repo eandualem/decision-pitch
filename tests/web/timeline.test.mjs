@@ -101,6 +101,30 @@ test('the same arrivals interpolated by the last two snapshots stutter; the buff
   assert.ok(worst(buffered) < 0.003, `buffered motion is even, worst ${worst(buffered)}`);
 });
 
+test('a server running a tenth slower than real time is still drawn without holds', () => {
+  const timeline = createTimeline();
+  const next = random(11);
+  let a = 0;
+  const arrivals = [];
+  for (let k = 0, at = 0; k < 30 * 30; k++) {
+    at = Math.max(at, 500 + k * STEP / 0.9 + 0.01 + next() * 0.03);
+    arrivals.push({ at, message: snapshot(10 + k * STEP) });
+  }
+  let previous = null;
+  let held = 0;
+  let frames = 0;
+  for (let now = 500; now < 529; now += 1 / 60) {
+    while (a < arrivals.length && arrivals[a].at <= now) timeline.push(arrivals[a].message, arrivals[a++].at);
+    const frame = timeline.sample(now);
+    if (now > 505) {
+      frames++;
+      if (frame.time - previous < 0.25 / 60) held++;
+    }
+    previous = frame?.time;
+  }
+  assert.ok(held / frames < 0.01, `${held} of ${frames} frames held`);
+});
+
 test('a change of phase or period is held, never blended', () => {
   const timeline = createTimeline({ delay: 0 });
   timeline.push(snapshot(1, 'play'), 1);

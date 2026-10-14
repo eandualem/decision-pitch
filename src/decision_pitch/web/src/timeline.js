@@ -3,7 +3,9 @@
 // `t` on the server's match clock. No three.js here, so it can be tested on its own.
 
 const DELAY = 0.1; // s behind the newest snapshot: about three snapshots of slack
-const WINDOW = 1; // s of arrivals the clock offset is judged over
+// s of arrivals the clock offset is judged over: long enough to find an unhurried arrival,
+// short enough to follow a server running up to a tenth slower than real time.
+const WINDOW = 0.5;
 const SLEW = 0.08; // s per s the render clock may run fast or slow to follow the offset
 const SNAP = 0.25; // s off beyond which the render clock jumps instead (start, stall)
 const KEEP = 4; // s of snapshots kept: a hidden page's backlog is dropped beyond it
