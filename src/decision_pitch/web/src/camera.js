@@ -122,8 +122,9 @@ export function createCamera(camera, pitch) {
         else if (phase === 'throw_in' || now > request.from + START_WITHIN) request = null;
       }
       const portrait = Math.max(1, 1 / Math.max(0.35, camera.aspect));
-      // The ball's way over the ground, ignoring a ball placed for a restart.
-      const step = Math.min(dt, 0.1);
+      // The ball's way over the ground, ignoring a ball placed for a restart. A slow frame
+      // still moves the camera its full way, so it keeps up with play at a low frame rate.
+      const step = Math.min(dt, 0.5);
       if (initialized && step > 0) {
         moved.subVectors(ballPosition, lastBall).setY(0).divideScalar(step);
         if (moved.length() > TELEPORT) velocity.set(0, 0, 0);
