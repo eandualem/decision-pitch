@@ -21,6 +21,27 @@ const fixtureMore = () => {
   const { scene, animations, info } = fixtureGltf({ more: true });
   return prepareFigure(scene, animations, info);
 };
+
+// Runs `person` through a change of footwork (back and to the side, round to straight back),
+// a reversal, a stop, and a brake with its run off its facing, calling `frame()` after each
+// update.
+function twisting(person, frame) {
+  const deg = Math.PI / 180;
+  const at = (speed, travel) => {
+    person.update(1 / 60, speed, travel);
+    frame();
+  };
+  for (let i = 0; i < 30; i++) at(1.8, 120 * deg);
+  for (let i = 0; i <= 40; i++) at(1.8, (120 + 2 * i) * deg);
+  for (let i = 1; i <= 6; i++) at(1.8, (200 - 30 * i) * deg); // turning back on itself
+  for (let i = 0; i < 30; i++) at(1.8, 20 * deg);
+  // Stopping and setting off as the drawn speed does: over a tenth of a second, and at the
+  // engine's 4 m/s2.
+  for (let i = 0; i < 30; i++) at(Math.max(0, 1.8 - i * 0.3), 20 * deg);
+  for (let i = 1; i <= 90; i++) at(Math.min(6, i * 4 / 60), 25 * deg);
+  for (let i = 0; i < 60; i++) at(Math.max(0, 6 - i * 4 / 60), 25 * deg); // braking
+  for (let i = 0; i < 30; i++) at(Math.min(3.5, 2 + i * 4 / 60), 25 * deg); // and running on
+}
 const near = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance;
 
 // The planted foot's velocity against the ground for a blend: each loop's foot moves
@@ -188,6 +209,29 @@ test('with loops in eight directions, feet stay planted at any angle and speed, 
   assert.ok(!names(weights).includes('strafe_L'), 'the side shuffle is the jockey\'s, not the run\'s');
   const angles = new Set(steps.loops.filter((loop, i) => weights[i] > 1e-9 && loop.speed > 0).map(loop => Math.round(loop.angle * 4 / Math.PI)));
   assert.deepEqual([...angles].sort(), [2, 3], `left and back-left only: ${names(weights)}`);
+});
+
+test('the hips turn and the chest turns back smoothly through changes of footwork, reversals, stops and brakes', () => {
+  const made = createFigures(fixtureMore());
+  const person = made.create({ seed: 8 });
+  const chest = person.object.getObjectByName('chest');
+  const before = new THREE.Quaternion().copy(chest.quaternion);
+  let last = person.state().hips;
+  let most = 0;
+  let mostChest = 0;
+  let widest = 0;
+  twisting(person, () => {
+    const { hips } = person.state();
+    most = Math.max(most, Math.abs(hips - last));
+    widest = Math.max(widest, Math.abs(hips));
+    mostChest = Math.max(mostChest, chest.quaternion.angleTo(before));
+    last = hips;
+    before.copy(chest.quaternion);
+  });
+  assert.ok(most < 0.1, `the hips turn by at most 0.1 rad a frame: ${most.toFixed(3)}`);
+  assert.ok(mostChest < 0.06, `the chest turns back by at most 0.06 rad a frame: ${mostChest.toFixed(3)}`);
+  assert.ok(widest <= 0.7 + 1e-9 && widest > 0.2, `and never further than a body twists: ${widest.toFixed(2)}`);
+  made.dispose();
 });
 
 test('walking backwards and stepping back to the side are never blended part way: the figure changes over time', () => {
@@ -414,9 +458,10 @@ test('the page leans a body into its acceleration and turns its hips to the stri
   // Travelling back and to the side with straight back's footwork, the hips turn by what
   // the loop misses and the chest turns back.
   const back = made.create({ seed: 6 });
-  run(back, 30, () => back.update(1 / 60, 2, 165 * Math.PI / 180));
-  const { hips } = back.state();
-  assert.ok(Math.abs(hips + 15 * Math.PI / 180) < 1e-6, `the hips turn: ${hips}`);
+  run(back, 60, () => back.update(1 / 60, 2, 165 * Math.PI / 180));
+  const { hips, hipsTo } = back.state();
+  assert.ok(Math.abs(hipsTo + 15 * Math.PI / 180) < 1e-6, `the hips turn by what the loop misses: ${hipsTo}`);
+  assert.ok(Math.abs(hips - hipsTo) < 0.01, `eased there within a second: ${hips}`);
   made.dispose();
 });
 
@@ -832,9 +877,10 @@ test('braking with its run off its facing, a figure turns its hips to the run', 
   for (let i = 0; i < 30; i++) person.update(1 / 60, 6, off);
   let speed = 6;
   for (let i = 0; i < 30 && person.state().move?.name !== 'brake'; i++) person.update(1 / 60, speed -= 4 / 60, off);
-  for (let i = 0; i < 20; i++) person.update(1 / 60, speed -= 4 / 60, off);
+  for (let i = 0; i < 40; i++) person.update(1 / 60, speed -= 4 / 60, off);
   assert.equal(person.state().move?.name, 'brake');
-  assert.ok(Math.abs(person.state().hips - off) < 0.05, `the hips turn to the run: ${person.state().hips}`);
+  assert.ok(Math.abs(person.state().hipsTo - off) < 1e-6, `the hips turn to the run: ${person.state().hipsTo}`);
+  assert.ok(Math.abs(person.state().hips - off) < 0.03, `eased there: ${person.state().hips}`);
   made.dispose();
 });
 
@@ -1057,6 +1103,34 @@ test('built figure: standing in the jockey stance, no bone jumps once the blend 
     if (i < 5) continue;
     bones.forEach((bone, k) => assert.ok(bone.quaternion.angleTo(before[k]) < 0.05, `${bone.name} jumps at frame ${i}`));
   }
+  made.dispose();
+});
+
+test('built figure: no frame twists the hips or chest round through changes of footwork, reversals, stops and brakes', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  const made = createFigures(template);
+  const person = made.create({ seed: 8 });
+  const group = new THREE.Group();
+  group.add(person.object);
+  const chest = person.object.getObjectByName('chest');
+  const facing = new THREE.Quaternion();
+  const before = new THREE.Quaternion();
+  let last = null;
+  let seen = false;
+  let most = 0;
+  let mostChest = 0;
+  twisting(person, () => {
+    const { hips } = person.state();
+    if (last !== null) most = Math.max(most, Math.abs(hips - last));
+    last = hips;
+    person.object.updateMatrixWorld(true);
+    chest.getWorldQuaternion(facing);
+    if (last !== null && seen) mostChest = Math.max(mostChest, facing.angleTo(before));
+    seen = true;
+    before.copy(facing);
+  });
+  assert.ok(most < 0.1, `the hips turn by at most 0.1 rad a frame: ${most.toFixed(3)}`);
+  assert.ok(mostChest < 0.15, `the chest by at most 0.15 rad a frame, clips and all: ${mostChest.toFixed(3)}`);
   made.dispose();
 });
 

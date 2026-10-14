@@ -57,6 +57,8 @@ const SAME = 1e-6; // rad within which two loops travel the same way
 // travel by HYSTERESIS rad.
 const SWITCH = 0.15;
 const HYSTERESIS = 0.07;
+const HIPS_EASE = 0.2; // s over which the hips ease to a new turn
+const HIPS_MOST = 0.7; // rad the hips turn at most
 const FOOTWORKS = 4; // at most, in one set
 const wrap = (a) => a - TAU * Math.floor((a + Math.PI) / TAU); // into [-pi, pi)
 const around = (a) => a - TAU * Math.floor(a / TAU); // into [0, 2 pi)
@@ -1060,6 +1062,8 @@ export function createFigures(template, { footLock = true } = {}) {
     let lastTravel = 0;
     let shownDuty = DUTY;
     let hips = 0; // rad the skeleton turns so its stride runs along the travel (gait.yaw)
+    let hipsTo = 0; // the turn it eases towards
+    let hipsRate = 0; // rad/s it is turning at
 
     function action(clip) {
       // The same clip twice in a frame (one fading out as it starts again) plays on a twin.
@@ -1333,6 +1337,22 @@ export function createFigures(template, { footLock = true } = {}) {
       lastMove[kind] = clock;
     }
 
+    // Eases the hips' turn towards its target, critically damped over HIPS_EASE, the short
+    // way round, and never past HIPS_MOST: the target jumps whenever the loop or footwork
+    // chosen changes, and a body cannot twist in one frame, nor far. The foot lock holds
+    // the feet through what the eased turn misses.
+    function turnHips(step) {
+      const target = clamp(hipsTo, -HIPS_MOST, HIPS_MOST);
+      if (!(step > 0)) return;
+      const omega = 2 / HIPS_EASE;
+      const x = omega * step;
+      const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+      const off = wrap(hips - target);
+      const pull = (hipsRate + omega * off) * step;
+      hipsRate = (hipsRate - omega * pull) * decay;
+      hips = clamp(target + (off + pull) * decay, -HIPS_MOST, HIPS_MOST);
+    }
+
     // Adds the page's pose over the clips: the hips turned to the stride (gait.yaw) with the
     // chest and neck turned back, the body leant into its acceleration from the feet, and
     // the person's own carriage of its back and arms.
@@ -1455,7 +1475,7 @@ export function createFigures(template, { footLock = true } = {}) {
         moved = true;
         switching.dt = step;
         rate = blendLoops(steps, speed, travel, scale, weights, setShares, style.stride, switching);
-        hips = steps.yaw;
+        hipsTo = steps.yaw;
         // To meet the ball in `touchIn` s, the stride comes to its touch then, at the nearest
         // pace to its own that does it.
         if (sets?.hurry > 0) rate *= 1 + HURRY;
@@ -1478,7 +1498,8 @@ export function createFigures(template, { footLock = true } = {}) {
         clock += step;
         moves(step, speed, travel);
         // Braking, the hips turn to the run, the way the brake's feet go.
-        if (move.kind === 'brake') hips += (wrap(travel) - hips) * Math.min(1, move.share / MOVE_SHARE.brake);
+        if (move.kind === 'brake') hipsTo += wrap(wrap(travel) - hipsTo) * Math.min(1, move.share / MOVE_SHARE.brake);
+        turnHips(step);
         // Over the loops, which sum to one, a weight of s / (1 - s) takes a share s.
         frame++;
         const still = 1 - ramp(speed, STILL, steps.walk);
@@ -1546,7 +1567,7 @@ export function createFigures(template, { footLock = true } = {}) {
         steps.sets.forEach((set, s) => { if (s > 0 && setShares[s] > 0) shares[set.name] = setShares[s]; });
         return {
           speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach(),
-          feet: legs.map(leg => leg.held), duty: shownDuty, hips, tilt, style,
+          feet: legs.map(leg => leg.held), duty: shownDuty, hips, hipsTo, tilt, style,
           move: move.kind && { kind: move.kind, name: move.name, time: move.time },
           idle: idleNow >= 0 ? steps.idles[idleNow].name : null,
           idles: Object.fromEntries(steps.idles.map((variant, i) => [variant.name, idles[i]?.weight ?? 0]).filter(([, w]) => w > 0)),
