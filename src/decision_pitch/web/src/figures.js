@@ -428,6 +428,31 @@ export function envelope(u, from, end, fadeIn = 0.08, fadeOut = 0.25) {
   return Math.min(clamp((u - from) / fadeIn, 0, 1), clamp((end - u) / fadeOut, 0, 1));
 }
 
+// The ground speed a one-shot's `speeds` ([[clip time, m/s], ...], piecewise linear) give
+// at clip time `time`.
+export function speedAt(speeds, time) {
+  if (time <= speeds[0][0]) return speeds[0][1];
+  for (let i = 1; i < speeds.length; i++) {
+    const [t1, v1] = speeds[i];
+    if (time <= t1) {
+      const [t0, v0] = speeds[i - 1];
+      return t1 > t0 ? v0 + (v1 - v0) * (time - t0) / (t1 - t0) : v1;
+    }
+  }
+  return speeds[speeds.length - 1][1];
+}
+
+// The first clip time at which falling `speeds` come down to `speed`.
+export function timeAt(speeds, speed) {
+  if (speed >= speeds[0][1]) return speeds[0][0];
+  for (let i = 1; i < speeds.length; i++) {
+    const [t1, v1] = speeds[i];
+    const [t0, v0] = speeds[i - 1];
+    if (speed >= v1 && v0 > v1) return t0 + (t1 - t0) * (v0 - speed) / (v0 - v1);
+  }
+  return speeds[speeds.length - 1][0];
+}
+
 // A string or number seed as a non-negative integer.
 function seedOf(seed) {
   if (typeof seed === 'number' && Number.isFinite(seed)) return Math.abs(Math.round(seed));
@@ -752,12 +777,22 @@ const TURNING_SLOW = 1;
 const TURNING_DONE = 0.6; // rad/s below which a turn has finished
 const CUTTING = 2; // rad/s
 const CUTTING_SPEED = 2.5;
-const BRAKING = 3.5; // m/s2
+const BRAKING = 2.5; // m/s2 (the engine slows a player at 4 at most)
 const BRAKING_SPEED = 3;
+const BRAKING_AHEAD = 0.6; // rad: a brake is a run stopping, travelling the way it faces
+const STOPPED = 0.3; // m/s below which a brake plays out at its own pace
+const TURN_MOVING = [0.3, 0.8]; // m/s over which a turn on the spot gives way to the run
+// A one-shot's `speeds` (figure.json): the ground speed its planted feet assume through it.
+// A cut plays at the rate that matches them to the figure's speed, within these.
+const SPEED_RATE = [0.4, 1.5];
 const PLANT = 0.1; // s from seeing a cut or a brake to its plant
-const MOVE_SHARE = { turn: 1, cut: 0.7, brake: 0.75 }; // of the body each takes
+const MOVE_SHARE = { turn: 1, cut: 0.7, brake: 0.85 }; // of the body each takes
 const MOVE_AGAIN = { turn: 0, cut: 0.5, brake: 1 }; // s before the same kind again
 const AGAIN_FADE = 0.2; // s a move fades out over when another takes its place
+// Above this share of the body, a move's own footfalls say which feet are down, not the
+// stride's phase: a sole within GROUNDED of the grass is held from where it came down.
+const MOVE_FEET = 0.5;
+const GROUNDED = 0.02; // m
 // Idle variants (gait.idles): a person stands in its own and changes now and then.
 const IDLE_CHANGE = [6, 14]; // s between changes, least and most
 const IDLE_FADE = 0.8; // s
@@ -1020,20 +1055,20 @@ export function createFigures(template, { footLock = true } = {}) {
     // touched down, and the ankle moves with the clip around it. `moving` is the share of
     // the blend that travels, `duty` its share of the cycle a foot is down, and `taken` the
     // share of each leg a one-shot plays.
-    function lockFeet(moving, duty, takenLeft, takenRight) {
+    function lockFeet(moving, duty, takenLeft, takenRight, byFoot) {
       let updated = null;
       for (let i = 0; i < 2; i++) {
         const leg = legs[i];
         const cycle = fract(phase - leg.start);
-        const into = cycle / duty; // how far through its stance
+        const into = byFoot ? 0 : cycle / duty; // how far through its stance
         // Held in full once the stride is a fair part of the blend, so a figure drifting
-        // slowly keeps its feet too.
-        const share = ramp(moving, ...HOLDING) * (1 - (i === 0 ? takenLeft : takenRight) / MOST);
+        // slowly keeps its feet too; under a move of its own, whatever the stride.
+        const share = (byFoot ? 1 : ramp(moving, ...HOLDING)) * (1 - (i === 0 ? takenLeft : takenRight) / MOST);
         // Stepping with the stride only part of the blend, the foot in the air lifts by the
         // part it lacks, so a slow step clears the grass.
-        const lift = cycle >= duty && share > 1e-3
+        const lift = !byFoot && cycle >= duty && share > 1e-3
           ? SWING_LIFT * scale * share * (1 - moving) * Math.sin(Math.PI * (cycle - duty) / (1 - duty)) : 0;
-        const holding = into < LOCK_OUT[1] && share > 1e-3;
+        const holding = (byFoot || into < LOCK_OUT[1]) && share > 1e-3;
         leg.held = 0;
         if (!holding) leg.down = leg.slack = false;
         if (!holding && !(lift > 1e-3)) continue;
@@ -1048,6 +1083,15 @@ export function createFigures(template, { footLock = true } = {}) {
         footAt.setFromMatrixPosition(foot.matrixWorld);
         let dx = 0;
         let dz = 0;
+        if (byFoot && holding) {
+          // Down only while a sole is on the grass; lifted, it is let go, to land again.
+          heelAt.copy(leg.heel).applyMatrix4(foot.matrixWorld);
+          ballAt.copy(leg.ball).applyMatrix4(foot.matrixWorld);
+          if (Math.min(heelAt.y / scale, ballAt.y / scale - leg.rise) > GROUNDED) {
+            leg.down = leg.slack = false;
+            continue;
+          }
+        }
         if (holding) hold(leg, into, share);
         if (leg.held > 1e-3) {
           dx = leg.contact.x - (leg.bearing ? ballAt.x : heelAt.x);
@@ -1140,7 +1184,8 @@ export function createFigures(template, { footLock = true } = {}) {
       if (!move.kind && others === 0) {
         if (speed < TURNING_SLOW && Math.abs(turning) > TURNING_FAST) begin('turn', turning > 0 ? 'turn_L' : 'turn_R', speed);
         else if (speed > CUTTING_SPEED && cutting) begin('cut', cutWay > 0 ? 'cut_L' : 'cut_R', speed);
-        else if (speed > BRAKING_SPEED && slowing > BRAKING && Math.abs(turning) < TURNING_DONE * 2) begin('brake', 'brake', speed);
+        else if (speed > BRAKING_SPEED && slowing > BRAKING && Math.abs(turning) < TURNING_DONE * 2
+          && Math.abs(wrap(travel)) < BRAKING_AHEAD) begin('brake', 'brake', speed);
       }
       if (move.kind) playMove(step, speed, turning, others);
       // One given way this frame or lately fades out, so there is never a frame without either.
@@ -1159,7 +1204,12 @@ export function createFigures(template, { footLock = true } = {}) {
         // The clip turns as far as the figure does, then steps out of the turn at its own
         // pace; a longer turn begins another.
         const along = Math.sign(move.total) * turning * step;
-        if (Math.abs(turning) < TURNING_DONE || along < 0 || speed > TURNING_SLOW * 2) move.ending = true;
+        if (Math.abs(turning) < TURNING_DONE || along < 0) move.ending = true;
+        // Setting off as it comes round, it runs: the turn fades out.
+        if (speed > TURN_MOVING[1]) {
+          fade();
+          return;
+        }
         if (!move.ending) {
           move.turned += Math.max(0, along);
           if (move.turned >= Math.abs(move.total)) {
@@ -1172,13 +1222,19 @@ export function createFigures(template, { footLock = true } = {}) {
           }
           move.time = move.from + (move.to - move.from) * Math.min(1, move.turned / Math.abs(move.total));
         } else move.time += step;
+      } else if (move.kind === 'brake' && clip.speeds) {
+        // Through the stop at the figure's own speed, and at the clip's pace once stopped.
+        move.time = speed > STOPPED ? Math.max(move.time, timeAt(clip.speeds, speed / scale)) : move.time + step;
+      } else if (clip.speeds) {
+        move.time += step * clamp(speed / scale / Math.max(0.1, speedAt(clip.speeds, move.time)), ...SPEED_RATE);
       } else move.time = contactTime(clock - move.began - PLANT, -PLANT, clip.contact ?? 0);
       const left = clip.duration - move.time;
       if (left <= 0) {
         move.kind = null;
         return;
       }
-      move.share = MOVE_SHARE[move.kind] * clamp((clock - move.began) / 0.08, 0, 1) * clamp(left / 0.2, 0, 1);
+      move.share = MOVE_SHARE[move.kind] * clamp((clock - move.began) / 0.08, 0, 1) * clamp(left / 0.2, 0, 1)
+        * (move.kind === 'turn' ? 1 - ramp(speed, ...TURN_MOVING) : 1);
       person.act(move.name, move.time, move.share * (1 - others), 'whole', true);
     }
 
@@ -1204,7 +1260,10 @@ export function createFigures(template, { footLock = true } = {}) {
       const window = Array.isArray(clip.turning) ? clip.turning : [0, clip.duration];
       move.from = window[0];
       move.to = window[1];
-      move.time = kind === 'turn' ? move.from : 0;
+      if (kind === 'turn') move.time = move.from;
+      else if (kind === 'brake' && clip.speeds) move.time = timeAt(clip.speeds, speed / scale);
+      else if (clip.speeds) move.time = Math.max(0, (clip.contact ?? 0) - PLANT);
+      else move.time = 0;
       lastMove[kind] = clock;
     }
 
@@ -1349,6 +1408,7 @@ export function createFigures(template, { footLock = true } = {}) {
         const still = 1 - ramp(speed, STILL, steps.walk);
         let takenLeft = 0;
         let takenRight = 0;
+        let ownMove = 0; // the share of the figure's own moves, which plant their feet
         for (let i = 0; i < acting; i++) {
           const { name, time, share, layer, planted } = slots[i];
           const clip = template.clips.get(name);
@@ -1357,7 +1417,7 @@ export function createFigures(template, { footLock = true } = {}) {
           if (!planted) {
             takenLeft = Math.max(takenLeft, wholeShare);
             takenRight = Math.max(takenRight, layer === 'play' ? share : wholeShare);
-          }
+          } else ownMove += share;
           if (wholeShare > 0) {
             const whole = action(clip);
             whole.time = at;
@@ -1388,7 +1448,7 @@ export function createFigures(template, { footLock = true } = {}) {
             duty += weights[i] * (loop.duty ?? DUTY);
           }
           shownDuty = moving > 0 ? duty / moving : DUTY;
-          lockFeet(moving, shownDuty, takenLeft, takenRight);
+          lockFeet(moving, shownDuty, takenLeft, takenRight, ownMove > MOVE_FEET);
         }
       },
       // What the figure shows, for tests and debugging.

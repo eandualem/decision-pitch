@@ -62,7 +62,9 @@ export const ONE_SHOTS = {
 // Turns, cuts and the brake ([duration, contact, fields]) and the new plays.
 export const MORE_ONE_SHOTS = {
   turn_L: [0.6, 0, { turn: 90, turning: [0.05, 0.45] }], turn_R: [0.6, 0, { turn: -90, turning: [0.05, 0.45] }],
-  cut_L: [0.5, 0.2, { turn: 60 }], cut_R: [0.5, 0.2, { turn: -60 }], brake: [0.7, 0.25],
+  cut_L: [0.7333, 0.25, { turn: 60, speeds: [[0, 6], [0.25, 6], [0.41, 4.5], [0.75, 4.5]] }],
+  cut_R: [0.7333, 0.25, { turn: -60, speeds: [[0, 6], [0.25, 6], [0.41, 4.5], [0.75, 4.5]] }],
+  brake: [2.2333, 0.1, { speeds: [[0, 7.5], [1.875, 0]] }],
   tackle_standing: [0.8, 0.3], cross: [1.1, 0.42], pass_lofted: [1.1, 0.42],
 };
 export const HAIRS = ['hair_bald', 'hair_buzz', 'hair_short', 'hair_curly', 'hair_swept', 'hair_bun'];

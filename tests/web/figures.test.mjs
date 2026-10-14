@@ -8,7 +8,7 @@ import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES } from './figure-fixture.m
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const figures = await import('../../src/decision_pitch/web/src/figures.js');
-const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure, reachFor, switchingState } = figures;
+const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure, reachFor, switchingState, speedAt, timeAt } = figures;
 
 const fixture = () => {
   const { scene, animations, info } = fixtureGltf();
@@ -509,6 +509,66 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
     plain.update(1 / 60, 0, 0);
   }
   assert.equal(plain.state().move, null);
+  made.dispose();
+});
+
+test('a brake follows the stop by the figure\'s speed, a cut plays at the run\'s pace, and a turn gives way to setting off', () => {
+  const speeds = [[0, 6], [0.25, 6], [0.41, 4.5], [0.75, 4.5]];
+  assert.equal(speedAt(speeds, 0.1), 6);
+  assert.ok(near(speedAt(speeds, 0.33), 5.25));
+  assert.equal(speedAt(speeds, 2), 4.5);
+  assert.ok(near(timeAt([[0, 7.5], [1.875, 0]], 4), 0.875), 'from 4 m/s, a 4 m/s2 stop is 0.875 s in');
+  assert.equal(timeAt([[0, 7.5], [1.875, 0]], 9), 0);
+  const made = createFigures(fixtureMore());
+  // Stopping at 4 m/s2 from 6 m/s: the brake's clip time is where its feet go as fast.
+  const braker = made.create({ seed: 7 });
+  for (let i = 0; i < 30; i++) braker.update(1 / 60, 6, 0);
+  let speed = 6;
+  let seen = 0;
+  for (let i = 0; i < 60; i++) {
+    speed -= 4 / 60;
+    braker.update(1 / 60, speed, 0);
+    const { move } = braker.state();
+    if (move?.name !== 'brake') continue;
+    seen++;
+    assert.ok(Math.abs(move.time - timeAt([[0, 7.5], [1.875, 0]], speed / braker.scale)) < 0.03, `at ${speed.toFixed(2)} m/s: ${move.time}`);
+  }
+  assert.ok(seen > 30, 'it brakes');
+  // Slowing as hard while running sideways is no brake.
+  const sideways = made.create({ seed: 8 });
+  for (let i = 0; i < 30; i++) sideways.update(1 / 60, 5, Math.PI / 2);
+  for (let i = 0; i < 40; i++) {
+    sideways.update(1 / 60, 5 - i * 4 / 60, Math.PI / 2);
+    assert.notEqual(sideways.state().move?.name, 'brake');
+  }
+  // A cut at 3 m/s plays at half the pace of its own 6.
+  const cutter = made.create({ seed: 9 });
+  for (let i = 0; i < 30; i++) cutter.update(1 / 60, 3, 0);
+  let before = null;
+  for (let i = 0; i < 8; i++) {
+    cutter.object.rotation.y = 3 * (i + 1) / 60;
+    cutter.update(1 / 60, 3, 0);
+    const { move } = cutter.state();
+    if (move?.name === 'cut_L' && before !== null) {
+      const rate = Math.min(1.5, Math.max(0.4, 3 / cutter.scale / speedAt(speeds, before)));
+      assert.ok(near(move.time - before, rate / 60, 1e-9), `at its speed: ${(move.time - before) * 60} of its pace, not ${rate}`);
+      assert.ok(rate < 0.6, 'about half');
+    }
+    if (move?.name === 'cut_L') before = move.time;
+  }
+  assert.ok(before !== null, 'it cuts');
+  // Setting off as it comes round, a turn on the spot fades out.
+  const turner = made.create({ seed: 10 });
+  for (let i = 0; i < 6; i++) {
+    turner.object.rotation.y = 9 * i / 60;
+    turner.update(1 / 60, 0, 0);
+  }
+  assert.equal(turner.state().move?.name, 'turn_L');
+  for (let i = 6; i < 20; i++) {
+    turner.object.rotation.y = 9 * i / 60;
+    turner.update(1 / 60, (i - 5) * 0.1, 0);
+  }
+  assert.equal(turner.state().move, null, 'running, it has let the turn go');
   made.dispose();
 });
 
