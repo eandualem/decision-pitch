@@ -76,7 +76,16 @@ a test or from the command line without a browser.
   gets there (its velocity times the ball's travel time), not where it stood
   when the ball was kicked: over 64 bot matches, passes reaching a teammate
   rose from 42% to 64%, shots from 4.7 to 13.1 a match and goals from 0.6 to
-  1.5, and throw-ins fell from 11.5 to 5.2. A goalkeeper keeps to its goal line, and when a loose ball
+  1.5, and throw-ins fell from 11.5 to 5.2. A player's place in the team's
+  shape moves with the ball by 0.9 of the ball's move along the pitch, and
+  an outfield player's place stays at least 8 m from its own goal line. At
+  half the ball's move, as first built, the midfielders trailed an attack and
+  the forwards stood marked on the opponents' back line, so 64% of passes in
+  the final third went backwards. Over 32 matches with models answering as
+  Laya does, shots rose from 7.9 to 12.8 a match and corners from 0.25 to
+  0.72; over 24 bot matches, possession spells that reached shooting range
+  rose from 20% to 32%. Following the ball more only while in possession gave
+  half the gain. A goalkeeper keeps to its goal line, and when a loose ball
   is heading into its goal it moves across to the ball's line; a model in
   goal that holds or supports does the same. Over the same 16 matches, this
   cut the share of shots scored from 35% to 16% (goals from 2.8 to 1.1 a
