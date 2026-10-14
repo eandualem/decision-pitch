@@ -445,3 +445,25 @@ test('the close-up films the scorer from the front, and comes round again when i
   const c = closeUpCheck(t);
   assert.ok(c.framed && c.share > 0.4 && c.share < 0.6, 'still framed at half the frame');
 });
+
+test('the close-up cuts in once and holds: no second cut as the scorer drifts near the goal', () => {
+  // At a goal, the scorer stands beside the goal it scored in and drifts along the byline
+  // (the first goal of the seed-0 match): the side the camera opens on comes close to the
+  // area behind the goal, and the camera comes in closer rather than cutting away again.
+  const t = setup();
+  t.scorer.set(44.9, 0, 1.66);
+  t.run(1);
+  t.event('goal', { team: 1, player: 9 });
+  t.run(1 / 60, 'kickoff');
+  let last = t.camera.position.clone();
+  // A shot holds for a second before any cut to a reverse angle.
+  for (let s = 0; s < 0.9; s += 1 / 60) {
+    if (s < 0.6) t.scorer.add(new THREE.Vector3(2.4 / 60, 0, -0.9 / 60));
+    t.run(1 / 60, 'kickoff');
+    const jump = t.camera.position.distanceTo(last);
+    assert.ok(jump < 0.5, `no cut ${s.toFixed(2)} s into the close-up: the camera jumped ${jump.toFixed(2)} m`);
+    assert.ok(!insideGoal(t.camera.position) && !(Math.abs(t.camera.position.x) > PITCH.length / 2 - 0.3 &&
+      Math.abs(t.camera.position.z) < PITCH.goalWidth / 2 + 2), 'never behind the goal');
+    last = t.camera.position.clone();
+  }
+});
