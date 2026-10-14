@@ -13,7 +13,8 @@ as human figures made in Blender (docs/decisions.md, section 6).
 
 ## How they were made
 
-The match is the one every page connection plays with the built-in bots
+They were rendered from commit 5ee30ad, served from an export of exactly that
+commit. The match is the one every page connection plays with the built-in bots
 (`uv run decision-pitch --home bot --away bot --half-length 100`). Its first
 goal comes about 125 s after the page connects. The server's messages for that
 match were recorded as they arrived, then replayed into the real page in a
