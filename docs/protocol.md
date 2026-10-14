@@ -100,7 +100,7 @@ restart, unless the list says otherwise, and is `null` for `half_time` and
 | `offside` | `player`: the player caught offside. `team` is the defending team |
 | `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
 | `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
-| `half_time`, `full_time` | none |
+| `half_time`, `full_time` | `score`: the score at the whistle, home first, as in the snapshot |
 
 A foul is followed by any card it earns, then the `free_kick` or `penalty`; an
 offside by its `free_kick`. A second yellow card sends `yellow` then `red`. A
