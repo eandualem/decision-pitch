@@ -51,9 +51,36 @@ def build():
     }
     scene[INFO] = json.dumps(info, sort_keys=True)
     scene.frame_set(0)
-    bpy.context.preferences.filepaths.save_version = 0  # no figure.blend1 backup
-    bpy.ops.wm.save_as_mainfile(filepath=BLEND, compress=True)
+    save(BLEND)
     return info
+
+
+def save(path):
+    """Write the figure's data, without the window manager and screens.
+
+    Those keep a record of the last file operations, with this machine's paths in
+    it; the figure needs none of them, and Blender adds a default layout on opening.
+    """
+    blocks = set()
+    for collection in (bpy.data.scenes, bpy.data.collections, bpy.data.objects, bpy.data.meshes,
+                       bpy.data.armatures, bpy.data.materials, bpy.data.actions, bpy.data.worlds,
+                       bpy.data.shape_keys):
+        blocks.update(collection)
+    if os.path.exists(path):
+        os.remove(path)
+    bpy.data.libraries.write(path, blocks, path_remap="NONE", fake_user=False, compress=True)
+    check_clean(path)
+
+
+def check_clean(path):
+    """Fail if the saved .blend names a local folder."""
+    import zstandard
+
+    with open(path, "rb") as f:
+        data = zstandard.ZstdDecompressor().stream_reader(f, read_across_frames=True).read()
+    for needle in ("/Users/", "/home/", "/private/", "/var/folders/", ROOT):
+        if needle.encode() in data:
+            raise SystemExit(f"{path} names a local path ({needle!r}); not saving it like that")
 
 
 def export(info):

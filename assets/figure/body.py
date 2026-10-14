@@ -35,12 +35,13 @@ from mathutils.bvhtree import BVHTree
 
 import rig
 import shapes as S
-from shapes import Box, Cone, Ellipsoid, Footprint, Loft, Plane, Shell, Torus, Union, Within, Cut, frame, mirror
+from shapes import Box, Cone, Cut, Ellipsoid, Footprint, Layer, Loft, Plane, Shell, Union, Within, frame, mirror
 
 STEP = 0.0025  # m: the grid the body is sampled on
 HAIR_STEP = 0.002  # m: the grid the hair is sampled on
-BODY_TRIANGLES = 8200  # the body's budget, eyes excluded; a figure adds one hair mesh
-DETAIL_TRIANGLES = 2900  # of which the head and hands
+# The body's triangles (eyes excluded; a figure adds one hair mesh): the trunk and
+# limbs, the rest of the head with the hands, and the face with the ears.
+BODY_TRIANGLES = (4700, 1500, 2000)
 
 J = {name: np.array(p, dtype=np.float64) for name, p in rig.JOINTS.items()}
 
@@ -98,8 +99,8 @@ EDGES = {
 }
 SHIRT_HEM = 0.905  # m: height of the shirt's hem over the shorts
 # The top of the collar: a plane through the neck, lower at the front.
-COLLAR = (np.array([0.0, 0.03, 1.488]), np.array([0.0, -0.42, 1.0]) / math.hypot(0.42, 1.0))
-NECK = Cone((0.0, 0.030, 1.42), (0.0, 0.018, 1.625), 0.061, 0.052)
+COLLAR = (np.array([0.0, 0.03, 1.490]), np.array([0.0, -0.30, 1.0]) / math.hypot(0.30, 1.0))
+NECK = Cone((0.0, 0.030, 1.42), (0.0, 0.018, 1.625), 0.066, 0.056)
 
 
 def _keep_before(shape, edge, offset=0.0):
@@ -146,33 +147,48 @@ TRUNK = [
 ]
 
 
-def trunk_core():
-    trunk = Loft(TRUNK, power=2.4, cap=0.03)
-    pecs = Ellipsoid((0.072, -0.068, 1.330), (0.082, 0.032, 0.062), S.rotation(rz=-0.12))
-    lats = Ellipsoid((0.125, 0.040, 1.26), (0.050, 0.064, 0.125), S.rotation(ry=0.22))
+def shoulders():
+    """The shoulder girdle, left side: shoulder blade, trapezius and deltoid."""
     blade = Ellipsoid((0.085, 0.085, 1.34), (0.062, 0.030, 0.075))
-    glute = Ellipsoid((0.072, 0.075, 0.875), (0.078, 0.060, 0.090))
     trapezius = Cone((0.035, 0.040, 1.488), (0.175, 0.035, 1.468), 0.040, 0.036)
     neck_slope = Cone((0.0, 0.045, 1.53), (0.10, 0.04, 1.478), 0.035, 0.030)
     deltoid = Ellipsoid(UPPER_ARM.at(0.10, out=0.016, front=0.002), (0.056, 0.062, 0.088), UPPER_ARM.axes)
     deltoid_front = Ellipsoid(UPPER_ARM.at(0.14, out=0.004, front=0.026), (0.038, 0.036, 0.068), UPPER_ARM.axes)
-    girdle = _both([pecs, lats, blade, glute, trapezius, neck_slope, deltoid, deltoid_front])
-    return Union([trunk] + girdle, k=0.035)
+    return [blade, trapezius, neck_slope, deltoid, deltoid_front]
 
+
+def trunk_core(chest=True):
+    """The trunk with its muscles; without `chest` for the shirt, which hides the pectorals."""
+    trunk = Loft(TRUNK, power=2.4, cap=0.03)
+    pecs = Ellipsoid((0.070, -0.058, 1.335), (0.086, 0.030, 0.064), S.rotation(rz=-0.12))
+    lats = Ellipsoid((0.125, 0.040, 1.26), (0.050, 0.064, 0.125), S.rotation(ry=0.22))
+    glute = Ellipsoid((0.072, 0.075, 0.875), (0.078, 0.060, 0.090))
+    return Union([trunk] + _both(([pecs] if chest else []) + [lats, glute] + shoulders()), k=0.035)
+
+
+# How the shorts hang from the waist to the crotch: sections as for the trunk.
+SHORTS = [
+    (0.745, 0.148, 0.084, 0.094, 0.020),
+    (0.80, 0.161, 0.094, 0.104, 0.020),
+    (0.88, 0.167, 0.098, 0.109, 0.020),
+    (0.94, 0.160, 0.098, 0.098, 0.020),
+]
 
 # How the shirt hangs from the chest over the waist: sections as for the trunk.
 DRAPE = [
+    (0.86, 0.166, 0.100, 0.104, 0.020),
     (0.90, 0.166, 0.100, 0.104, 0.020),
     (1.00, 0.163, 0.104, 0.098, 0.020),
-    (1.10, 0.164, 0.108, 0.096, 0.021),
-    (1.20, 0.170, 0.112, 0.099, 0.023),
-    (1.28, 0.172, 0.110, 0.101, 0.025),
+    (1.10, 0.164, 0.110, 0.096, 0.021),
+    (1.20, 0.170, 0.116, 0.099, 0.023),
+    (1.28, 0.172, 0.118, 0.101, 0.025),
+    (1.34, 0.172, 0.112, 0.102, 0.027),
 ]
 
 
 def neck_core():
     neck = NECK
-    sterno = Cone((0.050, 0.020, 1.635), (0.018, -0.030, 1.465), 0.016, 0.014)
+    sterno = Cone((0.050, 0.020, 1.635), (0.022, -0.012, 1.520), 0.016, 0.013)
     nape = Ellipsoid((0.0, 0.060, 1.56), (0.050, 0.030, 0.070))
     return Union([neck, nape] + _both([sterno]), k=0.02)
 
@@ -181,31 +197,30 @@ def neck_core():
 
 EYE = np.array([0.0330, -0.0712, 1.684])  # left eyeball centre
 EYE_RADIUS = 0.0124
-CRANIUM = Ellipsoid((0.0, 0.012, 1.705), (0.078, 0.095, 0.094))
+CRANIUM = Ellipsoid((0.0, 0.012, 1.708), (0.080, 0.096, 0.092))
 
 
 def head_core():
     face = Ellipsoid((0.0, -0.028, 1.650), (0.069, 0.068, 0.070))
-    jaw = Ellipsoid((0.0, -0.018, 1.607), (0.063, 0.068, 0.045))
+    jaw = Ellipsoid((0.0, -0.018, 1.607), (0.059, 0.068, 0.045))
     chin = Ellipsoid((0.0, -0.072, 1.578), (0.026, 0.022, 0.021))
     muzzle = Ellipsoid((0.0, -0.068, 1.613), (0.040, 0.031, 0.034))
-    jaw_line = Cone((0.058, 0.016, 1.612), (0.018, -0.075, 1.571), 0.013, 0.012)
-    cheek = Ellipsoid((0.050, -0.058, 1.657), (0.024, 0.024, 0.018))
-    brow = Cone((0.012, -0.0875, 1.699), (0.054, -0.0775, 1.703), 0.0105, 0.0085)
-    temple = Ellipsoid((0.066, -0.030, 1.70), (0.016, 0.042, 0.036))
+    jaw_line = Cone((0.055, 0.014, 1.614), (0.018, -0.075, 1.571), 0.012, 0.012)
+    cheek = Ellipsoid((0.052, -0.060, 1.660), (0.024, 0.022, 0.016))
+    brow = Cone((0.010, -0.0900, 1.700), (0.050, -0.0770, 1.704), 0.0105, 0.0060)
     buccal = Ellipsoid((0.046, -0.052, 1.625), (0.024, 0.028, 0.028))
-    head = Union([CRANIUM, face, jaw, chin, muzzle] + _both([jaw_line, cheek, brow, temple, buccal]), k=0.022)
+    head = Union([CRANIUM, face, jaw, chin, muzzle] + _both([jaw_line, cheek, brow, buccal]), k=0.022)
     # Sockets for the eyes, then lids around them.
-    socket = Ellipsoid(EYE + (0.0, -0.020, 0.001), (0.0190, 0.0150, 0.0130))
+    socket = Ellipsoid(EYE + (0.0, -0.017, 0.002), (0.0200, 0.0160, 0.0140))
     head = Cut(head, Union(_both([socket])), k=0.006)
     lid = Shell(Ellipsoid(EYE, (EYE_RADIUS,) * 3), 0.0016)
     box = (lid.lo - 0.01, lid.hi + 0.01)
-    upper = Within(lid, Plane(EYE + (0, 0, 0.0058), (0, 0.30, -1.0), *box))
-    lower = Within(lid, Plane(EYE - (0, 0, 0.0072), (0, 0.30, 1.0), *box))
+    upper = Within(lid, Plane(EYE + (0, 0, 0.0068), (0, 0.30, -1.0), *box))
+    lower = Within(lid, Plane(EYE - (0, 0, 0.0080), (0, 0.30, 1.0), *box))
     behind = Plane(EYE + (0, 0.004, 0), (0, 1, 0), *box)
     head = Union([head] + _both([Within(upper, behind), Within(lower, behind)]), k=0.0025)
     # Nose: bridge, tip and wings.
-    bridge = Cone((0.0, -0.0845, 1.684), (0.0, -0.1090, 1.641), 0.0068, 0.0098)
+    bridge = Cone((0.0, -0.0860, 1.686), (0.0, -0.1090, 1.641), 0.0058, 0.0095)
     tip = Ellipsoid((0.0, -0.1060, 1.6365), (0.0120, 0.0112, 0.0108))
     wing = Ellipsoid((0.0130, -0.0950, 1.6335), (0.0098, 0.0098, 0.0082))
     nose = Union([bridge, tip] + _both([wing]), k=0.006)
@@ -213,14 +228,14 @@ def head_core():
     nostril = Ellipsoid((0.0068, -0.1020, 1.6275), (0.0040, 0.0050, 0.0030))
     head = Cut(head, Union(_both([nostril])), k=0.002)
     # Mouth: lips and the line between them.
-    upper_lip = Ellipsoid((0.0, -0.0910, 1.6110), (0.0235, 0.011, 0.0068))
-    lower_lip = Ellipsoid((0.0, -0.0885, 1.5980), (0.0215, 0.011, 0.0078))
+    upper_lip = Ellipsoid((0.0, -0.0910, 1.6110), (0.0235, 0.012, 0.0075))
+    lower_lip = Ellipsoid((0.0, -0.0885, 1.5975), (0.0215, 0.012, 0.0085))
     head = Union([head, upper_lip, lower_lip], k=0.005)
     head = Cut(head, Ellipsoid((0.0, -0.0995, 1.6047), (0.0225, 0.012, 0.0013)), k=0.0015)
     # Ears: a shell with the hollow carved from the outside.
     ear_axes = S.rotation(rx=0.25, rz=-0.12)
-    ear = Ellipsoid((0.0785, 0.010, 1.665), (0.011, 0.021, 0.031), ear_axes)
-    hollow = Ellipsoid((0.0855, 0.008, 1.661), (0.0060, 0.0135, 0.0205), ear_axes)
+    ear = Ellipsoid((0.0790, 0.010, 1.665), (0.013, 0.022, 0.031), ear_axes)
+    hollow = Ellipsoid((0.0885, 0.008, 1.661), (0.0060, 0.0135, 0.0205), ear_axes)
     ear = Cut(ear, hollow, k=0.003)
     return Union([head] + _both([ear]), k=0.006)
 
@@ -315,12 +330,14 @@ class Figure:
         arm = arm_core()
         leg = leg_core()
         hand = hand_core()
-        self.skin = Union([neck_core(), head_core()], k=0.02)
+        self.head = head_core()
+        self.trunk, self.arm = trunk, arm
+        self.skin = Union([neck_core(), self.head], k=0.02)
         figure = Union([trunk, self.skin] + _both([arm, hand, leg]), k=0.02)
         # Shirt: a centimetre off the trunk, down to the hem, with short sleeves and a collar.
         sleeves = _both([_keep_before(arm, "sleeve", -0.009)])
         drape = Loft(DRAPE, power=2.4, cap=0.02)
-        shirt = _above(Shell(Union([trunk, drape] + sleeves, k=0.02), 0.009), SHIRT_HEM)
+        shirt = _above(Shell(Union([trunk_core(chest=False), drape] + sleeves, k=0.02), 0.009), SHIRT_HEM)
         point, normal = COLLAR
         neck = NECK
         band = Shell(neck, 0.0065)
@@ -328,10 +345,11 @@ class Figure:
         collar = Within(Within(band, Plane(point, normal, *box)), Plane(point - normal * 0.022, -normal, *box))
         self.shirt = Union([shirt, collar], k=0.004)
         # Shorts: loose over the hips, flaring over the thighs to the hem.
-        flare = _keep_before(Cone(THIGH.at(0.05, out=0.006), THIGH.at(0.60, out=0.004, front=-0.002), 0.092, 0.080),
+        flare = _keep_before(Cone(THIGH.at(0.12, out=0.004), THIGH.at(0.60, out=0.004, front=-0.002), 0.090, 0.081),
                              "shorts", -0.004)
-        crotch = Ellipsoid((0.0, 0.012, 0.815), (0.070, 0.085, 0.050))
-        shorts = _below(Shell(Union([trunk, crotch] + _both([flare]), k=0.03), 0.004), SHIRT_HEM + 0.03)
+        seat = Loft(SHORTS, power=2.3, cap=0.025)
+        shorts = _below(Shell(Union([trunk, seat] + _both([_below(flare, SHIRT_HEM - 0.01)]), k=0.03), 0.004),
+                        SHIRT_HEM + 0.03)
         # Socks over shin pads, with a turned-down cuff at the top; boots below.
         padded = Union([leg, SHIN.muscle(0.48, (0.034, 0.012, 0.100), front=0.036)], k=0.012)
         sock = Shell(_keep_after(padded, "sock", 0.003), 0.003)
@@ -341,6 +359,16 @@ class Figure:
 
 
 # Meshing ---------------------------------------------------------------------------
+
+def _keep_vertices(verts, quads, keep):
+    """The mesh made of the faces whose vertices all pass `keep`, without loose vertices."""
+    quads = quads[np.all(keep[quads], axis=1)]
+    used = np.zeros(len(verts), dtype=bool)
+    used[quads.ravel()] = True
+    index = np.full(len(verts), -1)
+    index[used] = np.arange(used.sum())
+    return verts[used], index[quads]
+
 
 def _mesh_object(name, verts, faces, collection):
     mesh = bpy.data.meshes.new(name)
@@ -379,23 +407,25 @@ def _collapse(obj, triangles, movable=None):
     mesh.name = obj.name
 
 
-def _decimate(obj, budget, detail_mask, detail_budget):
-    """Bring `obj` to `budget` triangles, `detail_budget` of them where `detail_mask` holds."""
-    def detail_now():
+def _decimate(obj, budgets, tier_of):
+    """Bring `obj` to sum(`budgets`) triangles, `budgets[k]` of them in tier k.
+
+    `tier_of(points)` puts each vertex in a tier, 0 the coarsest. Tiers are
+    collapsed coarse to fine, each with the others held still, so the face keeps
+    the detail the trunk does not need.
+    """
+    def tiers():
         co = np.empty(len(obj.data.vertices) * 3)
         obj.data.vertices.foreach_get("co", co)
-        return detail_mask(co.reshape(-1, 3))
+        return tier_of(co.reshape(-1, 3))
 
-    def detail_triangles(mask):
-        count = 0
+    for k in range(len(budgets)):
+        tier = tiers()
+        finer = 0
         for poly in obj.data.polygons:
-            if all(mask[i] for i in poly.vertices):
-                count += len(poly.vertices) - 2
-        return count
-
-    mask = detail_now()
-    _collapse(obj, detail_triangles(mask) + budget - detail_budget, ~mask)
-    _collapse(obj, budget, detail_now())
+            if min(tier[i] for i in poly.vertices) > k:
+                finer += len(poly.vertices) - 2
+        _collapse(obj, sum(budgets[:k + 1]) + finer, tier == k)
 
 
 def _smooth(verts, faces, iterations=2, factor=0.5):
@@ -403,7 +433,7 @@ def _smooth(verts, faces, iterations=2, factor=0.5):
     n = len(verts)
     edges = np.concatenate([faces[:, [i, (i + 1) % 4]] for i in range(4)])
     edges = np.unique(np.sort(edges, axis=1), axis=0)
-    deg = np.bincount(edges.ravel(), minlength=n).astype(np.float64)
+    deg = np.maximum(np.bincount(edges.ravel(), minlength=n), 1).astype(np.float64)
     v = verts.copy()
     for _ in range(iterations):
         for f in (factor, -factor * 1.04):
@@ -414,12 +444,16 @@ def _smooth(verts, faces, iterations=2, factor=0.5):
     return v
 
 
-def _detail_mask(verts):
-    """Where the body keeps more triangles: the head above the jaw and the hands."""
+def _tier(verts):
+    """Decimation tiers: 0 the body, 1 the rest of the head and the hands, 2 the face and ears."""
     q = _side(verts)
-    head = q[:, 2] > 1.585
+    tier = np.zeros(len(verts), dtype=np.int64)
     hands = (np.linalg.norm(q - HAND.at(0.45), axis=1) < 0.11) & (q[:, 2] < J["wrist_L"][2] + 0.01)
-    return head | hands
+    tier[(q[:, 2] > 1.585) | hands] = 1
+    face = (q[:, 1] < -0.035) & (q[:, 2] > 1.555) & (q[:, 2] < 1.735)
+    ears = np.linalg.norm((q - (0.079, 0.01, 1.665)) / (0.022, 0.032, 0.042), axis=1) < 1.0
+    tier[face | ears] = 2
+    return tier
 
 
 # Regions ---------------------------------------------------------------------------
@@ -514,7 +548,7 @@ def material(name):
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     colour = COLOURS.get(name, (0.8, 0.8, 0.8))
     bsdf.inputs["Base Color"].default_value = (*colour, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.75 if name not in ("boots", "eyes") else 0.4
+    bsdf.inputs["Roughness"].default_value = {"boots": 0.4, "eyes": 0.55}.get(name, 0.75)
     mat.diffuse_color = (*colour, 1.0)
     if name == "eyes":
         attr = mat.node_tree.nodes.new("ShaderNodeVertexColor")
@@ -556,8 +590,11 @@ def build_eyes(collection):
     for f in bm.faces:
         centre = Vector((EYE[0] * (1 if f.calc_center_median().x > 0 else -1), EYE[1], EYE[2]))
         for loop in f.loops:
-            ahead = -(loop.vert.co - centre).normalized().y
-            if ahead > 0.93:
+            d = (loop.vert.co - centre).normalized()
+            ahead = -d.y
+            if d.z > 0.45:
+                loop[colour] = (0.05, 0.035, 0.03, 1.0)  # the lash line under the upper lid
+            elif ahead > 0.93:
                 loop[colour] = (0.02, 0.015, 0.012, 1.0)
             elif ahead > 0.80:
                 loop[colour] = (0.16, 0.09, 0.05, 1.0)
@@ -583,11 +620,290 @@ def _shape_mesh(shape, step, name, collection, smooth=2, lo=None, hi=None):
     return _mesh_object(name, verts, quads, collection), verts
 
 
+# Hair ------------------------------------------------------------------------------
+
+class Hairline(S.Shape):
+    """Above the hairline: 1.733 m at the middle of the forehead, rising towards the
+    temples, then down the sides to 1.595 m at the nape (inside is negative)."""
+
+    lo = np.array([-0.15, -0.16, 1.50])
+    hi = np.array([0.15, 0.17, 1.86])
+
+    def field(self, X, Y, Z):
+        temples = 7.0 * X * X * np.clip((0.02 - Y) / 0.08, 0.0, 1.0)
+        line = 1.733 - 0.70 * (Y + 0.09) + temples
+        return (line - Z) * 0.82
+
+
+def _hair_region():
+    """Where hair grows: above the hairline, around the ears, with sideburns."""
+    top = Hairline()
+    sideburn = Cone((0.076, -0.004, 1.705), (0.074, -0.010, 1.658), 0.0075)
+    region = Union([top] + _both([sideburn]), k=0.01)
+    ear = Ellipsoid((0.080, 0.012, 1.664), (0.030, 0.034, 0.040))
+    return Cut(region, Union(_both([ear])), k=0.008)
+
+
+def _brows(head):
+    """Two brows, a few millimetres proud of the skin above the eyes."""
+    inner = Ellipsoid((0.021, -0.093, 1.7005), (0.013, 0.02, 0.0044), S.rotation(ry=0.10))
+    outer = Ellipsoid((0.043, -0.085, 1.7035), (0.015, 0.02, 0.0034), S.rotation(ry=-0.10))
+    return Within(Shell(head, 0.0024), Union(_both([inner, outer]), k=0.004))
+
+
+def _hair_styles(head):
+    """Each style as a shape: a layer over the scalp, thicker where the style has volume."""
+    region = _hair_region()
+
+    def layer(thickness):
+        return Layer(head, region, thickness, edge=0.03, edge_min=0.0022)
+
+    def ramp(v, lo, hi):
+        return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
+
+    def strands(X, Y, Z, depth):
+        """Clumps combed front to back: ridges across the head that wander a little."""
+        return depth * np.sin(X * 330.0 + 2.0 * np.sin(Y * 45.0)) * ramp(Z, 1.70, 1.74)
+
+    rng = np.random.default_rng(51)
+    curls = []
+    for _ in range(170):
+        # Points over the scalp, pushed out to the curls' layer.
+        theta = rng.uniform(0, 2 * np.pi)
+        phi = rng.uniform(0.0, 1.35)
+        d = np.array([np.sin(phi) * np.cos(theta), np.sin(phi) * np.sin(theta), np.cos(phi)])
+        centre = np.array([0.0, 0.012, 1.705]) + d * np.array([0.098, 0.115, 0.112])
+        curls.append(Ellipsoid(centre, (rng.uniform(0.012, 0.017),) * 3))
+    curly = Within(Union([Layer(head, region, lambda X, Y, Z: 0.020 + 0 * X, edge=0.03, edge_min=0.003)] + curls,
+                         k=0.006), Shell(region, -0.004))
+    bun = Ellipsoid((0.0, 0.112, 1.735), (0.030, 0.027, 0.028))
+    return {
+        "hair_bald": None,
+        "hair_buzz": layer(lambda X, Y, Z: 0.0025 + 0 * X),
+        "hair_short": layer(lambda X, Y, Z: 0.006 + 0.012 * ramp(Z, 1.70, 1.77) + 0.006 * ramp(-Y, 0.0, 0.08)
+                            * ramp(Z, 1.72, 1.76) + strands(X, Y, Z, 0.0025)),
+        "hair_curly": curly,
+        "hair_swept": layer(lambda X, Y, Z: 0.004 + 0.022 * ramp(Z, 1.71, 1.78) * (1.0 - 0.4 * ramp(Y, 0.0, 0.10))
+                            + 0.006 * ramp(-Y, 0.02, 0.09) * ramp(Z, 1.73, 1.77) + strands(X, Y, Z, 0.0035)),
+        "hair_bun": Union([layer(lambda X, Y, Z: 0.006 + 0.004 * ramp(Z, 1.72, 1.78) + strands(X, Y, Z, 0.0015)), bun],
+                          k=0.012),
+    }
+
+
+HAIR_TRIANGLES = {"hair_bald": 160, "hair_buzz": 520, "hair_short": 900, "hair_curly": 1400,
+                  "hair_swept": 1000, "hair_bun": 1000}
+
+
+def build_hair(figure, collection):
+    """One mesh per hair style, each with the brows; inside of the head removed."""
+    brows = _brows(figure.head)
+    lo, hi = np.array([-0.15, -0.16, 1.55]), np.array([0.15, 0.17, 1.88])
+    made = []
+    for name, style in _hair_styles(figure.head).items():
+        shape = brows if style is None else Union([style, brows])
+        verts, quads = S.mesh_field(shape, HAIR_STEP, lo, hi)
+        # Drop the part of the layer inside the head; its open edge is hidden there.
+        verts, quads = _keep_vertices(verts, quads, figure.head.at(verts) > -0.0012)
+        obj = _mesh_object(name, _smooth(verts, quads, 1), quads, collection)
+        _collapse(obj, HAIR_TRIANGLES[name])
+        obj.data.materials.append(material("hair"))
+        for poly in obj.data.polygons:
+            poly.use_smooth = True
+        made.append(obj)
+    return made
+
+
+# Shirt number ----------------------------------------------------------------------
+
+NUMBER_SIZE = (0.25, 0.27)  # m: width and height of the panel the number is printed in
+NUMBER_CENTRE_Z = 1.235
+
+
+def build_number(body, collection):
+    """A panel lying on the back of the shirt, with UVs as read from behind.
+
+    u runs 0 to 1 from the viewer's left (the figure's left, +x) to right; v runs
+    0 to 1 from bottom to top in Blender, which glTF stores as 1 to 0, so the
+    page's canvas maps upright with flipY off.
+    """
+    bvh = BVHTree.FromObject(body, bpy.context.evaluated_depsgraph_get())
+    cols, rows = 8, 8
+    width, height = NUMBER_SIZE
+    verts, uvs = [], []
+    for j in range(rows + 1):
+        for i in range(cols + 1):
+            u, v = i / cols, j / rows
+            x = width / 2 - u * width
+            z = NUMBER_CENTRE_Z - height / 2 + v * height
+            hit, normal, _, _ = bvh.ray_cast(Vector((x, 0.5, z)), Vector((0.0, -1.0, 0.0)))
+            verts.append(hit + normal * 0.004)
+            uvs.append((u, v))
+    faces = [(j * (cols + 1) + i, j * (cols + 1) + i + 1, (j + 1) * (cols + 1) + i + 1, (j + 1) * (cols + 1) + i)
+             for j in range(rows) for i in range(cols)]
+    # Wound to face backwards (+y), the way the panel is seen.
+    faces = [f[::-1] for f in faces]
+    obj = _mesh_object("number", np.array(verts), np.array(faces), collection)
+    layer = obj.data.uv_layers.new(name="UVMap")
+    for poly in obj.data.polygons:
+        for loop in poly.loop_indices:
+            layer.data[loop].uv = uvs[obj.data.loops[loop].vertex_index]
+        poly.use_smooth = True
+    obj.data.materials.append(material("number"))
+    return obj
+
+
+# Coat ------------------------------------------------------------------------------
+
+# A manager's coat: sections as for the trunk, hanging straight from the chest to
+# mid-thigh around both legs.
+COAT = [
+    (0.70, 0.196, 0.116, 0.122, 0.018),
+    (0.85, 0.190, 0.114, 0.118, 0.020),
+    (1.00, 0.177, 0.112, 0.110, 0.020),
+    (1.12, 0.175, 0.124, 0.106, 0.022),
+    (1.24, 0.180, 0.132, 0.106, 0.024),
+    (1.34, 0.180, 0.128, 0.106, 0.027),
+    (1.42, 0.165, 0.100, 0.094, 0.030),
+    (1.48, 0.122, 0.062, 0.072, 0.032),
+    (1.52, 0.075, 0.045, 0.055, 0.032),
+]
+COAT_HEM = 0.71
+COAT_TRIANGLES = 3400
+
+
+def build_coat(figure, collection):
+    """A coat to mid-thigh with a stand-up collar, over trousers to the shoes."""
+    sleeves = _both([_keep_before(figure.arm, "wrist", -0.04)])
+    core = Union([Loft(COAT, power=2.3, cap=0.02)] + _both(shoulders()) + sleeves, k=0.03)
+    outer = _above(Shell(core, 0.022), COAT_HEM)
+    point, normal = COLLAR
+    band = Shell(NECK, 0.020)
+    box = (band.lo - 0.1, band.hi + 0.1)
+    collar = Within(Within(band, Plane(point + normal * 0.045, normal, *box)), Plane(point - normal * 0.03, -normal, *box))
+    leg = Union([Cone(THIGH.at(0.0, out=0.008), THIGH.at(1.0), 0.090, 0.064), Cone(SHIN.at(0.0), SHIN.at(1.0), 0.064, 0.056),
+                 Shell(leg_core(), 0.012)], k=0.03)
+    trousers = _keep_before(leg, "boot", -0.012)
+    coat = Union([outer, collar] + _both([trousers]), k=0.006)
+    verts, quads = S.mesh_field(coat, STEP)
+    # Open the coat where its caps cross the body: at the hem, the cuffs and the neck.
+    keep = (core.at(verts) > -0.002) | (verts[:, 2] < COAT_HEM - 0.03)
+    keep &= NECK.at(verts) > 0.004
+    verts, quads = _keep_vertices(verts, quads, keep)
+    obj = _mesh_object("coat", _smooth(verts, quads, 2), quads, collection)
+    _collapse(obj, COAT_TRIANGLES)
+    obj.data.materials.append(material("coat"))
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+    return obj
+
+
+# Skinning and variations -----------------------------------------------------------
+
+def _weights(obj):
+    """{bone: per-vertex weight} of a skinned mesh."""
+    names = [g.name for g in obj.vertex_groups]
+    out = {name: np.zeros(len(obj.data.vertices)) for name in names}
+    for v in obj.data.vertices:
+        for g in v.groups:
+            out[names[g.group]][v.index] = g.weight
+    return out
+
+
+def _transfer(obj, source, armature):
+    """Skin `obj` like the nearest point of `source`'s surface."""
+    from mathutils.interpolate import poly_3d_calc
+
+    weights = _weights(source)
+    bvh = BVHTree.FromObject(source, bpy.context.evaluated_depsgraph_get())
+    out = {bone: np.zeros(len(obj.data.vertices)) for bone in weights}
+    polys = source.data.polygons
+    co = source.data.vertices
+    for v in obj.data.vertices:
+        hit, _, index, _ = bvh.find_nearest(v.co)
+        ids = list(polys[index].vertices)
+        share = poly_3d_calc([co[i].co for i in ids], hit)
+        for bone, values in weights.items():
+            out[bone][v.index] = sum(w * values[i] for w, i in zip(share, ids))
+    _bind(obj, armature, {b: w for b, w in out.items() if w.max() > 1e-4})
+    _limit_weights(obj)
+
+
+def _points(obj):
+    co = np.empty(len(obj.data.vertices) * 3)
+    obj.data.vertices.foreach_get("co", co)
+    return co.reshape(-1, 3)
+
+
+def _segment_offset(points, bone):
+    head, tail = (J[j] for j in rig.BONES[bone][:2])
+    ab = tail - head
+    t = np.clip(((points - head) @ ab) / (ab @ ab), 0.0, 1.0)
+    return points - (head + t[:, None] * ab)
+
+
+BUILD = {"hips": 0.06, "spine": 0.08, "chest": 0.10, "neck": 0.10, "shoulder": 0.12, "upper_arm": 0.11,
+         "forearm": 0.08, "hand": 0.02, "thigh": 0.08, "shin": 0.06}
+
+
+def _build(points, weights, gain):
+    out = np.zeros_like(points)
+    for bone, w in weights.items():
+        g = BUILD.get(bone.rstrip("_LR").rstrip("_"), 0.0)
+        if g:
+            out += (w * g * gain)[:, None] * _segment_offset(points, bone)
+    return out
+
+
+def _clamp(v, lo=0.0, hi=1.0):
+    return np.clip(v, lo, hi)
+
+
+def morph_offsets(name, points, weights):
+    """How far each point moves at a shape key's full value. Bones never move."""
+    head = weights.get("head", np.zeros(len(points)))
+    X, Y, Z = points.T
+    out = np.zeros_like(points)
+    if name == "build_slim":
+        return _build(points, weights, -0.8)
+    if name == "build_broad":
+        return _build(points, weights, 1.0)
+    if name == "face_wide":
+        out[:, 0] = X * 0.09 * head * _clamp(1.0 - (Z - 1.72) / 0.10, 0.4, 1.0)
+    elif name == "face_long":
+        out[:, 2] = -0.085 * np.maximum(0.0, 1.69 - Z) * head
+    elif name == "jaw_strong":
+        g = _clamp(1.0 - np.abs(Z - 1.597) / 0.04) * (Y < 0.03) * head
+        out[:, 0] = X * 0.16 * g
+        out[:, 1] = -0.005 * g * _clamp((-Y - 0.03) / 0.04)
+    elif name == "nose_big":
+        centre = np.array([0.0, -0.098, 1.648])
+        f = _clamp(1.0 - np.linalg.norm(points - centre, axis=1) / 0.032) ** 1.5 * (Y < -0.08) * head
+        out = (points - np.array([0.0, -0.084, 1.655])) * (0.35 * f)[:, None]
+    return out
+
+
+def _add_morphs(obj):
+    """Add every shape key that moves this mesh; returns their names."""
+    points = _points(obj)
+    weights = _weights(obj)
+    added = []
+    for name in MORPHS:
+        offset = morph_offsets(name, points, weights)
+        if np.abs(offset).max() < 1e-5:
+            continue
+        if obj.data.shape_keys is None:
+            obj.shape_key_add(name="Basis", from_mix=False)
+        key = obj.shape_key_add(name=name, from_mix=False)
+        key.data.foreach_set("co", (points + offset).ravel())
+        added.append(name)
+    return added
+
+
 def build_body(armature):
     collection = armature.users_collection[0]
     figure = Figure()
     body, verts = _shape_mesh(figure.shape, STEP, "body", collection)
-    _decimate(body, BODY_TRIANGLES, _detail_mask, DETAIL_TRIANGLES)
+    _decimate(body, BODY_TRIANGLES, _tier)
 
     bm = bmesh.new()
     bm.from_mesh(body.data)
@@ -606,15 +922,30 @@ def build_body(armature):
 
     eyes = build_eyes(collection)
     _bind(eyes, armature, {"head": np.ones(len(eyes.data.vertices))})
-    parts = [body, eyes]
+    number = build_number(body, collection)
+    _transfer(number, body, armature)
+    coat = build_coat(figure, collection)
+    _transfer(coat, body, armature)
+    hair = build_hair(figure, collection)
+    for obj in hair:
+        _bind(obj, armature, {"head": np.ones(len(obj.data.vertices))})
+    parts = [body, eyes, number, coat] + hair
+    morphs = {}
+    for obj in parts:
+        for name in _add_morphs(obj):
+            morphs.setdefault(name, []).append(obj.name)
+    # In the .blend, show the figure as a player with one hair style.
+    coat.hide_set(True)
+    for obj in hair:
+        obj.hide_set(obj.name != "hair_short")
     return {
         "body": body.name,
         "eyes": eyes.name,
-        "coat": None,
-        "number": None,
-        "hair": [],
+        "coat": coat.name,
+        "number": number.name,
+        "hair": [obj.name for obj in hair],
         "materials": {"regions": list(REGIONS), "fixed": list(FIXED)},
-        "morphs": {},
+        "morphs": {name: morphs[name] for name in MORPHS if name in morphs},
         "triangles": {p.name: sum(len(f.vertices) - 2 for f in p.data.polygons) for p in parts},
     }
 
@@ -641,7 +972,41 @@ def _skin(obj, armature):
     view_layer.objects.active = armature
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
     obj.select_set(False)
+    _smooth_joints(obj)
     _limit_weights(obj)
+
+
+# Joints whose weights are blended wider than bone heat leaves them: (joint, reach in m).
+SOFT_JOINTS = (("shoulder_L", 0.11), ("shoulder_R", 0.11), ("hip_L", 0.13), ("hip_R", 0.13),
+               ("knee_L", 0.08), ("knee_R", 0.08), ("elbow_L", 0.07), ("elbow_R", 0.07))
+
+
+def _smooth_joints(obj, iterations=8, factor=0.5):
+    """Spread each vertex's weights towards its neighbours' near the big joints, so the
+    skin bends over a wider band and keeps its volume better."""
+    weights = _weights(obj)
+    names = list(weights)
+    w = np.stack([weights[n] for n in names], axis=1)
+    points = _points(obj)
+    near = np.zeros(len(points))
+    for joint, reach in SOFT_JOINTS:
+        d = np.linalg.norm(points - J[joint], axis=1)
+        near = np.maximum(near, np.clip(1.0 - d / reach, 0.0, 1.0))
+    edges = np.array([e.vertices for e in obj.data.edges])
+    count = np.maximum(np.bincount(edges.ravel(), minlength=len(points)), 1)[:, None]
+    for _ in range(iterations):
+        acc = np.zeros_like(w)
+        np.add.at(acc, edges[:, 0], w[edges[:, 1]])
+        np.add.at(acc, edges[:, 1], w[edges[:, 0]])
+        w = w + (factor * near)[:, None] * (acc / count - w)
+    groups = obj.vertex_groups
+    for j, name in enumerate(names):
+        group = groups[name]
+        for i in np.flatnonzero(near > 0):
+            if w[i, j] > 1e-4:
+                group.add([int(i)], float(w[i, j]), "REPLACE")
+            else:
+                group.remove([int(i)])
 
 
 def _limit_weights(obj, most=4):

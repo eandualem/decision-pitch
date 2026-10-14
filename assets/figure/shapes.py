@@ -352,6 +352,29 @@ class Displace(Shape):
         return self.base.at(points) + self.fn(points[:, 0], points[:, 1], points[:, 2])
 
 
+class Layer(Shape):
+    """A layer over `base` inside `region`, `thickness(X, Y, Z)` thick, thinning to `edge_min`
+    over the last `edge` metres before the region's edge (a hairline, say)."""
+
+    def __init__(self, base, region, thickness, edge, edge_min=0.0, reach=0.06):
+        self.base, self.region, self.thickness = base, region, thickness
+        self.edge, self.edge_min = float(edge), float(edge_min)
+        self.lo = np.maximum(base.lo - reach, region.lo)
+        self.hi = np.minimum(base.hi + reach, region.hi)
+
+    def _layer(self, b, r, X, Y, Z):
+        taper = np.clip(-r / self.edge, 0.0, 1.0)
+        t = self.edge_min + (self.thickness(X, Y, Z) - self.edge_min) * taper
+        return np.maximum(b - t, r)
+
+    def grid(self, x, y, z):
+        return self._layer(self.base.grid(x, y, z), self.region.grid(x, y, z), *_grid_axes(x, y, z))
+
+    def at(self, points):
+        points = np.asarray(points, dtype=np.float64)
+        return self._layer(self.base.at(points), self.region.at(points), points[:, 0], points[:, 1], points[:, 2])
+
+
 class Footprint(Shape):
     """A slab from `z0` to `z1` whose outline is `base`'s section at `z_at`, grown by `grow`."""
 

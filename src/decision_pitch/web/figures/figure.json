@@ -88,12 +88,12 @@
   },
   "keeper_dive_L": {
    "contact": 0.46,
-   "duration": 2.3,
+   "duration": 2.4667,
    "loop": false
   },
   "keeper_dive_R": {
    "contact": 0.46,
-   "duration": 2.3,
+   "duration": 2.4667,
    "loop": false
   },
   "pass": {
@@ -134,7 +134,7 @@
    "loop": false
   },
   "throw_in": {
-   "contact": 0.74,
+   "contact": 0.6,
    "duration": 1.4,
    "loop": false
   },
@@ -145,9 +145,16 @@
    "speed": 1.4
   }
  },
- "coat": null,
+ "coat": "coat",
  "eyes": "eyes",
- "hair": [],
+ "hair": [
+  "hair_bald",
+  "hair_buzz",
+  "hair_short",
+  "hair_curly",
+  "hair_swept",
+  "hair_bun"
+ ],
  "height": 1.8,
  "materials": {
   "fixed": [
@@ -164,10 +171,57 @@
    "boots"
   ]
  },
- "morphs": {},
- "number": null,
+ "morphs": {
+  "build_broad": [
+   "body",
+   "number",
+   "coat"
+  ],
+  "build_slim": [
+   "body",
+   "number",
+   "coat"
+  ],
+  "face_long": [
+   "body",
+   "eyes",
+   "coat",
+   "hair_buzz",
+   "hair_short",
+   "hair_curly",
+   "hair_swept",
+   "hair_bun"
+  ],
+  "face_wide": [
+   "body",
+   "eyes",
+   "coat",
+   "hair_bald",
+   "hair_buzz",
+   "hair_short",
+   "hair_curly",
+   "hair_swept",
+   "hair_bun"
+  ],
+  "jaw_strong": [
+   "body",
+   "coat"
+  ],
+  "nose_big": [
+   "body"
+  ]
+ },
+ "number": "number",
  "triangles": {
-  "body": 9100,
-  "eyes": 216
+  "body": 8978,
+  "coat": 3400,
+  "eyes": 216,
+  "hair_bald": 160,
+  "hair_bun": 999,
+  "hair_buzz": 519,
+  "hair_curly": 1400,
+  "hair_short": 899,
+  "hair_swept": 1000,
+  "number": 128
  }
 }

@@ -10,6 +10,9 @@ Options:
     --clip NAME         pose the figure with a clip; with --frames, one still per frame
     --frames LIST       comma-separated frame numbers of --clip (default: 0)
     --view NAME         the camera for --clip stills (default: side)
+    --camera X,Y,Z,TX,TY,TZ,LENS
+                        a custom camera (location, target, focal length in mm),
+                        rendered as <out>/camera.png
     --engine NAME       eevee (default) or workbench
 
 Each still is written as <out>/<view>.png, or <out>/<clip>_<frame>_<view>.png.
@@ -68,6 +71,7 @@ def parse():
     parser.add_argument("--frames", default="0")
     parser.add_argument("--view", default="side")
     parser.add_argument("--engine", default="eevee")
+    parser.add_argument("--camera")
     return parser.parse_args(argv)
 
 
@@ -167,6 +171,56 @@ def dress(rig, spec):
     rig.scale = (scale, scale, scale)
 
 
+# Seven-segment digits: which of the segments a-g each digit lights.
+SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg",
+            "7": "abc", "8": "abcdefg", "9": "abcdfg"}
+
+
+def number_image(text, size=128):
+    """A shirt number drawn as the page draws it: on a transparent square, upright.
+
+    Pixel rows run bottom to top in Blender images, so the top of the digits is
+    at the last rows.
+    """
+    pixels = [0.0] * (size * size * 4)
+
+    def fill(x0, y0, x1, y1):  # in a 0..1 square, y up
+        for y in range(int(y0 * size), int(y1 * size)):
+            for x in range(int(x0 * size), int(x1 * size)):
+                i = (y * size + x) * 4
+                pixels[i:i + 4] = [1.0, 1.0, 1.0, 1.0]
+
+    width = 0.8 / len(text)
+    for n, digit in enumerate(text):
+        x0, x1, t = 0.1 + n * width + 0.04, 0.1 + (n + 1) * width - 0.04, 0.07
+        y0, ym, y1 = 0.12, 0.5, 0.88
+        bars = {"a": (x0, y1 - t, x1, y1), "g": (x0, ym - t / 2, x1, ym + t / 2), "d": (x0, y0, x1, y0 + t),
+                "f": (x0, ym, x0 + t, y1), "b": (x1 - t, ym, x1, y1), "e": (x0, y0, x0 + t, ym),
+                "c": (x1 - t, y0, x1, ym)}
+        for segment in SEGMENTS[digit]:
+            fill(*bars[segment])
+    image = bpy.data.images.new("number_" + text, size, size, alpha=True)
+    image.pixels[:] = pixels
+    return image
+
+
+def print_number(rig, text):
+    """Map a number onto the figure's number panel, as the page does."""
+    for part in figure_parts(rig):
+        if not part.name.startswith("number"):
+            continue
+        mat = part.data.materials[0]
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
+        bsdf = nodes.get("Principled BSDF")
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = number_image(text)
+        tex.interpolation = "Closest"
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if hasattr(mat, "surface_render_method"):
+            mat.surface_render_method = "DITHERED"
+
+
 def pose_clip(rig, name, frame):
     action = bpy.data.actions[name]
     rig.animation_data_create()
@@ -196,10 +250,18 @@ def main():
             track.mute = True
     cam = stage(args.engine)
     dress(rig, LINEUP[0])
+    print_number(rig, "17")
+    if args.camera and not args.clip:
+        pass
     if args.clip:
         for frame in args.frames.split(","):
             pose_clip(rig, args.clip, frame)
             shoot(cam, os.path.join(args.out, f"{args.clip}_{frame}_{args.view}.png"), args.view)
+        return
+    if args.camera:
+        v = [float(n) for n in args.camera.split(",")]
+        CAMERAS["camera"] = (tuple(v[0:3]), tuple(v[3:6]), v[6])
+        shoot(cam, os.path.join(args.out, "camera.png"), "camera")
         return
     views = args.views.split(",")
     for view in ("front", "side", "back", "three_quarter"):

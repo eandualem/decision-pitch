@@ -32,12 +32,29 @@ GLB_BYTES = 4_000_000  # a few MB at most
 
 
 def read_glb(path):
+    """The glTF JSON of a .glb file, with its binary chunk under "_bin"."""
     data = path.read_bytes()
     magic, version, length = struct.unpack_from("<4sII", data, 0)
     assert magic == b"glTF" and version == 2 and length == len(data)
     chunk_length, chunk_type = struct.unpack_from("<I4s", data, 12)
     assert chunk_type == b"JSON"
-    return json.loads(data[20:20 + chunk_length])
+    gltf = json.loads(data[20:20 + chunk_length])
+    offset = 20 + chunk_length
+    bin_length, bin_type = struct.unpack_from("<I4s", data, offset)
+    assert bin_type == b"BIN\0"
+    gltf["_bin"] = data[offset + 8:offset + 8 + bin_length]
+    return gltf
+
+
+def floats(gltf, accessor_index):
+    """An accessor's float components, as a list of tuples."""
+    accessor = gltf["accessors"][accessor_index]
+    assert accessor["componentType"] == 5126  # FLOAT
+    width = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[accessor["type"]]
+    view = gltf["bufferViews"][accessor["bufferView"]]
+    start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
+    stride = view.get("byteStride", 4 * width)
+    return [struct.unpack_from(f"<{width}f", gltf["_bin"], start + i * stride) for i in range(accessor["count"])]
 
 
 @pytest.fixture(scope="module")
@@ -108,8 +125,22 @@ def test_hair_styles_coat_and_number_use_their_materials(gltf, info):
     if info["number"]:
         assert material_names(gltf, info["number"]) == ["number"]
         (primitive,) = mesh_of(gltf, info["number"])["primitives"]
-        uv = gltf["accessors"][primitive["attributes"]["TEXCOORD_0"]]
-        assert uv["min"] == pytest.approx([0, 0], abs=1e-4) and uv["max"] == pytest.approx([1, 1], abs=1e-4)
+        uv = floats(gltf, primitive["attributes"]["TEXCOORD_0"])
+        assert min(u for u, _ in uv) == pytest.approx(0, abs=1e-4) and max(u for u, _ in uv) == pytest.approx(1, abs=1e-4)
+        assert min(v for _, v in uv) == pytest.approx(0, abs=1e-4) and max(v for _, v in uv) == pytest.approx(1, abs=1e-4)
+
+
+def test_the_number_reads_upright_from_behind(gltf, info):
+    # The figure faces +z in glTF. Seen from behind, its left (+x) is on the viewer's
+    # left: u grows to the viewer's right, so it falls with x; v grows downwards.
+    (primitive,) = mesh_of(gltf, info["number"])["primitives"]
+    uv = floats(gltf, primitive["attributes"]["TEXCOORD_0"])
+    position = floats(gltf, primitive["attributes"]["POSITION"])
+    top_left = min(range(len(uv)), key=lambda i: uv[i][0] + uv[i][1])
+    bottom_right = max(range(len(uv)), key=lambda i: uv[i][0] + uv[i][1])
+    assert position[top_left][0] > position[bottom_right][0]
+    assert position[top_left][1] > position[bottom_right][1]
+    assert max(p[2] for p in position) < -0.05, "on the back"
 
 
 def test_morph_targets_named_in_figure_json_exist_on_their_meshes(gltf, info):
