@@ -2,7 +2,9 @@
 // the contract's skeleton, objects, material regions, shape keys and clips, at toy size.
 // Every clip moves three marker bones, `hand_L` (upper body), `thigh_R` (kicking leg) and
 // `foot_L` (support leg), to [clip code, clip time, 0], so a test can read which clip each
-// part of the body shows and at what time.
+// part of the body shows and at what time. `fixtureGltf({ more: true })` adds the clips
+// of natural movement: loops in eight directions, the dribble, jockey and shield sets,
+// idle variants, turns, cuts, a brake and the new plays.
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
 
 export const LOOPS = {
@@ -14,11 +16,49 @@ export const LOOPS = {
   strafe_L: { duration: 0.8, speed: 2, direction: 'left' },
   strafe_R: { duration: 0.8, speed: 2, direction: 'right' },
 };
+// Diagonal and faster loops, loop sets (with a speed-less stance) and idle variants.
+export const MORE_LOOPS = {
+  walk_FL: { duration: 1, speed: 1.5, direction: 'forward_left' },
+  walk_FR: { duration: 1, speed: 1.5, direction: 'forward_right' },
+  jog_FL: { duration: 0.72, speed: 3.5, direction: 'forward_left' },
+  jog_FR: { duration: 0.72, speed: 3.5, direction: 'forward_right' },
+  strafe_run_L: { duration: 0.7, speed: 4, direction: 'left' },
+  strafe_run_R: { duration: 0.7, speed: 4, direction: 'right' },
+  walk_BL: { duration: 0.9, speed: 1.4, direction: 'back_left' },
+  walk_BR: { duration: 0.9, speed: 1.4, direction: 'back_right' },
+  jog_BL: { duration: 0.7, speed: 3, direction: 'back_left' },
+  jog_BR: { duration: 0.7, speed: 3, direction: 'back_right' },
+  backpedal_run: { duration: 0.6, speed: 3.5, direction: 'back' },
+  dribble_slow: { duration: 0.8, speed: 2.5, direction: 'forward', set: 'dribble', touch: 0.4 },
+  dribble: { duration: 0.6, speed: 4.5, direction: 'forward', set: 'dribble', touch: 0.4 },
+  dribble_sprint: { duration: 0.5, speed: 7.5, direction: 'forward', set: 'dribble', touch: 0.4 },
+  dribble_FL: { duration: 0.62, speed: 4, direction: 'forward_left', set: 'dribble', touch: 0.4 },
+  dribble_FR: { duration: 0.62, speed: 4, direction: 'forward_right', set: 'dribble', touch: 0.4 },
+  jockey: { duration: 1.2, set: 'jockey' },
+  jockey_B: { duration: 0.7, speed: 1.5, direction: 'back', set: 'jockey' },
+  jockey_BL: { duration: 0.7, speed: 1.5, direction: 'back_left', set: 'jockey' },
+  jockey_BR: { duration: 0.7, speed: 1.5, direction: 'back_right', set: 'jockey' },
+  jockey_L: { duration: 0.7, speed: 2, direction: 'left', set: 'jockey' },
+  jockey_R: { duration: 0.7, speed: 2, direction: 'right', set: 'jockey' },
+  shield: { duration: 1.5, set: 'shield' },
+  shield_B: { duration: 1, speed: 0.8, direction: 'back', set: 'shield' },
+  shield_L: { duration: 0.9, speed: 1, direction: 'left', set: 'shield' },
+  shield_R: { duration: 0.9, speed: 1, direction: 'right', set: 'shield' },
+  idle_shift: { duration: 4 },
+  idle_hips: { duration: 5 },
+  idle_look: { duration: 3.5 },
+};
 export const ONE_SHOTS = {
   pass: [1, 0.4], shot: [1.1, 0.45], control: [0.6, 0.2], tackle: [1, 0.35], header: [1, 0.4],
   throw_in: [1.2, 0.5], celebrate: [3, 0.8], keeper_dive_L: [1.4, 0.45], keeper_dive_R: [1.4, 0.45],
   keeper_catch: [1, 0.35], keeper_catch_high: [1, 0.4], instruct: [2.8, 1], change: [2.6, 1],
   clap: [2.6, 1], protest: [2.6, 1], cheer: [3, 1], despair: [3, 1],
+};
+// Turns, cuts and the brake ([duration, contact, fields]) and the new plays.
+export const MORE_ONE_SHOTS = {
+  turn_L: [0.6, 0, { turn: 90, turning: [0.05, 0.45] }], turn_R: [0.6, 0, { turn: -90, turning: [0.05, 0.45] }],
+  cut_L: [0.5, 0.2, { turn: 60 }], cut_R: [0.5, 0.2, { turn: -60 }], brake: [0.7, 0.25],
+  tackle_standing: [0.8, 0.3], cross: [1.1, 0.42], pass_lofted: [1.1, 0.42],
 };
 export const HAIRS = ['hair_bald', 'hair_buzz', 'hair_short', 'hair_curly', 'hair_swept', 'hair_bun'];
 const REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots'];
@@ -38,7 +78,8 @@ for (const [side, x] of [['L', 1], ['R', -1]]) {
     [`foot_${side}`, `shin_${side}`, [0, -0.43, 0]], [`toe_${side}`, `foot_${side}`, [0, -0.05, 0.14]],
   );
 }
-export const CODES = Object.fromEntries([...Object.keys(LOOPS), ...Object.keys(ONE_SHOTS)].map((name, i) => [name, i + 1]));
+export const CODES = Object.fromEntries([...Object.keys(LOOPS), ...Object.keys(ONE_SHOTS), ...Object.keys(MORE_LOOPS),
+  ...Object.keys(MORE_ONE_SHOTS)].map((name, i) => [name, i + 1]));
 export const MARKERS = ['hand_L', 'thigh_R', 'foot_L'];
 
 function clip(name, duration) {
@@ -48,7 +89,7 @@ function clip(name, duration) {
 }
 
 // What GLTFLoader gives for the figure: { scene, animations } and figure.json's contents.
-export function fixtureGltf() {
+export function fixtureGltf({ more = false } = {}) {
   const scene = new THREE.Group();
   const rig = new THREE.Object3D();
   rig.name = 'rig';
@@ -91,13 +132,15 @@ export function fixtureGltf() {
   scene.updateMatrixWorld(true);
   // GLTFLoader gives each mesh its own skeleton over the same bones.
   for (const mesh of meshes) mesh.bind(new THREE.Skeleton(list), mesh.matrixWorld);
+  const loops = more ? { ...LOOPS, ...MORE_LOOPS } : LOOPS;
+  const oneShots = more ? { ...ONE_SHOTS, ...MORE_ONE_SHOTS } : ONE_SHOTS;
   const animations = [
-    ...Object.entries(LOOPS).map(([name, { duration }]) => clip(name, duration)),
-    ...Object.entries(ONE_SHOTS).map(([name, [duration]]) => clip(name, duration)),
+    ...Object.entries(loops).map(([name, { duration }]) => clip(name, duration)),
+    ...Object.entries(oneShots).map(([name, [duration]]) => clip(name, duration)),
   ];
   const clips = {};
-  for (const [name, loop] of Object.entries(LOOPS)) clips[name] = { loop: true, ...loop };
-  for (const [name, [duration, contact]] of Object.entries(ONE_SHOTS)) clips[name] = { loop: false, duration, contact };
+  for (const [name, loop] of Object.entries(loops)) clips[name] = { loop: true, ...loop };
+  for (const [name, [duration, contact, fields]] of Object.entries(oneShots)) clips[name] = { loop: false, duration, contact, ...fields };
   const info = {
     height: 1.8, armature: 'rig', body: 'body', coat: 'coat', number: 'number', hair: HAIRS,
     materials: { regions: [...REGIONS, 'hair', 'number', 'coat'], fixed: ['eyes'] },

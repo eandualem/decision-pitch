@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
-import { fixtureGltf, LOOPS, HAIRS, CODES } from './figure-fixture.mjs';
+import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES } from './figure-fixture.mjs';
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const figures = await import('../../src/decision_pitch/web/src/figures.js');
@@ -15,6 +15,12 @@ const fixture = () => {
   return prepareFigure(scene, animations, info);
 };
 const describe = () => fixtureGltf().info.clips;
+// The figure with the clips of natural movement: eight directions, loop sets and more.
+const describeMore = () => fixtureGltf({ more: true }).info.clips;
+const fixtureMore = () => {
+  const { scene, animations, info } = fixtureGltf({ more: true });
+  return prepareFigure(scene, animations, info);
+};
 const near = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance;
 
 // The planted foot's velocity against the ground for a blend: each loop's foot moves
@@ -132,6 +138,73 @@ test('a figure without sideways or backwards loops runs forwards instead', () =>
   const rate = blendLoops(steps, 4, Math.PI / 2, 1, weights);
   assert.ok(near(weights.reduce((x, y) => x + y, 0), 1, 1e-6));
   assert.ok(rate > 0);
+});
+
+test('with loops in eight directions, feet stay planted at any angle and speed, and the blend is smooth', () => {
+  const steps = gait(describeMore());
+  const weights = new Float32Array(steps.loops.length);
+  const before = new Float32Array(steps.loops.length);
+  const names = (w) => steps.loops.filter((_, i) => w[i] > 1e-9).map(loop => loop.name);
+  for (const stride of [0.9, 1, 1.1]) {
+    for (const scale of [1.7 / 1.8, 1.95 / 1.8]) {
+      for (let speed = 0.4; speed <= 9; speed += 0.13) {
+        for (let travel = -Math.PI; travel < Math.PI; travel += 0.11) {
+          const rate = blendLoops(steps, speed, travel, scale, weights, null, stride);
+          const sum = weights.reduce((x, y) => x + y, 0);
+          assert.ok(near(sum, 1, 1e-6) && weights.every(w => w >= 0), `sum ${sum}`);
+          const slip = footSlip(steps, weights, rate, scale, speed, travel);
+          assert.ok(slip < 1e-6 * speed, `slip ${slip} m/s at ${speed.toFixed(2)} m/s, travel ${travel.toFixed(2)}, stride ${stride}`);
+        }
+      }
+    }
+  }
+  for (let travel = -Math.PI; travel < Math.PI; travel += 0.01) {
+    blendLoops(steps, 3, travel, 1, before);
+    blendLoops(steps, 3, travel + 0.01, 1, weights);
+    for (let i = 0; i < weights.length; i++) assert.ok(Math.abs(weights[i] - before[i]) < 0.03, `weight jump at ${travel} rad`);
+  }
+  for (let speed = 0; speed < 9; speed += 0.01) {
+    const ra = blendLoops(steps, speed, 2.1, 1, before);
+    const rb = blendLoops(steps, speed + 0.01, 2.1, 1, weights);
+    for (let i = 0; i < weights.length; i++) assert.ok(Math.abs(weights[i] - before[i]) < 0.02, `weight jump at ${speed} m/s`);
+    if (speed > 0.05) assert.ok(Math.abs(ra - rb) < 0.05, `rate jump at ${speed} m/s`);
+  }
+  // A diagonal at the speed it was made for plays alone at its own pace; halfway between
+  // two directions, both play, and nothing travels against the move.
+  const rate = blendLoops(steps, MORE_LOOPS.jog_BL.speed, 3 * Math.PI / 4, 1, weights);
+  assert.deepEqual(names(weights), ['jog_BL']);
+  assert.ok(near(rate * MORE_LOOPS.jog_BL.duration, 1));
+  blendLoops(steps, 2.5, 5 * Math.PI / 8, 1, weights);
+  const angles = new Set(steps.loops.filter((loop, i) => weights[i] > 1e-9 && loop.speed > 0).map(loop => Math.round(loop.angle * 4 / Math.PI)));
+  assert.deepEqual([...angles].sort(), [2, 3], `left and back-left only: ${names(weights)}`);
+});
+
+test('a loop may travel at any angle, which wins over its named direction', () => {
+  const clips = describe();
+  clips.lunge_L = { loop: true, duration: 0.8, speed: 2, direction: 'forward', angle: 120 };
+  const steps = gait(clips);
+  const lunge = steps.loops.findIndex(loop => loop.name === 'lunge_L');
+  assert.ok(near(steps.loops[lunge].angle, 2 * Math.PI / 3));
+  const weights = new Float32Array(steps.loops.length);
+  const rate = blendLoops(steps, 2, 2 * Math.PI / 3, 1, weights);
+  assert.ok(near(weights[lunge], 1), 'alone along its own angle');
+  assert.ok(near(rate * 0.8, 1));
+  for (let travel = -Math.PI; travel < Math.PI; travel += 0.05) {
+    const r = blendLoops(steps, 2.2, travel, 1, weights);
+    assert.ok(footSlip(steps, weights, r, 1, 2.2, travel) < 1e-6, `planted at ${travel}`);
+  }
+});
+
+test('a shorter stride takes quicker steps over the same ground, a longer one slower steps', () => {
+  const steps = gait(describe());
+  const weights = new Float32Array(steps.loops.length);
+  const speed = 2.5;
+  const short = blendLoops(steps, speed, 0, 1, weights, null, 0.9);
+  assert.ok(footSlip(steps, weights, short, 1, speed, 0) < 1e-6);
+  const usual = blendLoops(steps, speed, 0, 1, weights);
+  const long = blendLoops(steps, speed, 0, 1, weights, null, 1.1);
+  assert.ok(footSlip(steps, weights, long, 1, speed, 0) < 1e-6);
+  assert.ok(short > usual * 1.02 && long < usual * 0.98, `cadence ${short} / ${usual} / ${long}`);
 });
 
 test('a late-seen wind-up plays faster, at most twice, and contact lands on the touch', () => {
@@ -339,7 +412,7 @@ test('the built figure has every clip the page plays', { skip: !hasFigure && 'fi
     'tackle', 'throw_in', 'celebrate', 'keeper_dive_L', 'keeper_dive_R', 'keeper_catch', 'keeper_catch_high']) {
     assert.ok(template.clips.has(name), `${name} is in the .glb and figure.json`);
   }
-  for (const loop of template.gait.loops.slice(1)) assert.ok(loop.stride > 0, `${loop.name} travels`);
+  for (const loop of template.gait.loops.slice(1)) if (loop.speed > 0 || loop.set === 'run') assert.ok(loop.stride > 0, `${loop.name} travels`);
 });
 
 // Runs a built figure over the ground at `speed` along `travel` (from its facing) and

@@ -21,11 +21,19 @@ const smooth = (t) => t * t * (3 - 2 * t);
 const ramp = (value, low, high) => smooth(clamp((value - low) / (high - low), 0, 1));
 const fract = (value) => value - Math.floor(value);
 
-// The directions loops travel in, anticlockwise from the way the figure faces (so its
-// left is +pi/2), in the order of `gait().groups`.
-const DIRECTIONS = ['forward', 'left', 'back', 'right'];
-const ANGLES = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+// The directions a loop may name, in radians anticlockwise from the way the figure faces
+// (so its left is +pi/2). A loop may give any other `angle`, in degrees, instead.
+const DIRECTIONS = {
+  forward: 0, forward_left: Math.PI / 4, left: Math.PI / 2, back_left: 3 * Math.PI / 4,
+  back: Math.PI, back_right: -3 * Math.PI / 4, right: -Math.PI / 2, forward_right: -Math.PI / 4,
+};
+// The four ways a figure without loops of its own in that direction borrows forwards.
+const AXES = [0, Math.PI / 2, -Math.PI, -Math.PI / 2];
 const NAMED = { walk: 'forward', jog: 'forward', sprint: 'forward', backpedal: 'back', strafe_L: 'left', strafe_R: 'right' };
+const TAU = 2 * Math.PI;
+const SAME = 1e-6; // rad within which two loops travel the same way
+const wrap = (a) => a - TAU * Math.floor((a + Math.PI) / TAU); // into [-pi, pi)
+const around = (a) => a - TAU * Math.floor(a / TAU); // into [0, 2 pi)
 
 // What a one-shot keeps when it plays over the loops: a play keeps the upper body and the
 // kicking (right) leg over a running stride, a gesture only the upper body over a walk.
@@ -64,106 +72,225 @@ async function loadJson(url) {
   return response.json();
 }
 
-// The loops grouped by the direction they travel, each group from slowest to fastest, with
-// the stride each covers in one cycle. Index 0 is idle. A direction without loops of its
-// own borrows the forward ones.
+function angleOf(name, clip) {
+  if (Number.isFinite(clip.angle)) return wrap(clip.angle * Math.PI / 180);
+  const direction = DIRECTIONS[clip.direction ?? NAMED[name]];
+  return direction === undefined ? null : wrap(direction);
+}
+
+// The loops of `clips` as the page blends them. Index 0 of `loops` is idle, whose weight
+// the figure shares between its idle variants (`idles`: loops called idle... that do not
+// travel). The moving loops form sets: "run", always first, and any others a loop names
+// ("dribble", "jockey", "shield"), each with its stance (a loop of the set that does not
+// travel), or idle, as its `rest`. A set's `dirs` are the directions it travels in, by
+// angle, each with its loops from slowest to fastest, the rest first. A set fills what it
+// lacks from "run": its directions, and in each the speeds below and above its own. A
+// direction "run" has no loops in borrows forward's, so the figure always steps somewhere.
 export function gait(clips) {
-  const loops = [{ name: 'idle', duration: clips.idle?.duration || 1, speed: 0, angle: 0, stride: 0 }];
-  const groups = DIRECTIONS.map(() => []);
+  const loops = [{ name: 'idle', duration: clips.idle?.duration || 1, speed: 0, angle: 0, stride: 0, set: 'run', touch: null }];
+  const idles = [];
+  const rests = new Map();
+  const moving = new Map([['run', []]]);
   for (const [name, clip] of Object.entries(clips)) {
-    const direction = DIRECTIONS.indexOf(clip.direction ?? NAMED[name]);
-    if (!clip.loop || !(clip.speed > 0) || !(clip.duration > 0) || direction < 0) continue;
-    groups[direction].push(loops.length);
-    loops.push({ name, duration: clip.duration, speed: clip.speed, angle: ANGLES[direction], stride: clip.speed * clip.duration });
+    if (!clip.loop || !(clip.duration > 0)) continue;
+    const set = clip.set ?? 'run';
+    if (!(clip.speed > 0)) {
+      if (set === 'run' && name.startsWith('idle')) idles.push({ name, duration: clip.duration });
+      else if (set !== 'run' && !rests.has(set)) {
+        rests.set(set, loops.length);
+        loops.push({ name, duration: clip.duration, speed: 0, angle: 0, stride: 0, set, touch: null });
+      }
+      continue;
+    }
+    const angle = angleOf(name, clip);
+    if (angle === null) continue;
+    if (!moving.has(set)) moving.set(set, []);
+    moving.get(set).push(loops.length);
+    loops.push({
+      name, duration: clip.duration, speed: clip.speed, angle, stride: clip.speed * clip.duration, set,
+      touch: Number.isFinite(clip.touch) ? clip.touch : null,
+    });
   }
-  for (const group of groups) group.sort((a, b) => loops[a].speed - loops[b].speed);
-  for (let d = 1; d < groups.length; d++) if (!groups[d].length) groups[d] = groups[0];
-  const walk = groups[0].length ? loops[groups[0][0]].speed : 1.5;
-  return { loops, groups, walk, shuffle: SHUFFLE[1], lower: new Int32Array(4), upper: new Int32Array(4), t: new Float64Array(4), stride: new Float64Array(4) };
+  idles.sort((a, b) => (a.name === 'idle' ? -1 : b.name === 'idle' ? 1 : a.name < b.name ? -1 : 1));
+  const byAngle = (indices) => {
+    const found = [];
+    for (const i of indices) {
+      let dir = found.find(d => Math.abs(wrap(d.angle - loops[i].angle)) < SAME);
+      if (!dir) found.push(dir = { angle: loops[i].angle, own: [] });
+      dir.own.push(i);
+    }
+    for (const dir of found) dir.own.sort((a, b) => loops[a].speed - loops[b].speed);
+    return found;
+  };
+  const sorted = (dirs) => dirs.sort((a, b) => a.angle - b.angle);
+  // Run: its own directions, and forward's loops in any quarter it leaves empty.
+  const run = byAngle(moving.get('run')).map(({ angle, own }) => ({ angle, ladder: [0, ...own], borrowed: false }));
+  if (run.length) {
+    const ahead = run.reduce((best, dir) => (Math.abs(dir.angle) < Math.abs(best.angle) ? dir : best));
+    sorted(run);
+    for (let i = 0, n = run.length; i < n; i++) {
+      const from = run[i].angle;
+      const gap = i + 1 < n ? run[i + 1].angle - from : run[0].angle + TAU - from;
+      if (gap <= Math.PI / 2 + SAME) continue;
+      for (const axis of AXES) {
+        const into = around(axis - from);
+        if (into > SAME && into < gap - SAME) run.push({ angle: axis, ladder: ahead.ladder, borrowed: true });
+      }
+    }
+    sorted(run);
+  }
+  const sets = [{ name: 'run', rest: 0, dirs: run }];
+  for (const [name, indices] of moving) {
+    if (name === 'run') continue;
+    const rest = rests.get(name) ?? 0;
+    const own = byAngle(indices);
+    const dirs = run.map(({ angle, ladder }) => {
+      const mine = own.find(d => Math.abs(wrap(d.angle - angle)) < SAME);
+      if (!mine) return { angle, ladder: [rest, ...ladder.slice(1)] };
+      const slowest = loops[mine.own[0]].speed;
+      const fastest = loops[mine.own.at(-1)].speed;
+      const before = ladder.slice(1).filter(i => loops[i].speed < slowest);
+      const after = ladder.slice(1).filter(i => loops[i].speed > fastest);
+      return { angle, ladder: [rest, ...before, ...mine.own, ...after] };
+    });
+    for (const mine of own) {
+      if (!run.some(d => Math.abs(wrap(d.angle - mine.angle)) < SAME)) dirs.push({ angle: mine.angle, ladder: [rest, ...mine.own] });
+    }
+    sets.push({ name, rest, dirs: sorted(dirs) });
+  }
+  // A stance whose set has no moving loops still stands in for idle.
+  for (const [name, rest] of rests) if (!moving.has(name)) sets.push({ name, rest, dirs: run.map(({ angle, ladder }) => ({ angle, ladder: [rest, ...ladder.slice(1)] })) });
+  for (const set of sets) {
+    set.ahead = 0;
+    set.dirs.forEach((dir, i) => { if (Math.abs(dir.angle) < Math.abs(set.dirs[set.ahead].angle)) set.ahead = i; });
+  }
+  const forward = run.length ? run[sets[0].ahead].ladder : [0];
+  const walk = forward.length > 1 ? loops[forward[1]].speed : 1.5;
+  const scratch = 3; // the forward step and the two directions either side of the travel
+  return {
+    loops, idles, sets, walk, shuffle: SHUFFLE[1],
+    set: Object.fromEntries(sets.map((set, i) => [set.name, i])),
+    lower: new Int32Array(scratch), upper: new Int32Array(scratch), t: new Float64Array(scratch),
+    stride: new Float64Array(scratch), x: new Float64Array(scratch), y: new Float64Array(scratch),
+  };
 }
 
 // Blends the loops for a figure moving over the ground at `speed` m/s, travelling at
 // `travel` radians from the way it faces (anticlockwise, so +pi/2 is to its left), drawn
 // at `scale`. Writes each loop's weight into `weights` (indexed like `gait.loops`, summing
-// to 1) and returns the shared cycle's rate in cycles per second.
+// to 1) and returns the shared cycle's rate in cycles per second. `mix`, indexed like
+// `gait.sets`, gives each set but "run" its share (the rest is run's), and `stride` shifts
+// where along the speeds the loops blend: below 1 a figure takes shorter, quicker steps.
 //
-// Each direction blends the two loops either side of the speed (over the scale: a taller
-// figure's stride is longer). The directions share out so that the blended stride points
-// along the travel, and played at the returned rate that stride covers the ground at
-// exactly `speed`, so the planted foot stays put, whichever way it goes. Below a shuffle
-// the travel is ignored and the figure steps forwards; above it the blends cross-fade.
-export function blendLoops(gait, speed, travel, scale, weights) {
+// In each direction a set blends the two loops either side of the speed (over the scale:
+// a taller figure's stride is longer). The two directions either side of the travel share
+// out so that the blended stride points along the travel, and played at the returned rate
+// that stride covers the ground at exactly `speed`, so the planted foot stays put,
+// whichever way it goes. Sets blend the same way, their strides added by their shares.
+// Below a shuffle the travel is ignored and the figure steps forwards; above it the blends
+// cross-fade.
+export function blendLoops(gait, speed, travel, scale, weights, mix = null, stride = 1) {
   weights.fill(0);
-  if (!(speed > 0)) {
-    weights[0] = 1;
-    return 0;
-  }
-  const { loops, groups, lower, upper, t, stride } = gait;
+  const { sets } = gait;
+  let others = 0;
+  if (mix) for (let s = 1; s < sets.length; s++) if (mix[s] > 0) others += mix[s];
+  const norm = others > 1 ? 1 / others : 1;
+  const moving = speed > 0;
   const pace = speed / scale; // the speed a figure of scale 1 would move at
-  for (let d = 0; d < 4; d++) {
-    const group = groups[d];
-    if (!group.length) {
-      lower[d] = upper[d] = 0;
-      t[d] = 0;
-      stride[d] = 0;
-      continue;
-    }
-    let k = 0;
-    while (k < group.length && loops[group[k]].speed < pace) k++;
-    if (k === group.length) {
-      lower[d] = upper[d] = group[k - 1];
-      t[d] = 1;
-    } else {
-      lower[d] = k > 0 ? group[k - 1] : 0;
-      upper[d] = group[k];
-      const from = loops[lower[d]].speed;
-      t[d] = (pace - from) / (loops[upper[d]].speed - from);
-    }
-    stride[d] = loops[lower[d]].stride * (1 - t[d]) + loops[upper[d]].stride * t[d];
+  let length = 0;
+  for (let s = 0; s < sets.length; s++) {
+    const share = s === 0 ? Math.max(0, 1 - others) : mix && mix[s] > 0 ? mix[s] * norm : 0;
+    if (!(share > 0)) continue;
+    if (moving) length += share * blendSet(gait, sets[s], pace, travel, stride, weights, share);
+    else weights[sets[s].rest] += share;
   }
-  const across = ramp(pace, SHUFFLE[0], SHUFFLE[1]);
-  // Forwards, whatever the travel.
-  let length = (1 - across) * stride[0];
-  add(gait, weights, 0, 1 - across);
-  if (across > 0) {
-    // Along the travel: each direction's share of it over its stride, so the strides add
-    // up along the travel, and the blended stride is as long as their sum's reciprocal.
-    const c = Math.cos(travel);
-    const s = Math.sin(travel);
-    let total = 0;
-    for (let d = 0; d < 4; d++) {
-      const along = d === 0 ? c : d === 1 ? s : d === 2 ? -c : -s;
-      if (along > 0 && stride[d] > 0) total += along / stride[d];
-    }
-    if (total > 0) {
-      for (let d = 0; d < 4; d++) {
-        const along = d === 0 ? c : d === 1 ? s : d === 2 ? -c : -s;
-        if (along > 0 && stride[d] > 0) add(gait, weights, d, across * along / stride[d] / total);
-      }
-      // Loops borrowed from another direction keep its stride: count them along their own.
-      let dx = 0;
-      let dy = 0;
-      for (let d = 0; d < 4; d++) {
-        const along = d === 0 ? c : d === 1 ? s : d === 2 ? -c : -s;
-        if (!(along > 0 && stride[d] > 0)) continue;
-        const angle = loops[upper[d]].angle;
-        const share = along / stride[d] / total;
-        dx += share * stride[d] * Math.cos(angle);
-        dy += share * stride[d] * Math.sin(angle);
-      }
-      length += across * Math.hypot(dx, dy);
-    } else {
-      add(gait, weights, 0, across);
-      length += across * stride[0];
-    }
-  }
-  return length > 1e-9 ? speed / (scale * length) : 0;
+  return moving && length > 1e-9 ? speed / (scale * length) : 0;
 }
 
-function add(gait, weights, d, share) {
+// One set's part of the blend, weighted by `share`; returns its blended stride's length.
+function blendSet(gait, set, pace, travel, stride, weights, share) {
+  const { dirs } = set;
+  if (!dirs.length) {
+    weights[set.rest] += share;
+    return 0;
+  }
+  const select = pace * stride;
+  const across = ramp(pace, SHUFFLE[0], SHUFFLE[1]);
+  let length = 0;
+  // Forwards, whatever the travel.
+  if (across < 1) {
+    pick(gait, dirs[set.ahead].ladder, select, 0);
+    place(gait, weights, 0, share * (1 - across));
+    length += (1 - across) * gait.stride[0];
+  }
+  if (across > 0) {
+    // Along the travel: it is a sum of the directions either side, a.u + b.v, and each
+    // takes a share of the blend in proportion to its part over its stride, so the
+    // strides add up along the travel.
+    const n = dirs.length;
+    const heading = wrap(travel);
+    let a = n - 1;
+    for (let i = 0; i < n && dirs[i].angle <= heading; i++) a = i;
+    const b = (a + 1) % n;
+    const from = around(heading - dirs[a].angle);
+    const gap = n > 1 ? around(dirs[b].angle - dirs[a].angle) : TAU;
+    let alongA = 1;
+    let alongB = 0;
+    if (gap < Math.PI - SAME) {
+      alongA = Math.sin(gap - from) / Math.sin(gap);
+      alongB = Math.sin(from) / Math.sin(gap);
+    } else if (gap - from < from) {
+      alongA = 0;
+      alongB = 1;
+    }
+    pick(gait, dirs[a].ladder, select, 1);
+    pick(gait, dirs[b].ladder, select, 2);
+    const { stride: strides, x, y } = gait;
+    const wa = alongA > 0 && strides[1] > 0 ? alongA / strides[1] : 0;
+    const wb = alongB > 0 && strides[2] > 0 ? alongB / strides[2] : 0;
+    const total = wa + wb;
+    if (total > 0) {
+      place(gait, weights, 1, share * across * wa / total);
+      place(gait, weights, 2, share * across * wb / total);
+      // Loops borrowed from another direction keep its stride: count them along their own.
+      length += across * Math.hypot((wa * x[1] + wb * x[2]) / total, (wa * y[1] + wb * y[2]) / total);
+    } else weights[set.rest] += share * across;
+  }
+  return length;
+}
+
+// The two loops of `ladder` either side of `select` and how far between them it is, with
+// the stride they blend to, as a length and as a vector, into slot `j` of the scratch.
+function pick(gait, ladder, select, j) {
+  const { loops } = gait;
+  let k = 1;
+  while (k < ladder.length && loops[ladder[k]].speed < select) k++;
+  let lower;
+  let upper;
+  let t;
+  if (k === ladder.length) {
+    lower = upper = ladder[k - 1];
+    t = 1;
+  } else {
+    lower = ladder[k - 1];
+    upper = ladder[k];
+    const from = loops[lower].speed;
+    t = (select - from) / (loops[upper].speed - from);
+  }
+  const low = loops[lower];
+  const high = loops[upper];
+  gait.lower[j] = lower;
+  gait.upper[j] = upper;
+  gait.t[j] = t;
+  gait.stride[j] = low.stride * (1 - t) + high.stride * t;
+  gait.x[j] = low.stride * (1 - t) * Math.cos(low.angle) + high.stride * t * Math.cos(high.angle);
+  gait.y[j] = low.stride * (1 - t) * Math.sin(low.angle) + high.stride * t * Math.sin(high.angle);
+}
+
+function place(gait, weights, j, share) {
   if (!(share > 0)) return;
-  weights[gait.lower[d]] += share * (1 - gait.t[d]);
-  weights[gait.upper[d]] += share * gait.t[d];
+  weights[gait.lower[j]] += share * (1 - gait.t[j]);
+  weights[gait.upper[j]] += share * gait.t[j];
 }
 
 // The clip time of a one-shot whose moment of contact lands at u = 0 (s), first seen at
@@ -352,8 +479,8 @@ function measureReach(scene, clips, steps) {
     action.stop();
     if (Number.isFinite(most)) loop.reach = clamp(most, ...REACH_LIMITS);
   }
-  const slowest = steps.groups[0][0];
-  if (slowest !== undefined) steps.loops[0].reach = steps.loops[slowest].reach;
+  const forward = steps.sets[0].dirs[steps.sets[0].ahead]?.ladder;
+  if (forward?.length > 1) steps.loops[0].reach = steps.loops[forward[1]].reach;
 }
 
 // The clip `name` with only the tracks of `layer`'s bones, made once per figure.
