@@ -64,13 +64,18 @@ def test_two_built_in_managers_play_a_full_match_with_substitutions():
 
 def test_the_half_time_and_full_time_whistles_carry_the_score():
     staff = staffed(match=Match(half_length=60.0, seed=3))
+    staff.match.score = [2, 1]  # a score to carry even if the bots score no goals
     sent = play(staff)
     events = [m for m in sent if m["type"] == "event"]
     whistle = {m["kind"]: m for m in events if m["kind"] in ("half_time", "full_time")}
-    first_half = [m for m in events if m["kind"] == "goal" and m["t"] <= whistle["half_time"]["t"]]
-    assert whistle["half_time"]["score"] == [sum(g["team"] == team for g in first_half) for team in (0, 1)]
-    assert whistle["full_time"]["score"] == list(staff.match.score)
-    assert sum(whistle["full_time"]["score"]) == sum(m["kind"] == "goal" for m in events) > 0
+    goals = [m for m in events if m["kind"] == "goal"]
+
+    def score(at: float) -> list[int]:
+        return [[2, 1][team] + sum(g["team"] == team and g["t"] <= at for g in goals) for team in (0, 1)]
+
+    # each whistle carries the score at that moment, not a later one
+    assert whistle["half_time"]["score"] == score(whistle["half_time"]["t"])
+    assert whistle["full_time"]["score"] == score(whistle["full_time"]["t"]) == list(staff.match.score)
 
 
 def test_the_built_in_line_up_puts_no_more_on_a_local_model_than_it_answers_quickly():
