@@ -1156,21 +1156,21 @@ def celebrate_clip(solver):
         (0.45, {"hz": 0.0, "fLpitch": -40.0, "fRpitch": -40.0, "fLz": 0.0, "fRz": 0.0, "fLflat": 1.0, "fRflat": 1.0}),
         (0.50, {"fLflat": 1.0, "fRflat": 1.0}),
         (0.56, {"fLz": 0.08, "fRz": 0.08, "fLflat": 0.0, "fRflat": 0.0}),
-        (0.70, {"hz": 0.26, "hpitch": 0.0, "sflex": -6.0, "cflex": -10.0, "look_down": -28.0,
+        (0.70, {"hz": 0.26, "hpitch": 2.0, "sflex": 3.0, "cflex": -2.0, "look_down": -16.0,
                 "fLz": 0.26, "fRz": 0.22, "fLpitch": -45.0, "fRpitch": -40.0, "fLy": 0.06,
                 "aRflex": 172.0, "aRabd": 12.0, "aRelbow": 8.0, "aLflex": 40.0, "aLelbow": 120.0, "aLabd": 25.0}),
         (0.88, {"hz": 0.10, "fLz": 0.08, "fRz": 0.07, "fLy": 0.02}),
         (1.00, {"hz": -0.14, "fLz": 0.0, "fRz": 0.0, "fLpitch": -12.0, "fRpitch": -12.0, "fLflat": 1.0, "fRflat": 1.0,
                 "fLy": 0.01, "hpitch": 8.0, "sflex": 6.0, "look_down": -5.0}),
         (1.15, {"fLpitch": 0.0, "fRpitch": 0.0, "hz": -0.08}),
-        (1.50, {**up, "hz": -0.04, "hpitch": 0.0, "sflex": -4.0, "cflex": -10.0, "look_down": -22.0}),
+        (1.50, {**up, "hz": -0.04, "hpitch": 2.0, "sflex": 3.0, "cflex": -2.0, "look_down": -12.0}),
         (1.90, {"aLabd": 158.0, "aRabd": 146.0, "look_tilt": 6.0, "hz": -0.05}),
         (2.30, {"aLabd": 146.0, "aRabd": 156.0, "look_tilt": -4.0, "hz": -0.04}),
         (2.55, {**up}),
         (2.75, {"aLabd": 40.0, "aRabd": 40.0, "aLflex": 40.0, "aRflex": 40.0, "aLelbow": 120.0, "aRelbow": 120.0,
                 "hz": -0.09, "sflex": 10.0, "cflex": 2.0, "look_down": 5.0}),
-        (2.95, {"aLabd": 110.0, "aRabd": 110.0, "aLelbow": 70.0, "aRelbow": 70.0, "hz": -0.05, "sflex": 0.0,
-                "cflex": -6.0, "look_down": -15.0}),
+        (2.95, {"aLabd": 110.0, "aRabd": 110.0, "aLelbow": 70.0, "aRelbow": 70.0, "hz": -0.05, "sflex": 3.0,
+                "cflex": -1.0, "look_down": -8.0}),
         (3.15, {"aLabd": 40.0, "aRabd": 40.0, "aLelbow": 120.0, "aRelbow": 120.0, "hz": -0.09, "sflex": 10.0,
                 "cflex": 2.0, "look_down": 5.0}),
         (3.40, {"aLabd": 55.0, "aRabd": 55.0, "aLelbow": 60.0, "aRelbow": 60.0, "hz": -0.05}),
@@ -1403,7 +1403,7 @@ def cheer_clip(solver):
     end = 6.5
     up = {"aLabd": 155.0, "aRabd": 155.0, "aLflex": 20.0, "aRflex": 20.0, "aLelbow": 20.0, "aRelbow": 20.0,
           "aLpron": -30.0, "aRpron": -30.0}
-    keys = [(0.35, {**up, "hz": -0.05, "cflex": -8.0, "look_down": -18.0})]
+    keys = [(0.35, {**up, "hz": -0.05, "sflex": 2.0, "cflex": -2.0, "look_down": -12.0})]
     t = 0.35
     for i in range(3):  # three small jumps, arms up
         keys += [
@@ -1422,7 +1422,7 @@ def cheer_clip(solver):
             (t + 0.12, {"aLabd": 45.0, "aRabd": 45.0, "aLflex": 30.0, "aRflex": 30.0, "aLelbow": 125.0,
                         "aRelbow": 125.0, "hz": -0.08, "sflex": 10.0, "cflex": 2.0, "look_down": 4.0}),
             (t + 0.32, {"aLabd": 100.0, "aRabd": 100.0, "aLelbow": 80.0, "aRelbow": 80.0, "hz": -0.04,
-                        "sflex": 0.0, "cflex": -8.0, "look_down": -16.0}),
+                        "sflex": 2.0, "cflex": -2.0, "look_down": -10.0}),
         ]
         t += 0.55
     keys += [(5.85, {"aLabd": 40.0, "aRabd": 40.0, "aLelbow": 60.0, "aRelbow": 60.0, "hz": -0.04,
