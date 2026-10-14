@@ -29,8 +29,24 @@
   "backpedal": {
    "direction": "back",
    "duration": 0.5333,
+   "duty": 0.42,
    "loop": true,
    "speed": 2.5
+  },
+  "brake": {
+   "contact": 0.1,
+   "duration": 2.2333,
+   "loop": false,
+   "speeds": [
+    [
+     0.0,
+     7.5
+    ],
+    [
+     1.875,
+     0.0
+    ]
+   ]
   },
   "celebrate": {
    "duration": 4.0,
@@ -53,9 +69,122 @@
    "duration": 0.9,
    "loop": false
   },
+  "cross": {
+   "contact": 0.45,
+   "duration": 1.3333,
+   "loop": false
+  },
+  "cut_L": {
+   "contact": 0.22,
+   "duration": 0.8333,
+   "loop": false,
+   "speeds": [
+    [
+     0.0,
+     4.0
+    ],
+    [
+     0.22,
+     4.0
+    ],
+    [
+     0.3492,
+     3.61
+    ],
+    [
+     0.4783,
+     3.49
+    ],
+    [
+     0.6783,
+     3.37
+    ],
+    [
+     0.8333,
+     3.4
+    ]
+   ],
+   "turn": 60.0,
+   "turning": [
+    0.22,
+    0.4783
+   ]
+  },
+  "cut_R": {
+   "contact": 0.22,
+   "duration": 0.8333,
+   "loop": false,
+   "speeds": [
+    [
+     0.0,
+     4.0
+    ],
+    [
+     0.22,
+     4.0
+    ],
+    [
+     0.3492,
+     3.61
+    ],
+    [
+     0.4783,
+     3.49
+    ],
+    [
+     0.6783,
+     3.37
+    ],
+    [
+     0.8333,
+     3.4
+    ]
+   ],
+   "turn": -60.0,
+   "turning": [
+    0.22,
+    0.4783
+   ]
+  },
   "despair": {
    "duration": 5.5,
    "loop": false
+  },
+  "dribble": {
+   "direction": "forward",
+   "duration": 0.5333,
+   "duty": 0.32,
+   "loop": true,
+   "set": "dribble",
+   "speed": 4.0,
+   "touch": 0.4
+  },
+  "dribble_fast": {
+   "direction": "forward",
+   "duration": 0.4667,
+   "duty": 0.27,
+   "loop": true,
+   "set": "dribble",
+   "speed": 6.0,
+   "touch": 0.4
+  },
+  "dribble_slow": {
+   "direction": "forward",
+   "duration": 0.7,
+   "duty": 0.4,
+   "loop": true,
+   "set": "dribble",
+   "speed": 2.0,
+   "touch": 0.4
+  },
+  "dribble_sprint": {
+   "direction": "forward",
+   "duration": 0.4667,
+   "duty": 0.22,
+   "loop": true,
+   "set": "dribble",
+   "speed": 7.5,
+   "touch": 0.4
   },
   "header": {
    "contact": 0.56,
@@ -66,15 +195,146 @@
    "duration": 3.0,
    "loop": true
   },
+  "idle_hips": {
+   "duration": 4.0,
+   "loop": true
+  },
+  "idle_look": {
+   "duration": 4.5,
+   "loop": true
+  },
+  "idle_shift": {
+   "duration": 4.0,
+   "loop": true
+  },
   "instruct": {
    "duration": 2.8,
    "loop": false
   },
+  "jockey": {
+   "duration": 1.2,
+   "loop": true,
+   "set": "jockey"
+  },
+  "jockey_B": {
+   "direction": "back",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_BL": {
+   "direction": "back_left",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_BR": {
+   "direction": "back_right",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_L": {
+   "direction": "left",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_R": {
+   "direction": "right",
+   "duration": 0.5333,
+   "duty": 0.45,
+   "loop": true,
+   "set": "jockey",
+   "speed": 1.2
+  },
+  "jockey_run_B": {
+   "direction": "back",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
+  "jockey_run_BL": {
+   "direction": "back_left",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
+  "jockey_run_BR": {
+   "direction": "back_right",
+   "duration": 0.4667,
+   "duty": 0.32,
+   "loop": true,
+   "set": "jockey",
+   "speed": 2.6
+  },
   "jog": {
    "direction": "forward",
    "duration": 0.7333,
+   "duty": 0.3,
    "loop": true,
    "speed": 3.5
+  },
+  "jog_B": {
+   "direction": "back",
+   "duration": 0.4,
+   "duty": 0.36,
+   "loop": true,
+   "speed": 3.6
+  },
+  "jog_BL": {
+   "direction": "back_left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_BR": {
+   "direction": "back_right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_FL": {
+   "direction": "forward_left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_FR": {
+   "direction": "forward_right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_L": {
+   "direction": "left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_R": {
+   "direction": "right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
   },
   "keeper_catch": {
    "contact": 0.32,
@@ -101,9 +361,43 @@
    "duration": 1.1,
    "loop": false
   },
+  "pass_lofted": {
+   "contact": 0.42,
+   "duration": 1.2667,
+   "loop": false
+  },
   "protest": {
    "duration": 2.6,
    "loop": false
+  },
+  "shield": {
+   "duration": 2.4,
+   "loop": true,
+   "set": "shield"
+  },
+  "shield_B": {
+   "direction": "back",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
+  },
+  "shield_L": {
+   "direction": "left",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
+  },
+  "shield_R": {
+   "direction": "right",
+   "duration": 0.6,
+   "duty": 0.5,
+   "loop": true,
+   "set": "shield",
+   "speed": 1.0
   },
   "shot": {
    "contact": 0.45,
@@ -113,19 +407,24 @@
   "sprint": {
    "direction": "forward",
    "duration": 0.4667,
+   "duty": 0.22,
    "loop": true,
    "speed": 7.2
   },
   "strafe_L": {
    "direction": "left",
    "duration": 0.5333,
+   "duty": 0.3,
    "loop": true,
+   "set": "jockey",
    "speed": 2.5
   },
   "strafe_R": {
    "direction": "right",
    "duration": 0.5333,
+   "duty": 0.3,
    "loop": true,
+   "set": "jockey",
    "speed": 2.5
   },
   "tackle": {
@@ -133,14 +432,87 @@
    "duration": 1.5,
    "loop": false
   },
+  "tackle_standing": {
+   "contact": 0.32,
+   "duration": 1.0,
+   "loop": false
+  },
   "throw_in": {
    "contact": 0.6,
    "duration": 1.4,
    "loop": false
   },
+  "turn_L": {
+   "duration": 0.9,
+   "loop": false,
+   "turn": 90.0,
+   "turning": [
+    0.0,
+    0.3
+   ]
+  },
+  "turn_R": {
+   "duration": 0.9,
+   "loop": false,
+   "turn": -90.0,
+   "turning": [
+    0.0,
+    0.3
+   ]
+  },
   "walk": {
    "direction": "forward",
    "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_B": {
+   "direction": "back",
+   "duration": 0.8,
+   "duty": 0.58,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_BL": {
+   "direction": "back_left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_BR": {
+   "direction": "back_right",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_FL": {
+   "direction": "forward_left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_FR": {
+   "direction": "forward_right",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_L": {
+   "direction": "left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_R": {
+   "direction": "right",
+   "duration": 1.0667,
+   "duty": 0.62,
    "loop": true,
    "speed": 1.4
   }

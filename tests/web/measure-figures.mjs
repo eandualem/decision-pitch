@@ -2,7 +2,9 @@
 // touchline figures (two managers, four assistants) built from the exported figure, moved
 // for a few seconds of synthetic play with kicks, a dive, a goal and the managers' gestures.
 //
-//   node --import ./tests/web/three-resolve.mjs tests/web/measure-figures.mjs [figure dir] [frames]
+//   node --import ./tests/web/three-resolve.mjs tests/web/measure-figures.mjs [figure dir] [frames] [--no-lock]
+//
+// --no-lock leaves the players' feet unlocked (figures.js), to measure what the lock costs.
 //
 // Reports the draw calls the renderer would make for them (every figure in view, plus the
 // shadow pass), their triangles, the skeletons uploaded per frame, and the CPU time of a
@@ -12,8 +14,10 @@ import { readFileSync } from 'node:fs';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
 
 const web = new URL('../../src/decision_pitch/web/', import.meta.url);
-const dir = process.argv[2] ? new URL(`${process.argv[2].replace(/\/?$/, '/')}`, `file://${process.cwd()}/`) : new URL('figures/', web);
-const frames = Number(process.argv[3] ?? 900);
+const args = process.argv.slice(2).filter(arg => arg !== '--no-lock');
+const footLock = !process.argv.includes('--no-lock');
+const dir = args[0] ? new URL(`${args[0].replace(/\/?$/, '/')}`, `file://${process.cwd()}/`) : new URL('figures/', web);
+const frames = Number(args[1] ?? 900);
 
 const context2d = {
   measureText: (text) => ({ width: text.length * 28 }), beginPath() {}, roundRect() {}, fill() {}, fillRect() {},
@@ -43,7 +47,7 @@ const teams = [0, 1].map(team => {
   };
 });
 const scene = new THREE.Scene();
-const players = createPlayers(scene, teams, figure);
+const players = createPlayers(scene, teams, figure, { footLock });
 const touchline = createTouchline(scene, teams, PITCH, figure);
 const onPitch = teams.flatMap(team => team.players);
 

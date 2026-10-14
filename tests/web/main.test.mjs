@@ -32,6 +32,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     ballPosition: { x: 1, y: 2, z: 3 },
     update: (...args) => calls.push(['actors.update', ...args]),
     handleEvent: (...args) => calls.push(['actors.event', ...args]),
+    handleDecision: (...args) => calls.push(['actors.decision', ...args]),
     showNumbers: (...args) => calls.push(['actors.numbers', ...args]),
     dispose: () => calls.push(['actors.dispose']),
   });
@@ -163,7 +164,7 @@ test('events wait for the drawn match to reach them; decisions and managers do n
   app.send({ type: 'manager', team: 0, kind: 'instruction', player: 9, text: 'Press' });
   const routed = app.calls.slice(before).map(([name, message]) => [name, message.type]);
   assert.deepEqual(routed, [
-    ['overlay.message', 'decision'], ['overlay.message', 'manager'], ['touchline.message', 'manager'],
+    ['actors.decision', 'decision'], ['overlay.message', 'decision'], ['overlay.message', 'manager'], ['touchline.message', 'manager'],
     ['camera.message', 'manager'],
   ]);
   const advice = named(app.calls, 'camera.message').at(-1);

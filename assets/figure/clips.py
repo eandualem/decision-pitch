@@ -38,7 +38,10 @@ import math
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-FPS = 30
+import compact
+
+FPS = 30  # clips are timed in frames of 1/30 s
+KEYS = 2  # and keyed this many times a frame, so a quick foot's arc survives the linear interpolation
 
 X = Vector((1.0, 0.0, 0.0))
 Y = Vector((0.0, 1.0, 0.0))
@@ -569,6 +572,8 @@ class Gait:
     def foot_channels(self, s, t):
         """The channels of foot `s` at time t after its own touchdown."""
         t = t % self.T
+        if self.T - t < 1e-9:
+            t = 0.0  # a touchdown, however the arithmetic rounds it
         ts = self.duty * self.T
         if t <= ts:
             return self._stance_channels(s, t)
@@ -581,6 +586,8 @@ class Gait:
             # Toes come flat again as a forefoot landing nears the grass.
             toe = lerp(toe, -land_pitch, smoothstep((k - 0.8) / 0.2))
             flat = max(flat, smoothstep((k - 0.8) / 0.2))
+        else:
+            toe = lerp(toe, 0.0, smoothstep((k - 0.8) / 0.2))  # and straight for a heel landing
         return {
             f"f{s}x": 0.0, f"f{s}y": 0.0, f"f{s}z": 0.0,
             f"f{s}yaw": self.yaw[s], f"f{s}pitch": self.pitch(t / self.T),
@@ -638,7 +645,7 @@ def trunk_cycle(u, duty, hz, bob, run, sway, hyaw, hroll, hpitch, lean, chest_ya
 
 
 class Clip:
-    def __init__(self, name, frames, sample, loop, speed=None, direction=None, contact=None):
+    def __init__(self, name, frames, sample, loop, speed=None, direction=None, contact=None, duty=None, **info):
         self.name = name
         self.direction = direction
         self.frames = frames
@@ -646,6 +653,8 @@ class Clip:
         self.loop = loop
         self.speed = speed
         self.contact = contact
+        self.duty = duty  # a loop's share of the cycle each foot is on the grass
+        self.info = info  # more of figure.json's description
 
     def meta(self):
         out = {"loop": self.loop, "duration": round(self.frames / FPS, 4)}
@@ -654,6 +663,9 @@ class Clip:
             out["direction"] = self.direction
         if self.contact is not None:
             out["contact"] = round(self.contact, 4)
+        if self.duty is not None:
+            out["duty"] = round(self.duty, 4)
+        out.update(self.info)
         return out
 
 
@@ -700,6 +712,88 @@ def idle_clip(solver):
     return Clip("idle", frames, sample, loop=True)
 
 
+def _held(u, peak, sharp=0.45):
+    """A wave over the cycle that holds near +1 around `peak` and -1 half a cycle on."""
+    c = math.cos(2.0 * math.pi * (u - peak))
+    return math.copysign(abs(c) ** sharp, c)
+
+
+def _standing(p, u, weight, look=0.0):
+    """Feet planted in the stance, the weight `weight` (-1 right .. 1 left) over a foot:
+    the pelvis over it and dropping on the other side, the free knee bending as its heel
+    lifts, the trunk balancing it."""
+    p.update({"fLx": 0.13, "fLy": 0.01, "fLyaw": 9.0, "fRx": -0.13, "fRy": -0.01, "fRyaw": -9.0,
+              "hx": 0.045 * weight, "hy": wave(u, 0.6, 0.006),
+              "hz": -0.035 - 0.012 * abs(weight) + wave2(u, 0.25, 0.003),
+              "hroll": 4.5 * weight, "hyaw": 2.0 * weight + wave(u, 0.1, 1.0), "hpitch": 2.0,
+              "sside": -2.5 * weight, "cside": -1.0 * weight, "sflex": 1.0 + wave(u, 0.0, 0.6), "cflex": -1.0,
+              "fLpitch": -7.0 * max(0.0, -weight), "fRpitch": -7.0 * max(0.0, weight),
+              "kLout": 6.0 + 6.0 * max(0.0, -weight), "kRout": 6.0 + 6.0 * max(0.0, weight)})
+    return p
+
+
+def idle_shift_clip(solver):
+    """Standing, shifting the weight from one leg to the other and back, looking about."""
+    frames = 120
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        p = _standing(dict(NEUTRAL), u, _held(u, 0.2))
+        p.update({"look_yaw": wave(u, 0.45, 14.0) + wave2(u, 0.1, 3.0), "look_down": 3.0 + wave(u, 0.8, 3.0),
+                  "look_tilt": wave(u, 0.3, 2.0) - 2.0 * _held(u, 0.2)})
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}elev": wave(u, 0.0, 1.0), f"a{side}flex": 3.0 + wave(u, 0.3 if side == "L" else 0.8, 2.5),
+                      f"a{side}abd": 9.0 + 1.5 * sign * _held(u, 0.2), f"a{side}elbow": 16.0 + wave(u, 0.4, 4.0),
+                      f"a{side}twist": 4.0, f"a{side}pron": 15.0, f"a{side}wrist": 6.0})
+        return p
+
+    return Clip("idle_shift", frames, sample, loop=True)
+
+
+def idle_hips_clip(solver):
+    """Hands on the hips, chest up, breathing, the weight settling on one leg and back."""
+    frames = 120
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        weight = 0.6 * _held(u, 0.3, 0.6)
+        p = _standing(dict(NEUTRAL), u, weight)
+        breath = wave(4.0 * u, 0.0)  # four breaths a cycle
+        p.update({"cflex": -3.0 - 1.0 * breath, "sflex": 0.0, "look_down": 0.0 + wave(u, 0.6, 3.0),
+                  "look_yaw": wave(u, 0.15, 10.0), "look_tilt": -1.5 * weight})
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}ik": 1.0, f"a{side}ix": 0.215 * sign + 0.01 * breath * sign,
+                      f"a{side}iy": 0.03, f"a{side}iz": 1.0 - 0.01 * abs(weight),
+                      f"a{side}pole": 75.0, f"a{side}pron": 40.0, f"a{side}wrist": 25.0,
+                      f"a{side}elev": 1.5 * breath})
+        return p
+
+    return Clip("idle_hips", frames, sample, loop=True)
+
+
+def idle_look_clip(solver):
+    """Looking back over the left shoulder, then the right, the chest turning with the head."""
+    frames = 135
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        look = smoothstep(1.0 - abs(u - 0.28) / 0.18) - smoothstep(1.0 - abs(u - 0.76) / 0.16)
+        p = _standing(dict(NEUTRAL), u, 0.5 * _held(u, 0.28, 0.8))
+        p.update({"look_yaw": 72.0 * look, "look_down": 2.0 - 4.0 * abs(look), "look_tilt": 3.0 * look})
+        p["hyaw"] += 8.0 * look
+        p["stwist"] = 9.0 * look
+        p["ctwist"] = 14.0 * look
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}flex": 3.0 - 6.0 * look * sign, f"a{side}abd": 9.0, f"a{side}elbow": 18.0,
+                      f"a{side}twist": 4.0, f"a{side}pron": 15.0, f"a{side}wrist": 6.0})
+        return p
+
+    return Clip("idle_look", frames, sample, loop=True)
+
+
 def walk_clip(solver):
     path_L = [(0.3, (0.085, 0.27, 0.20)), (0.6, (0.09, -0.06, 0.125)), (0.85, (0.085, -0.36, 0.12))]
     gait = Gait(
@@ -715,7 +809,7 @@ def walk_clip(solver):
             **arm_swing(u, -2.0, 17.0, 28.0, 10.0, abd=7.0, twist=4.0, pron=10.0),
         },
     )
-    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 def jog_clip(solver):
@@ -733,7 +827,7 @@ def jog_clip(solver):
             **arm_swing(u, -5.0, 35.0, 88.0, 14.0, abd=13.0, twist=-2.0),
         },
     )
-    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 def sprint_clip(solver):
@@ -753,7 +847,7 @@ def sprint_clip(solver):
             **arm_swing(u, -2.0, 50.0, 90.0, 16.0, abd=12.0, twist=-4.0),
         },
     )
-    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 
@@ -772,51 +866,14 @@ def backpedal_clip(solver):
             **arm_swing(u, 8.0, 20.0, 78.0, 8.0, abd=16.0, twist=4.0),
         },
     )
-    return Clip("backpedal", gait.frames, gait, loop=True, speed=gait.speed, direction="back")
+    return Clip("backpedal", gait.frames, gait, loop=True, speed=gait.speed, direction="back", duty=gait.duty)
 
 
 def strafe_clip(solver, side):
-    """A side-step towards `side`, the leading foot reaching out and the other closing."""
-    lead, trail = ("L", "R") if side == "L" else ("R", "L")
-    m = 1.0 if side == "L" else -1.0  # +X is the figure's left
-    land = {lead: (0.38 * m, -0.01), trail: (-0.08 * m, 0.01)}
-    paths = {
-        lead: [(0.25, (0.10 * m, 0.0, 0.19)), (0.55, (0.25 * m, -0.02, 0.23)), (0.85, (0.36 * m, -0.01, 0.17))],
-        trail: [(0.25, (-0.44 * m, 0.0, 0.19)), (0.55, (-0.28 * m, 0.02, 0.23)), (0.85, (-0.12 * m, 0.01, 0.17))],
-    }
-    # The left foot always lands at phase 0: when it trails, the body's cycle is offset.
-    shift = 0.0
-
-    def body(u):
-        v = (u + shift) % 1.0
-        p = trunk_cycle(v, 0.30, hz=-0.115, bob=0.012, run=True, sway=0.0, hyaw=2.0, hroll=2.0,
-                        hpitch=6.0, lean=8.0, chest_yaw=3.0, look_down=0.0, flex_bob=0.8)
-        p["hx"] = 0.02 * m
-        p["kLout"] = p["kRout"] = 12.0
-        p["sside"] += 2.0 * m
-        p["look_yaw"] = 0.0
-        for s, sign in (("L", 1.0), ("R", -1.0)):
-            p.update({
-                f"a{s}flex": 14.0 + wave2(v, 0.15, 3.0),
-                f"a{s}abd": 22.0 + wave2(v, 0.1, 6.0) * (1.0 if s == lead else -0.5),
-                f"a{s}elbow": 72.0 + wave2(v, 0.2, 6.0),
-                f"a{s}twist": 8.0,
-                f"a{s}pron": 25.0,
-                f"a{s}wrist": 6.0,
-            })
-        return p
-
-    gait = Gait(
-        solver, frames=16, speed=2.5, direction=X * m, duty=0.30,
-        land=land,
-        yaw={"L": 6.0, "R": -6.0},
-        stance_pitch=[(0.0, -8.0), (0.25, 0.0), (0.6, 0.0), (1.0, -24.0)],
-        swing_pitch=[(0.3, -20.0), (0.6, -12.0), (0.85, -9.0)],
-        swing_path=paths,
-        body=body,
-    )
-    return Clip(f"strafe_{side}", gait.frames, gait, loop=True, speed=gait.speed,
-                direction="left" if side == "L" else "right")
+    """A quick side shuffle towards `side` in the jockeying stance, the leading foot reaching
+    out and the other closing up to it: footwork for defending, so it is in that set."""
+    return JOCKEY.shuffle(solver, f"strafe_{side}", "jockey", 90.0 if side == "L" else -90.0, 2.5, 16, 0.30,
+                          height=0.19)
 
 
 def strafe_L_clip(solver):
@@ -825,6 +882,782 @@ def strafe_L_clip(solver):
 
 def strafe_R_clip(solver):
     return strafe_clip(solver, "R")
+
+
+# --------------------------------------------------------------------------
+# Loops in every direction. The page blends the loops of the two directions either
+# side of the way a player travels against the way it faces, so each direction
+# has a loop at a walk and at a jog. Off to the side and back on a diagonal the
+# player opens its hips towards the travel and steps across, the chest turned
+# half as far and the head still on the play, as a player keeping its shape while
+# watching the ball does: every direction but straight back then steps alike and
+# blends with its neighbours. Straight back is a backward walk or a backpedal.
+# Each is made for the figure's left and mirrored for its right.
+
+ANGLES = {"forward": 0.0, "forward_left": 45.0, "left": 90.0, "back_left": 135.0,
+          "back": 180.0, "back_right": -135.0, "right": -90.0, "forward_right": -45.0}
+NAMES = {0.0: "forward", 45.0: "forward_left", 90.0: "left", 135.0: "back_left", 180.0: "back",
+         -45.0: "forward_right", -90.0: "right", -135.0: "back_right"}
+MIRRORED = {"forward_left": "forward_right", "left": "right", "back_left": "back_right"}
+HIPS = {45.0: 22.0, 90.0: 55.0, 135.0: 80.0}  # how far the pelvis opens towards the travel
+
+
+def heading(angle):
+    """The unit vector `angle` degrees anticlockwise from the way the figure faces."""
+    a = math.radians(angle)
+    return Vector((math.sin(a), -math.cos(a), 0.0))
+
+
+def steps(angle, speed, frames, duty, ahead, width, hips=0.0, spread=0.0, swing=(), out=0.0):
+    """Where both feet land and how they swing, for a loop travelling at `angle`.
+
+    Each foot keeps to its own side of the pelvis, turned `hips` degrees: `width`
+    out along the pelvis's side-to-side axis, then `spread` further across the
+    travel, so feet passing on a diagonal clear each other. A foot lands `ahead`
+    of that point along the travel and is carried back `speed * duty * T` on the
+    grass. `swing` lists (k, along, z): at fraction k of the swing the ankle is
+    `along` of the way from where it lifted to where it lands (more than 1
+    reaches past it) and `z` high, for both feet or as {side: [...]}; `out`
+    takes it that much wider of the other foot, and a fourth number moves that
+    point across the travel, to its left. Returns `land` and `swing_path` for
+    Gait, in root space.
+    """
+    d = heading(angle)
+    n = heading(angle + 90.0)  # across the travel, to its left
+    side = rot(Z, hips) @ X
+    across = math.copysign(1.0, side.dot(n))
+    stance = speed * duty * frames / FPS
+    land, paths = {}, {}
+    for s, sign in (("L", 1.0), ("R", -1.0)):
+        base = side * (width * sign) + n * (spread * across * sign)
+        on = base + d * ahead
+        off = on - d * stance
+        land[s] = (on.x, on.y)
+        paths[s] = []
+        for k, along, z, *aside in (swing[s] if isinstance(swing, dict) else swing):
+            point = off.lerp(on, along) + n * (out * across * sign + sum(aside))
+            paths[s].append((k, (point.x, point.y, z)))
+    return land, paths
+
+
+def turned(p, hips, chest):
+    """Turn the pelvis `hips` degrees and the chest to `chest` degrees from the way the
+    figure faces (towards its left is positive), the head still looking that way. The
+    pelvis's sway and surge turn with it."""
+    p["hyaw"] += hips
+    twist = chest - hips
+    p["stwist"] += 0.4 * twist
+    p["ctwist"] += 0.6 * twist
+    shift = rot(Z, hips) @ Vector((p["hx"], p["hy"], 0.0))
+    p["hx"], p["hy"] = shift.x, shift.y
+    return p
+
+
+def mirrored(clip, name, direction):
+    """A loop mirrored left to right, half a cycle on so that its left foot still lands first."""
+    shift = clip.frames / FPS / 2.0
+    return Clip(name, clip.frames, lambda t: mirror(clip.sample(t + shift)), loop=True, speed=clip.speed,
+                direction=direction, duty=clip.duty, **clip.info)
+
+
+def walk_turned_clip(solver, angle, name):
+    """A walk on a diagonal or to the side: the pelvis and feet turn towards the travel,
+    the shoulders half as far and the head not at all."""
+    frames, duty, speed = 32, 0.62, 1.4
+    hips = HIPS[angle]
+    across = angle - hips  # the travel against the pelvis
+    land, paths = steps(angle, speed, frames, duty, ahead=0.34, width=0.075, hips=hips, spread=0.04,
+                        swing=[(0.3, 0.35, 0.20), (0.6, 0.71, 0.125), (0.85, 1.03, 0.12)], out=0.012)
+    toes = hips + 0.65 * across  # the feet point nearly along the travel
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.045 - 0.03 * hips / 80.0, bob=0.016, run=False, sway=0.022, hyaw=6.0, hroll=4.0,
+                        hpitch=2.0, lean=3.0, chest_yaw=8.0, look_down=6.0, flex_bob=0.7)
+        p.update(arm_swing(u, -2.0, 17.0, 28.0, 10.0, abd=7.0, twist=4.0, pron=10.0))
+        return turned(p, hips, 0.5 * hips)
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+        yaw={"L": 7.0 + toes, "R": -7.0 + toes},
+        stance_pitch=[(0.0, 14.0), (0.12, 0.0), (0.45, 0.0), (0.65, -8.0), (0.85, -26.0), (1.0, -52.0)],
+        swing_pitch=[(0.15, -38.0), (0.45, -6.0), (0.75, 6.0), (0.95, 12.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty)
+
+
+def jog_turned_clip(solver, angle, name):
+    """A jog on a diagonal or to the side, turned like the walk and leaning into the travel."""
+    frames, duty, speed = 21, 0.30, 4.0
+    hips = HIPS[angle]
+    across = angle - hips
+    land, paths = steps(angle, speed, frames, duty, ahead=0.27, width=0.06, hips=hips,
+                        spread=0.035 + 0.02 * hips / 80.0, out=0.02,
+                        swing=[(0.25, 0.13, 0.33), (0.5, 0.545, 0.42), (0.78, 1.14, 0.26)])
+    toes = hips + 0.65 * across
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.07 - 0.03 * hips / 80.0, bob=0.024, run=True, sway=0.012, hyaw=7.0, hroll=4.0,
+                        hpitch=4.0, lean=9.0, chest_yaw=9.0, look_down=2.0)
+        p["sside"] += 0.4 * 9.0 * math.sin(math.radians(across))
+        p.update(arm_swing(u, -5.0, 36.0 - 0.1 * hips, 88.0, 14.0, abd=13.0, twist=-2.0))
+        return turned(p, hips, 0.5 * hips)
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+        yaw={"L": 5.0 + toes, "R": -5.0 + toes},
+        stance_pitch=[(0.0, 4.0), (0.12, 0.0), (0.45, 0.0), (0.75, -25.0), (1.0, -62.0)],
+        swing_pitch=[(0.2, -60.0), (0.5, -30.0), (0.8, 0.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty)
+
+
+def walk_B_clip(solver):
+    """A walk backwards: the foot reaches back and lands on the ball, rolls flat and
+    leaves from the heel."""
+    frames, duty, speed = 24, 0.58, 1.4
+    land, paths = steps(180.0, speed, frames, duty, ahead=0.40, width=0.085,
+                        swing=[(0.3, 0.22, 0.14), (0.6, 0.66, 0.16), (0.85, 1.03, 0.13)], out=0.01)
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.07, bob=0.012, run=False, sway=0.02, hyaw=-4.0, hroll=3.0,
+                        hpitch=3.0, lean=4.0, chest_yaw=-5.0, look_down=4.0, flex_bob=0.6)
+        p.update(arm_swing(u, 2.0, -12.0, 30.0, 8.0, abd=9.0, twist=4.0, pron=10.0))
+        return p
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(180.0), duty=duty, land=land,
+        yaw={"L": 8.0, "R": -8.0},
+        stance_pitch=[(0.0, -16.0), (0.2, 0.0), (0.75, 0.0), (1.0, 10.0)],
+        swing_pitch=[(0.25, 6.0), (0.6, -8.0), (0.9, -16.0)],
+        swing_path=paths, body=body, drop=0.3,
+    )
+    return Clip("walk_B", frames, gait, loop=True, speed=speed, direction="back", duty=duty)
+
+
+def jog_B_clip(solver):
+    """A quick backpedal at a jog, low, on the balls of the feet, leaning over them."""
+    frames, duty, speed = 12, 0.36, 3.6
+    land, paths = steps(180.0, speed, frames, duty, ahead=0.22, width=0.09,
+                        swing=[(0.3, 0.18, 0.21), (0.6, 0.68, 0.26), (0.85, 1.04, 0.19)], out=0.008)
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.10, bob=0.016, run=True, sway=0.012, hyaw=4.0, hroll=3.0,
+                        hpitch=7.0, lean=12.0, chest_yaw=5.0, look_down=-6.0, flex_bob=1.0)
+        p.update(arm_swing(u, 10.0, 24.0, 82.0, 8.0, abd=16.0, twist=4.0))
+        return p
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(180.0), duty=duty, land=land,
+        yaw={"L": 8.0, "R": -8.0},
+        stance_pitch=[(0.0, -16.0), (0.3, -4.0), (0.7, -4.0), (1.0, -18.0)],
+        swing_pitch=[(0.3, -22.0), (0.6, -30.0), (0.85, -22.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip("jog_B", frames, gait, loop=True, speed=speed, direction="back", duty=duty)
+
+
+# --------------------------------------------------------------------------
+# Running with the ball. The page carries the ball ahead of the feet and meets it
+# with the right boot at each dribble loop's `touch`: the phase at which the right
+# toe reaches furthest ahead, low, as it swings through to plant at half the
+# cycle. The toe meets the ball about where the engine carries it.
+
+TOUCH = 0.4
+TOUCH_REACH = 0.48  # m ahead of the root the right toe reaches at the touch: the ball's back
+TOUCH_HEIGHT = 0.07  # m: the toe's height there, on the back of the ball and clear of the grass
+
+
+def dribble_clip(solver, name, speed, frames, duty, ahead, low, lean, look, arms, angle=0.0, hips=0.0,
+                 lift=0.28, aside=-0.02):
+    """Running with the ball at the feet: shorter, quicker strides than the run, knees
+    bent, the body over the ball and the eyes on it, the arms out for balance. The
+    right foot swings through low and reaches furthest ahead at TOUCH, at the back of
+    the ball (`aside` of the line the figure faces along), then pulls back a little to
+    plant at half the cycle."""
+    k = (TOUCH + 0.5 - duty) / (1.0 - duty)  # how far through its swing the right foot is at the touch
+    hold = 0.04  # of the swing: the toe holds its furthest reach this long either side of the touch
+    swing = {
+        "L": [(0.25, 0.13, lift), (0.5, 0.55, lift + 0.03), (0.78, 1.08, 0.20)],
+        "R": [(0.25, 0.13, lift), (0.55, 0.6, 0.20), (k - hold, 1.15, 0.10, 0.0), (k + hold, 1.15, 0.10, 0.0)],
+    }
+
+    def make(swing):
+        land, paths = steps(angle, speed, frames, duty, ahead=ahead, width=0.065, hips=hips, spread=0.02 if hips else 0.0,
+                            swing=swing, out=0.015)
+        across = angle - hips
+        toes = hips + 0.65 * across
+
+        def body(u):
+            p = trunk_cycle(u, duty, hz=-low, bob=0.018, run=True, sway=0.016, hyaw=5.0, hroll=4.0,
+                            hpitch=6.0, lean=lean, chest_yaw=6.0, look_down=look, flex_bob=1.2)
+            p.update(arm_swing(u, -2.0, arms[0], 84.0, 10.0, abd=arms[1], twist=-4.0))
+            return turned(p, hips, 0.5 * hips) if hips else p
+
+        return Gait(
+            solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+            yaw={"L": 6.0 + toes, "R": -6.0 + toes},
+            stance_pitch=[(0.0, 2.0), (0.15, 0.0), (0.45, 0.0), (0.75, -22.0), (1.0, -55.0)],
+            swing_pitch=[(0.2, -55.0), (0.5, -25.0), (0.8, -4.0), (0.95, 0.0)],
+            swing_path=paths, body=body, drop=1.2,  # the feet come down steeply, not skimming in
+        )
+
+    # Aim the right toe at the back of the ball at the touch, as `aim` does for a kick.
+    tip = solver.sk.tail["toe_R"]
+    target = Vector((aside, -TOUCH_REACH, TOUCH_HEIGHT))
+    d, n = heading(angle), heading(angle + 90.0)
+    span = speed * duty * frames / FPS
+    for _ in range(4):
+        gait = make(swing)
+        err = target - solver.solve(gait(TOUCH * gait.T)).point("toe_R", tip)
+        for i in (-2, -1):
+            at, along, z, across = swing["R"][i]
+            swing["R"][i] = (at, along + err.dot(d) / span, z + err.z, across + err.dot(n))
+    gait = make(swing)
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES.get(angle, "forward"), duty=duty,
+                set="dribble", touch=TOUCH)
+
+
+def dribble_clips(solver):
+    """Close control at a jog, carrying it at a run and at pace, and the knock-on at a sprint,
+    the eyes coming up off the ball as the pace rises."""
+    return [
+        dribble_clip(solver, "dribble_slow", 2.0, 21, 0.40, ahead=0.20, low=0.11, lean=19.0, look=36.0,
+                     arms=(18.0, 22.0), lift=0.27),
+        dribble_clip(solver, "dribble", 4.0, 16, 0.32, ahead=0.22, low=0.10, lean=18.0, look=32.0, arms=(26.0, 22.0)),
+        dribble_clip(solver, "dribble_fast", 6.0, 14, 0.27, ahead=0.20, low=0.09, lean=18.0, look=22.0,
+                     arms=(34.0, 18.0), lift=0.34),
+        dribble_clip(solver, "dribble_sprint", 7.5, 14, 0.22, ahead=0.17, low=0.10, lean=19.0, look=10.0,
+                     arms=(44.0, 14.0), lift=0.42),
+    ]
+
+
+# --------------------------------------------------------------------------
+# Defending and shielding: low, wide stances that shuffle, the feet keeping their
+# places rather than passing each other. Each set has a stance loop with no speed
+# that the page plays when the player stands, and moving loops on the same feet.
+
+
+def shuffle_steps(angle, speed, frames, duty, feet, swing, clear=0.14):
+    """Landing points and swing paths of a shuffle travelling at `angle` from a stance
+    with its feet at `feet` ({side: (x, y)}): the foot nearer the travel leads and the
+    other follows, each on its own stretch of the travel, never passing (they are moved
+    apart along the travel as far as that needs, with `clear` to spare). `swing` lists
+    (k, along, z) as for `steps`."""
+    d = heading(angle)
+    stance = speed * duty * frames / FPS
+    along = {s: Vector((*feet[s], 0.0)).dot(d) for s in SIDES}
+    lead, trail = ("L", "R") if along["L"] >= along["R"] else ("R", "L")
+    short = max(0.0, stance + clear - (along[lead] - along[trail]))
+    land, paths = {}, {}
+    for s in SIDES:
+        centre = Vector((*feet[s], 0.0)) + d * (short / 2.0 if s == lead else -short / 2.0)
+        on, off = centre + d * (stance / 2.0), centre - d * (stance / 2.0)
+        land[s] = (on.x, on.y)
+        paths[s] = [(k, (off.lerp(on, a).x, off.lerp(on, a).y, z)) for k, a, z in swing]
+    return land, paths
+
+
+class Stance:
+    """A low stance: where the feet stand, how the body is held over them, and how it
+    bounces on the balls of the feet. `body(u, p)` adds the arms and head."""
+
+    def __init__(self, feet, yaw, hips, chest, hz, hy, lean, hpitch, knees, body):
+        self.feet, self.yaw, self.hips, self.chest = feet, yaw, hips, chest
+        self.hz, self.hy, self.lean, self.hpitch, self.knees = hz, hy, lean, hpitch, knees
+        self.body = body
+
+    def trunk(self, u, duty, bob, sway=0.0):
+        p = trunk_cycle(u, duty, hz=self.hz, bob=bob, run=True, sway=sway, hyaw=2.0, hroll=2.0,
+                        hpitch=self.hpitch, lean=self.lean, chest_yaw=2.0, look_down=0.0, flex_bob=0.8)
+        p["hy"] += self.hy
+        p["kLout"] = p["kRout"] = self.knees
+        p = turned(p, self.hips, self.chest)
+        self.body(u, p)
+        return p
+
+    def loop(self, solver, name, set_name, frames=36):
+        """The stance itself, bouncing lightly and shifting its weight."""
+        T = frames / FPS
+
+        def sample(t):
+            u = t / T
+            p = dict(NEUTRAL)
+            p.update(self.trunk(u, 0.5, 0.0))
+            p["hz"] += wave2(u, 0.0, 0.008) + wave(u, 0.3, 0.004)
+            p["hx"] += wave(u, 0.2, 0.025)
+            p["hroll"] += wave(u, 0.2, 2.0)
+            p["sside"] -= wave(u, 0.22, 1.2)
+            for side in SIDES:
+                x, y = self.feet[side]
+                p.update({f"f{side}x": x, f"f{side}y": y, f"f{side}yaw": self.yaw[side],
+                          f"f{side}pitch": -10.0 + wave2(u, 0.05, 3.0), f"f{side}flat": 1.0})
+            return p
+
+        return Clip(name, frames, sample, loop=True, set=set_name)
+
+    def shuffle(self, solver, name, set_name, angle, speed, frames, duty, height=0.16):
+        """The stance shuffling at `angle` and `speed`, without the feet passing."""
+        land, paths = shuffle_steps(angle, speed, frames, duty, self.feet,
+                                    [(0.25, 0.22, height), (0.55, 0.62, height + 0.02), (0.85, 0.95, height - 0.02)])
+        gait = Gait(
+            solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land, yaw=self.yaw,
+            stance_pitch=[(0.0, -10.0), (0.3, -5.0), (0.7, -5.0), (1.0, -18.0)],
+            swing_pitch=[(0.3, -10.0), (0.6, -2.0), (0.9, -6.0)],
+            swing_path=paths, body=lambda u: self.trunk(u, duty, 0.012),
+        )
+        return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty, set=set_name)
+
+
+def _jockey_arms(u, p):
+    """Arms low and out for balance, the head on the ball at the attacker's feet."""
+    for side, sign in (("L", 1.0), ("R", -1.0)):
+        p.update({f"a{side}flex": 22.0 + wave2(u, 0.1, 2.0), f"a{side}abd": 26.0 + wave2(u, 0.15, 3.0) * sign,
+                  f"a{side}elbow": 48.0, f"a{side}twist": 12.0, f"a{side}pron": 30.0, f"a{side}wrist": 10.0})
+    p["look_down"] = 14.0
+    p["look_yaw"] = 0.0
+
+
+# Side-on: the left foot forward, the pelvis turned to the right, showing the attacker
+# the outside.
+JOCKEY = Stance(
+    feet={"L": (0.12, -0.15), "R": (-0.17, 0.12)}, yaw={"L": -12.0, "R": -40.0},
+    hips=-32.0, chest=-14.0, hz=-0.17, hy=0.03, lean=18.0, hpitch=10.0, knees=24.0, body=_jockey_arms,
+)
+
+
+def jockey_clips(solver):
+    """Jockeying: standing side-on, backing off and sliding across in front of the ball,
+    at a walk and at a run. The quick side shuffles keep their old names."""
+    clips = [JOCKEY.loop(solver, "jockey", "jockey")]
+    for angle, way in ((180.0, "B"), (135.0, "BL"), (-135.0, "BR"), (90.0, "L"), (-90.0, "R")):
+        clips.append(JOCKEY.shuffle(solver, f"jockey_{way}", "jockey", angle, 1.2, 16, 0.45))
+    for angle, way in ((180.0, "B"), (135.0, "BL"), (-135.0, "BR")):
+        clips.append(JOCKEY.shuffle(solver, f"jockey_run_{way}", "jockey", angle, 2.6, 14, 0.32, height=0.19))
+    return clips
+
+
+def _shield_arms(u, p):
+    """Arms out wide and back to feel the opponent behind, the eyes on the ball and now and
+    then over a shoulder."""
+    for side, sign in (("L", 1.0), ("R", -1.0)):
+        p.update({f"a{side}flex": -18.0 + wave(u, 0.3, 3.0), f"a{side}abd": 48.0 + wave(u, 0.1, 4.0) * sign,
+                  f"a{side}elbow": 30.0, f"a{side}twist": -6.0, f"a{side}pron": 10.0, f"a{side}wrist": 5.0})
+    p["look_down"] = 28.0
+    p["look_yaw"] = 0.0
+
+
+# Square and wide, the backside out into the opponent behind, over the ball.
+SHIELD = Stance(
+    feet={"L": (0.21, -0.02), "R": (-0.21, 0.02)}, yaw={"L": 14.0, "R": -14.0},
+    hips=0.0, chest=0.0, hz=-0.19, hy=0.07, lean=24.0, hpitch=14.0, knees=12.0, body=_shield_arms,
+)
+
+
+def shield_clips(solver):
+    """Shielding: holding the ball with the back to the opponent, backing in and sliding
+    to either side."""
+    stand = SHIELD.loop(solver, "shield", "shield", frames=72)
+    sample = stand.sample
+
+    def looking(t):  # a glance back over each shoulder in turn
+        p = sample(t)
+        u = t / (stand.frames / FPS)
+        glance = smoothstep(1.0 - abs(u - 0.3) / 0.12) - smoothstep(1.0 - abs(u - 0.75) / 0.12)
+        p["look_yaw"] += 55.0 * glance
+        p["look_down"] -= 14.0 * abs(glance)
+        return p
+
+    stand.sample = looking
+    clips = [stand]
+    for angle, way in ((180.0, "B"), (90.0, "L"), (-90.0, "R")):
+        clips.append(SHIELD.shuffle(solver, f"shield_{way}", "shield", angle, 1.0, 18, 0.5))
+    return clips
+
+
+# --------------------------------------------------------------------------
+# Transitions: turning on the spot, cutting at speed and braking. The engine turns
+# and carries the root; these clips keep a planted foot where it is on the grass
+# while it does, so in root space a planted foot slides back and turns against
+# the root by exactly as much as the root moves and turns over it.
+
+
+class Footwork:
+    """Feet planted on the grass and the steps between them, while the root moves.
+
+    `plants[side]` lists (land, lift, x, y, yaw[, pivot, until]): the foot is on the grass
+    from `land` to `lift` with its reference point at world (x, y), turned `yaw` degrees,
+    and pivots `pivot` degrees on the ball of the foot by `until` (by `lift` if not
+    given). Between plants it swings, lifting `height`.
+    `root(t)` gives the root's world position and heading; `pitch[side](t)` the foot's
+    pitch. Returns root-space foot channels.
+    """
+
+    def __init__(self, root, plants, pitch, height=0.09):
+        self.root = root
+        self.plants = plants
+        self.pitch = pitch
+        self.height = height
+
+    @staticmethod
+    def _ref(side, ball, yaw):
+        """The foot's reference point (under the ankle) with its ball at `ball`."""
+        offset = Vector((0.005 if side == "L" else -0.005, -0.145, 0.0))
+        return ball - rot(Z, yaw) @ offset
+
+    def _pose(self, side, plant, t):
+        land, lift, x, y, yaw, pivot, until = tuple(plant) + (0.0, None)[len(plant) - 5:]
+        until = lift if until is None else until
+        f = smoothstep((t - land) / max(until - land, 1e-6))
+        turn = yaw + pivot * f
+        ball = Vector((x, y, 0.0)) + rot(Z, yaw) @ Vector((0.005 if side == "L" else -0.005, -0.145, 0.0))
+        return self._ref(side, ball, turn), turn
+
+    def _local(self, side, plant, t):
+        """A planted foot's reference point and yaw in root space at time t."""
+        pos, facing = self.root(t)
+        ref, yaw = self._pose(side, plant, t)
+        return rot(Z, -facing) @ (ref - pos), yaw - facing
+
+    def __call__(self, t):
+        out = {}
+        for side in SIDES:
+            plants = self.plants[side]
+            z = 0.0
+            local = None
+            for i, a in enumerate(plants):
+                if t <= a[1] or i == len(plants) - 1:
+                    local, yaw = self._local(side, a, max(t, a[0]) if i else t)
+                    break
+                b = plants[i + 1]
+                if t < b[0]:
+                    # Swinging, in root space, from moving with the grass as it lifts to
+                    # moving with the grass as it lands.
+                    h = b[0] - a[1]
+                    k = (t - a[1]) / h
+                    dt = 1e-3
+                    p0, y0 = self._local(side, a, a[1])
+                    v0 = (p0 - self._local(side, a, a[1] - dt)[0]) / dt
+                    p1, y1 = self._local(side, b, b[0])
+                    v1 = (self._local(side, b, b[0] + dt)[0] - p1) / dt
+                    local = hermite(p0, v0, p1, v1, k, h)
+                    yaw = lerp(y0, y1, smoothstep(k))
+                    z = self.height * math.sin(math.pi * k) ** 0.8
+                    break
+            out.update({f"f{side}x": local.x, f"f{side}y": local.y, f"f{side}z": z,
+                        f"f{side}yaw": yaw, f"f{side}pitch": self.pitch[side](t), f"f{side}flat": 1.0})
+        return out
+
+
+def turn_clip(solver, turn=90.0):
+    """A turn on the spot to the left: while the engine turns the root (the `turning`
+    window, at an even rate) both feet pivot on their balls and the hips follow
+    them, the head leading; then the inside foot and the outside foot step round
+    into the stance facing the new way."""
+    end, window = 0.9, (0.0, 0.3)
+
+    def facing(t):
+        return turn * min(1.0, max(0.0, (t - window[0]) / (window[1] - window[0])))
+
+    def root(t):
+        return Vector(), facing(t)
+
+    half = 0.5 * turn
+    final = {side: rot(Z, turn) @ Vector((x, y, 0.0)) for side, (x, y) in (("L", (0.13, 0.01)), ("R", (-0.13, -0.01)))}
+    plants = {
+        "L": [(0.0, window[1], 0.13, 0.01, 9.0, half), (0.5, end, final["L"].x, final["L"].y, 9.0 + turn)],
+        "R": [(0.0, 0.58, -0.13, -0.01, -9.0, half, window[1]), (0.78, end, final["R"].x, final["R"].y, -9.0 + turn)],
+    }
+    pitch = {
+        "L": Curve([(0.0, 0.0), (0.06, -12.0), (window[1], -14.0), (0.36, -24.0), (0.5, 4.0), (0.58, 0.0)]),
+        "R": Curve([(0.0, 0.0), (0.06, -12.0), (window[1], -12.0), (0.5, -10.0), (0.58, -26.0), (0.78, 4.0),
+                    (0.86, 0.0)]),
+    }
+    feet = Footwork(root, plants, pitch, height=0.07)
+    keys = [
+        (0.10, {"hz": -0.07, "sflex": 4.0, "cflex": 2.0, "look_down": 2.0,
+                "aLabd": 18.0, "aRabd": 18.0, "aLelbow": 30.0, "aRelbow": 30.0}),
+        (0.45, {"hz": -0.065, "hx": -0.05}),  # weight on the outside foot as the inside one steps
+        (0.68, {"hz": -0.06, "hx": 0.04}),  # and on the inside foot as the outside one comes round
+        (end, {}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05})
+
+    def sample(t):
+        p = shot(t)
+        p.update(feet(t))
+        # The pelvis turns with the feet, the chest a little ahead of it and the head on
+        # the new way, which in root space is straight ahead.
+        hips = 0.5 * (p["fLyaw"] - 9.0 + p["fRyaw"] + 9.0)
+        p["hyaw"] = hips
+        p["stwist"] = -0.25 * hips
+        p["ctwist"] = -0.35 * hips
+        return p
+
+    clip = Clip("turn_L", int(round(end * FPS)), sample, loop=False, turn=turn, turning=list(window))
+    clip.root = root  # where the engine takes the root meanwhile, for checking
+    return clip
+
+
+def _placed(root, t, x, y):
+    """The world point at (x, y) from the root at time t, turned with it."""
+    pos, facing = root(t)
+    return pos + rot(Z, facing) @ Vector((x, y, 0.0))
+
+
+def _plant(root, land, lift, x, y, yaw, **pivot):
+    """A plant of a foot at (x, y) from the root as it lands, turned `yaw` from its heading."""
+    at = _placed(root, land, x, y)
+    return (land, lift, at.x, at.y, root(land)[1] + yaw, *pivot.values())
+
+
+# The engine's turning and acceleration (src/decision_pitch/physics.py, docs/decisions.md
+# section 2): a runner turns its facing at TURN_RATE / (1 + speed / 3) rad/s, eases off
+# by the cosine of the turn still to make, and changes its velocity at most ACCELERATION.
+TURN_RATE, ACCELERATION = 9.0, 4.0
+
+
+class EngineTurn:
+    """The root's motion as the engine turns a runner at `speed` through `turn` degrees,
+    starting at time `start`: its facing, made to turn at an even rate over `window`
+    (how long the engine takes), and its position, from the engine's velocity, which
+    follows the facing only as fast as it may accelerate."""
+
+    def __init__(self, speed, turn, start, end, step=1.0 / 240.0):
+        self.speed, self.turn, self.start = speed, turn, start
+        facing, vx, vy, x, y, t = 0.0, speed, 0.0, 0.0, 0.0, start
+        target = math.radians(turn)
+        self.track = [(start, 0.0, 0.0, 0.0, speed)]  # time, along, across, travel (deg), speed
+        done = None
+        while t < end - 1e-9:
+            v = math.hypot(vx, vy)
+            left = target - facing
+            most = TURN_RATE / (1.0 + v / 3.0) * step
+            facing += max(-most, min(most, left))
+            want = speed * max(0.0, math.cos(left))
+            ax, ay = want * math.cos(facing) - vx, want * math.sin(facing) - vy
+            change = math.hypot(ax, ay)
+            if change > ACCELERATION * step:
+                ax, ay = ax * ACCELERATION * step / change, ay * ACCELERATION * step / change
+            vx, vy = vx + ax, vy + ay
+            x, y, t = x + vx * step, y + vy * step, t + step
+            if done is None and abs(target - facing) < 1e-6:
+                done = t
+            self.track.append((t, x, y, math.degrees(math.atan2(vy, vx)), math.hypot(vx, vy)))
+        self.window = (start, done if done is not None else end)
+
+    def facing(self, t):
+        a, b = self.window
+        return self.turn * min(1.0, max(0.0, (t - a) / (b - a)))
+
+    def _at(self, t):
+        if t <= self.start:
+            return (t, self.speed * (t - self.start), 0.0, 0.0, self.speed)
+        track = self.track
+        i = min(len(track) - 1, max(1, int((t - self.start) / (track[1][0] - track[0][0]))))
+        lo, hi = track[i - 1], track[i]
+        f = min(1.0, max(0.0, (t - lo[0]) / (hi[0] - lo[0])))
+        return tuple(a + (b - a) * f for a, b in zip(lo, hi))
+
+    def __call__(self, t):
+        """Root position and facing (degrees) in the clip's space, facing -Y at the start."""
+        _, along, across, _, _ = self._at(t)
+        return heading(0.0) * along + heading(90.0) * across, self.facing(t)
+
+    def travel(self, t):
+        return self._at(t)[3]
+
+    def pace(self, t):
+        return self._at(t)[4]
+
+
+def cut_clip(solver, turn=60.0, speed=4.0):
+    """A sharp cut to the left at speed: the outside (right) foot reaches wide and plants,
+    the body drops and leans into the turn, the head leading onto the new way, and it
+    pushes off, the left foot stepping out. `contact` is the plant. Its root moves as
+    the engine turns a runner coming in at `speed` through `turn` degrees: the facing
+    turns at the engine's rate over `turning` and the travel follows more slowly, so
+    the page drives the clip from the heading it sees, as for a turn on the spot."""
+    contact = 0.22
+    root = EngineTurn(speed, turn, contact, 1.2)
+    window = root.window
+    end = round((window[1] + 0.36) * FPS) / FPS
+
+    def plant(land, lift, aside, ahead, yaw):
+        """A foot landing `ahead` of the root along its travel and `aside` of it, to the
+        left of the way it faces, turned `yaw` from that way."""
+        pos, facing = root(land)
+        at = pos + heading(root.travel(land)) * ahead + heading(facing + 90.0) * aside
+        return (land, lift, at.x, at.y, facing + yaw)
+
+    c = contact
+    plants = {
+        "L": [plant(c - 0.27, c - 0.15, 0.06, 0.24, 5.0), plant(c + 0.24, c + 0.38, 0.07, 0.26, -20.0),
+              plant(c + 0.62, c + 0.76, 0.06, 0.24, -30.0)],
+        "R": [plant(c - 0.5, c - 0.38, -0.06, 0.24, -5.0), plant(c, c + 0.15, -0.26, 0.26, 20.0),
+              plant(c + 0.44, c + 0.58, -0.07, 0.24, -30.0)],
+    }
+    pitch = {
+        "L": Curve([(0.0, -40.0), (c - 0.15, -55.0), (c - 0.05, -40.0), (c + 0.17, -5.0), (c + 0.24, 2.0),
+                    (c + 0.31, -10.0), (c + 0.38, -55.0), (c + 0.5, -35.0), (c + 0.62, 0.0)]),
+        "R": Curve([(0.0, -35.0), (c - 0.04, -6.0), (c, -4.0), (c + 0.08, -14.0), (c + 0.15, -55.0),
+                    (c + 0.3, -35.0), (c + 0.44, 0.0), (c + 0.5, -12.0), (c + 0.58, -50.0)]),
+    }
+    feet = Footwork(root, plants, pitch, height=0.2)
+    base = dict(READY)
+    base.update({"hz": -0.07, "hpitch": 6.0, "sflex": 8.0, "cflex": 3.0, "look_down": 0.0,
+                 "aLflex": 10.0, "aRflex": 10.0, "aLabd": 14.0, "aRabd": 14.0, "aLelbow": 85.0, "aRelbow": 85.0})
+    mid = 0.5 * (window[0] + window[1])
+    keys = [
+        (0.0, {"aLflex": 30.0, "aRflex": -20.0}),
+        (c - 0.06, {"hz": -0.09, "look_yaw": 16.0, "sside": 4.0, "aLflex": -8.0, "aRflex": 22.0}),
+        (mid, {"hz": -0.14, "hx": -0.05, "hyaw": 10.0, "hroll": 6.0, "sside": 10.0, "cside": 6.0, "sflex": 13.0,
+               "look_yaw": 18.0, "look_tilt": -6.0, "aLabd": 45.0, "aLflex": 15.0, "aLelbow": 60.0,
+               "aRflex": 40.0, "aRabd": 12.0, "aRtwist": 25.0}),
+        (window[1] + 0.06, {"hz": -0.10, "hx": 0.0, "hyaw": 4.0, "hroll": 2.0, "sside": 4.0, "cside": 2.0,
+                            "look_yaw": 4.0, "aLflex": -25.0, "aRflex": 40.0, "aRtwist": 0.0}),
+        (window[1] + 0.24, {"hz": -0.07, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "cside": 0.0, "look_yaw": 0.0,
+                            "look_tilt": 0.0, "aLflex": 35.0, "aRflex": -25.0, "aLabd": 14.0}),
+        (end, {"aLflex": -15.0, "aRflex": 25.0}),
+    ]
+    shot = Shot(base, end, keys, lag={"aL": 0.03, "aR": 0.03, "look": -0.04}, settle=False)
+
+    def sample(t):
+        p = shot(t)
+        p.update(feet(t))
+        return p
+
+    speeds = [[0.0, speed]] + [[round(t, 4), round(root.pace(t), 2)]
+                               for t in (contact, mid, window[1], window[1] + 0.2, end)]
+    clip = Clip("cut_L", int(round(end * FPS)), sample, loop=False, contact=contact, turn=turn,
+                turning=[round(window[0], 4), round(window[1], 4)], speeds=speeds)
+    clip.root = root
+    return clip
+
+
+def brake_clip(solver, speed=7.5, slowing=4.0):
+    """Pulling up from a sprint: braking steps planted ahead, shortening as the body
+    slows, the body sitting down and back with the arms out in front, then settling
+    into the stance. The feet stay planted for a root that slows evenly from `speed` at
+    `slowing` m/s2, as the engine brakes, so the page can join it at the moment whose
+    speed (`speeds`) is the player's. `contact` is the first braking step."""
+    stop = speed / slowing
+    end = stop + 0.36
+    contact = 0.10
+
+    def gone(t):  # how far the root has come by time t
+        if t < 0.0:
+            return speed * t
+        t = min(t, stop)
+        return speed * t - 0.5 * slowing * t * t
+
+    def root(t):
+        return Vector((0.0, -gone(t), 0.0)), 0.0
+
+    def pace(t):
+        return max(0.0, speed - slowing * max(t, 0.0))
+
+    def lifts(land, ahead, behind):
+        """When a foot planted `ahead` of the root at `land` is `behind` it."""
+        target = gone(land) + ahead + behind
+        if gone(stop) < target:
+            return None
+        lo, hi = land, stop
+        for _ in range(40):
+            mid = (lo + hi) / 2.0
+            lo, hi = (mid, hi) if gone(mid) < target else (lo, mid)
+        return hi
+
+    # Footfalls, right and left in turn, each a little later as the body slows: a
+    # foot lands ahead of the root and lifts once the root has gone past it.
+    falls = [(contact - 0.44, "R"), (contact - 0.22, "L"), (contact, "R")]
+    t, foot = contact, "R"
+    while pace(t) > 1.2:
+        t += 0.22 + 0.03 * (speed - pace(t))
+        foot = "L" if foot == "R" else "R"
+        falls.append((t, foot))
+    plants = {"L": [], "R": []}
+    pitch = {}
+    for land, foot in falls:
+        v = pace(land)
+        sign = 1.0 if foot == "L" else -1.0
+        ahead, behind = 0.10 + 0.028 * v, 0.20 + 0.028 * v
+        plants[foot].append([land, lifts(land, ahead, behind), 0.075 * sign, -ahead, 6.0 * sign])
+    # The last two steps settle into the stance where the root stops.
+    first, second = ("L", "R") if falls[-1][1] == "R" else ("R", "L")
+    settle = max(falls[-1][0] + 0.25, stop - 0.05)
+    for foot, at in ((first, settle), (second, settle + 0.24)):
+        x, y = (0.13, 0.01) if foot == "L" else (-0.13, -0.01)
+        stand = Vector((x, y - gone(stop), 0.0))
+        previous = plants[foot][-1]
+        if previous[1] is None:  # still planted: it steps from there
+            previous[1] = at - 0.2
+        plants[foot].append([at, end + 1.0, stand.x, stand.y + gone(at), 9.0 if foot == "L" else -9.0])
+    for foot in SIDES:
+        keys = []
+        for i, (land, lift, x, y, yaw) in enumerate(plants[foot]):
+            keys += [(land - 0.05, 0.0), (land, 6.0), (land + 0.06, 0.0)]
+            if lift is not None and lift < end:
+                keys += [(max(land + 0.07, lift - 0.04), -8.0), (lift, -40.0), (lift + 0.08, -32.0)]
+        pitch[foot] = Curve(sorted(keys))
+        plants[foot] = [_plant(root, land, lift if lift is not None else end + 1.0, x, y, yaw)
+                        for land, lift, x, y, yaw in plants[foot]]
+    feet = Footwork(root, plants, pitch, height=0.11)
+    keys = [
+        (0.0, {"hz": -0.09, "hpitch": 7.0, "sflex": 10.0, "cflex": 4.0, "aLflex": 32.0, "aRflex": -22.0,
+               "aLelbow": 88.0, "aRelbow": 88.0, "aLabd": 13.0, "aRabd": 13.0}),
+        (0.30, {"hz": -0.12, "hy": 0.04, "hpitch": -3.0, "sflex": -1.0, "cflex": -4.0, "look_down": -2.0,
+                "aLflex": 14.0, "aRflex": 10.0, "aLabd": 30.0, "aRabd": 30.0, "aLelbow": 88.0, "aRelbow": 88.0}),
+        (stop - 0.25, {"hz": -0.14, "hy": 0.04, "hpitch": 0.0, "sflex": 2.0, "cflex": -2.0,
+                       "aLflex": 10.0, "aRflex": 13.0}),
+        (stop + 0.12, {"hz": -0.09, "hy": 0.01, "hpitch": 3.0, "sflex": 4.0, "aLflex": 10.0, "aRflex": 10.0,
+                       "aLelbow": 35.0, "aRelbow": 35.0, "aLabd": 14.0, "aRabd": 14.0}),
+        (end, {}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.03})
+
+    def sample(t):
+        p = shot(t)
+        p.update(feet(t))
+        return p
+
+    clip = Clip("brake", int(round(end * FPS)), sample, loop=False, contact=contact,
+                speeds=[[0.0, speed], [round(stop, 4), 0.0]])
+    clip.root = root
+    return clip
+
+
+def cut_clips(solver):
+    clip = cut_clip(solver)
+    right = Clip("cut_R", clip.frames, lambda t: mirror(clip.sample(t)), loop=False, contact=clip.contact,
+                 turn=-clip.info["turn"], turning=clip.info["turning"], speeds=clip.info["speeds"])
+    right.root = lambda t: (Vector((-clip.root(t)[0].x, clip.root(t)[0].y, 0.0)), -clip.root(t)[1])
+    return [clip, right, brake_clip(solver)]
+
+
+def turn_clips(solver):
+    clip = turn_clip(solver)
+    right = Clip("turn_R", clip.frames, lambda t: mirror(clip.sample(t)), loop=False,
+                 turn=-clip.info["turn"], turning=clip.info["turning"])
+    right.root = lambda t: (Vector(), -clip.root(t)[1])
+    return [clip, right]
+
+
+def _both_sides(make):
+    """A clip builder for the figure's left and its mirror image for the right."""
+    def builder(solver):
+        clip = make(solver)
+        return [clip, mirrored(clip, clip.name[:-1] + "R", MIRRORED[clip.direction])]
+    return builder
+
+
+walk_FL_clips = _both_sides(lambda solver: walk_turned_clip(solver, 45.0, "walk_FL"))
+jog_FL_clips = _both_sides(lambda solver: jog_turned_clip(solver, 45.0, "jog_FL"))
+walk_L_clips = _both_sides(lambda solver: walk_turned_clip(solver, 90.0, "walk_L"))
+jog_L_clips = _both_sides(lambda solver: jog_turned_clip(solver, 90.0, "jog_L"))
+walk_BL_clips = _both_sides(lambda solver: walk_turned_clip(solver, 135.0, "walk_BL"))
+jog_BL_clips = _both_sides(lambda solver: jog_turned_clip(solver, 135.0, "jog_BL"))
 
 
 
@@ -998,12 +1831,12 @@ def shot_clip(solver):
                    "hx": 0.05, "hy": -0.26, "hz": -0.09, "hyaw": 8.0, "hroll": -2.0, "hpitch": 10.0,
                    "sflex": 18.0, "cflex": 10.0, "ctwist": -8.0, "sside": 5.0, "look_down": 30.0,
                    "aLabd": 88.0, "aLflex": 32.0, "aLelbow": 28.0, "aLtwist": -10.0,
-                   "aRabd": 12.0, "aRflex": 38.0, "aRelbow": 55.0, "aRtwist": 40.0}),
+                   "aRabd": 26.0, "aRflex": 38.0, "aRelbow": 55.0, "aRtwist": 40.0}),
         (0.53, {"fRx": -0.03, "fRy": -0.78, "fRz": 0.36, "fRpitch": -52.0}),
         (0.63, {"fRx": -0.02, "fRy": -1.06, "fRz": 0.74, "fRpitch": -40.0, "fRyaw": -5.0,
                 "fLpitch": -22.0, "hy": -0.30, "hz": -0.06, "hyaw": 15.0, "hroll": -3.0,
                 "sflex": 12.0, "cflex": 6.0, "ctwist": -12.0, "look_down": 14.0,
-                "aLabd": 60.0, "aLflex": -12.0, "aLelbow": 25.0, "aRabd": 14.0, "aRflex": 45.0, "aRtwist": 45.0,
+                "aLabd": 60.0, "aLflex": -12.0, "aLelbow": 25.0, "aRabd": 28.0, "aRflex": 45.0, "aRtwist": 45.0,
                 "aRelbow": 60.0}),
         (0.84, {"fRx": -0.11, "fRy": -0.56, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": -10.0, "fRflat": 1.0, "fRtoe": 0.0,
                 "fLpitch": -30.0, "hy": -0.33, "hz": -0.06, "hx": 0.0}),
@@ -1079,6 +1912,120 @@ def tackle_clip(solver):
     aim(solver, shot, contact, "foot_R", toe_head, BALL + Vector((0.0, BALL_RADIUS * 0.9, 0.0)),
         ("fRx", "fRy", "fRz"))
     return Clip("tackle", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def tackle_standing_clip(solver):
+    """A block tackle on its feet: a step in with the left foot, low and over the ball,
+    the right foot turned out and reaching in so its inside meets the ball, held there
+    a moment, then back. The slide is `tackle`."""
+    contact = 0.32
+    end = 1.0
+    keys = [
+        (0.08, {"hz": -0.06, "look_down": 18.0, "fRpitch": -6.0}),
+        (0.15, {"fLz": 0.045, "fLy": -0.10, "fLpitch": 4.0}),
+        (0.25, {"fLx": 0.16, "fLy": -0.30, "fLz": 0.0, "fLpitch": 8.0, "fLyaw": 6.0,
+                "hx": 0.04, "hy": -0.12, "hz": -0.12, "hpitch": 10.0, "hyaw": -4.0,
+                "sflex": 14.0, "cflex": 5.0, "look_down": 26.0,
+                "fRx": -0.13, "fRy": -0.12, "fRz": 0.10, "fRyaw": -55.0, "fRpitch": -12.0, "fRflat": 0.0,
+                "aLabd": 38.0, "aLflex": 22.0, "aLelbow": 40.0, "aRabd": 34.0, "aRflex": -8.0, "aRelbow": 36.0}),
+        (0.29, {"fLpitch": 0.0}),
+        (contact, {"fRx": -0.04, "fRy": -0.55, "fRz": 0.05, "fRyaw": -82.0, "fRpitch": 4.0, "fRtoe": 0.0,
+                   "hx": 0.05, "hy": -0.17, "hz": -0.16, "hpitch": 12.0, "hyaw": -8.0, "hroll": -3.0,
+                   "sflex": 18.0, "cflex": 6.0, "sside": 3.0, "look_down": 32.0,
+                   "aLabd": 52.0, "aLflex": 32.0, "aLelbow": 34.0, "aRabd": 42.0, "aRflex": 12.0, "aRelbow": 30.0}),
+        (0.46, {"fRx": -0.05, "fRy": -0.53, "fRz": 0.05, "hz": -0.15, "look_down": 30.0}),
+        (0.64, {"fRx": -0.12, "fRy": -0.26, "fRz": 0.0, "fRyaw": -16.0, "fRpitch": 0.0, "fRflat": 1.0,
+                "hx": 0.01, "hy": -0.14, "hz": -0.09, "hpitch": 6.0, "hyaw": 0.0, "hroll": 0.0,
+                "sflex": 9.0, "cflex": 2.0, "sside": 0.0, "look_down": 14.0}),
+        (end, {"fLx": 0.16, "fLy": -0.30, "fLyaw": 6.0, "fRx": -0.12, "fRy": -0.26, "fRyaw": -16.0,
+               "hx": 0.0, "hy": -0.15, "hz": -0.04}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSIDE_R, BALL + Vector((0.0, BALL_RADIUS, -0.01)), ("fRx", "fRy", "fRz"))
+    return Clip("tackle_standing", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def cross_clip(solver):
+    """A cross from the right: the left foot planted wide of the ball, leaning back and
+    away, the right leg swinging from out to the right across the ball to wrap it, the
+    instep under its back, and following through across the body, the left arm out."""
+    contact = 0.45
+    end = 1.35
+    keys = [
+        (0.10, {"look_down": 18.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.06, "fLy": -0.10, "fLx": 0.16, "fLpitch": 4.0}),
+        (0.30, {"fLx": 0.27, "fLy": -0.40, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 22.0,
+                "hx": 0.07, "hy": -0.16, "hz": -0.075, "hyaw": -28.0, "hroll": 7.0, "hpitch": 2.0,
+                "sflex": 1.0, "cflex": -7.0, "ctwist": 18.0, "sside": 8.0,
+                "fRx": -0.24, "fRy": 0.18, "fRz": 0.36, "fRyaw": -32.0, "fRpitch": -55.0, "fRflat": 0.0, "fRtoe": 4.0,
+                "aLabd": 86.0, "aLflex": 30.0, "aLelbow": 24.0, "aLtwist": -10.0,
+                "aRabd": 36.0, "aRflex": -32.0, "aRelbow": 30.0}),
+        (0.36, {"fLpitch": 0.0}),
+        (0.395, {"fRx": -0.17, "fRy": -0.02, "fRz": 0.25, "fRyaw": -30.0, "fRpitch": -50.0}),
+        (contact, {"fRx": -0.06, "fRy": -0.36, "fRz": 0.05, "fRyaw": -34.0, "fRpitch": -48.0,
+                   "hx": 0.08, "hy": -0.22, "hz": -0.085, "hyaw": 8.0, "hroll": 2.0, "hpitch": 3.0,
+                   "sflex": 3.0, "cflex": -5.0, "ctwist": -6.0, "sside": 6.0, "look_down": 26.0,
+                   "aLabd": 82.0, "aLflex": 22.0, "aLelbow": 28.0, "aLtwist": -10.0,
+                   "aRabd": 22.0, "aRflex": 30.0, "aRelbow": 50.0, "aRtwist": 30.0}),
+        (0.55, {"fRx": 0.14, "fRy": -0.70, "fRz": 0.38, "fRyaw": 8.0, "fRpitch": -40.0,
+                "hyaw": 28.0, "ctwist": -14.0, "look_down": 14.0}),
+        (0.66, {"fRx": 0.30, "fRy": -0.74, "fRz": 0.66, "fRyaw": 20.0, "fRpitch": -32.0,
+                "hx": 0.05, "hy": -0.25, "hz": -0.065, "hyaw": 38.0, "hroll": -2.0, "sside": 2.0,
+                "ctwist": -18.0, "look_down": 4.0, "look_yaw": 12.0,
+                "aLabd": 46.0, "aLflex": -18.0, "aLelbow": 30.0, "aRabd": 16.0, "aRflex": 50.0, "aRtwist": 45.0,
+                "aRelbow": 62.0}),
+        (0.88, {"fRx": 0.08, "fRy": -0.55, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": 22.0, "fRflat": 1.0, "fRtoe": 0.0,
+                "fLpitch": -24.0, "hx": 0.06, "hy": -0.34, "hz": -0.06, "hyaw": 22.0, "look_yaw": 10.0}),
+        (0.96, {"fRpitch": 0.0}),
+        (1.12, {"fLpitch": 0.0}),
+        (end, {"fLx": 0.27, "fLy": -0.40, "fLyaw": 22.0, "fRx": 0.08, "fRy": -0.55, "fRyaw": 22.0,
+               "hx": 0.14, "hy": -0.42, "hz": -0.035, "hyaw": 16.0, "hroll": 0.0, "sside": 0.0, "ctwist": 0.0,
+               "look_yaw": 0.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSTEP_R, BALL + Vector((-0.03, BALL_RADIUS * 0.8, 0.0)),
+        ("fRx", "fRy", "fRz"))
+    return Clip("cross", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def pass_lofted_clip(solver):
+    """A lofted pass over the top: like the shot with a shorter backswing, leaning back,
+    the instep under the ball and a high follow-through."""
+    contact = 0.42
+    end = 1.25
+    keys = [
+        (0.10, {"look_down": 18.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.05, "fLy": -0.08, "fLpitch": 4.0}),
+        (0.28, {"fLx": 0.20, "fLy": -0.36, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 6.0,
+                "hx": 0.05, "hy": -0.14, "hz": -0.07, "hyaw": -18.0, "hroll": 4.0, "hpitch": 2.0,
+                "sflex": 0.0, "cflex": -6.0, "ctwist": 12.0, "sside": 5.0,
+                "fRx": -0.10, "fRy": 0.22, "fRz": 0.36, "fRyaw": -14.0, "fRpitch": -60.0, "fRflat": 0.0, "fRtoe": 5.0,
+                "aLabd": 76.0, "aLflex": 32.0, "aLelbow": 26.0, "aLtwist": -10.0,
+                "aRabd": 36.0, "aRflex": -30.0, "aRelbow": 30.0}),
+        (0.335, {"fLpitch": 0.0}),
+        (0.375, {"fRx": -0.07, "fRy": 0.0, "fRz": 0.24, "fRyaw": -12.0, "fRpitch": -62.0}),
+        (contact, {"fRx": -0.03, "fRy": -0.34, "fRz": 0.03, "fRyaw": -14.0, "fRpitch": -50.0,
+                   "hx": 0.05, "hy": -0.22, "hz": -0.08, "hyaw": 6.0, "hroll": -1.0, "hpitch": 0.0,
+                   "sflex": 4.0, "cflex": -4.0, "ctwist": -6.0, "sside": 4.0, "look_down": 28.0,
+                   "aLabd": 86.0, "aLflex": 26.0, "aLelbow": 28.0, "aLtwist": -10.0,
+                   "aRabd": 16.0, "aRflex": 34.0, "aRelbow": 50.0, "aRtwist": 30.0}),
+        (0.52, {"fRx": -0.03, "fRy": -0.72, "fRz": 0.42, "fRpitch": -34.0}),
+        (0.63, {"fRx": -0.02, "fRy": -0.92, "fRz": 0.88, "fRpitch": -20.0, "fRyaw": -6.0,
+                "fLpitch": -16.0, "hy": -0.26, "hz": -0.065, "hyaw": 12.0, "hroll": -2.0,
+                "sflex": 1.0, "cflex": -7.0, "ctwist": -10.0, "look_down": 4.0,
+                "aLabd": 58.0, "aLflex": -12.0, "aLelbow": 26.0, "aRabd": 14.0, "aRflex": 44.0, "aRtwist": 42.0,
+                "aRelbow": 58.0}),
+        (0.86, {"fRx": -0.11, "fRy": -0.54, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": -10.0, "fRflat": 1.0, "fRtoe": 0.0,
+                "fLpitch": -28.0, "hy": -0.31, "hz": -0.06, "hx": 0.0}),
+        (0.95, {"fRpitch": 0.0}),
+        (1.08, {"fLpitch": 0.0}),
+        (end, {"fLx": 0.20, "fLy": -0.36, "fLyaw": 6.0, "fRx": -0.11, "fRy": -0.54, "fRyaw": -10.0,
+               "hx": 0.0, "hy": -0.33, "hz": -0.035, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "ctwist": 0.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSTEP_R, BALL + Vector((0.0, BALL_RADIUS * 0.85, -0.008)),
+        ("fRx", "fRy", "fRz"))
+    return Clip("pass_lofted", int(round(end * FPS)), shot, loop=False, contact=contact)
 
 
 def header_clip(solver):
@@ -1453,8 +2400,12 @@ def despair_clip(solver):
 
 
 CLIP_BUILDERS = [
-    idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
+    idle_clip, idle_shift_clip, idle_hips_clip, idle_look_clip,
+    walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
+    walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
+    dribble_clips, jockey_clips, shield_clips, turn_clips, cut_clips,
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
+    tackle_standing_clip, cross_clip, pass_lofted_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
 ]
@@ -1465,12 +2416,23 @@ CLIP_BUILDERS = [
 
 
 def sample_clip(solver, clip):
-    """Solve every frame of a clip: [(rotations, hips location, solved pose)]."""
+    """Solve every key of a clip: [(rotations, hips location, solved pose)]."""
     out = []
-    for f in range(clip.frames + 1):
-        solved = solver.solve(clip.sample(f / FPS))
+    for f in range(clip.frames * KEYS + 1):
+        solved = solver.solve(clip.sample(f / (FPS * KEYS)))
         rotations, location = solved.basis()
         out.append((rotations, location, solved))
+    return out
+
+
+def _thin(co, tolerance=1e-4):
+    """Keyframes [f0, v0, f1, v1, ...] without those the straight line between their
+    neighbours reproduces within `tolerance`, so the .blend stays small; the exporter
+    samples every frame of the curve again."""
+    times, keys = co[0::2], [(v,) for v in co[1::2]]
+    out = []
+    for i in compact.kept(times, keys, compact.lerp, compact.distance, tolerance):
+        out += (times[i], keys[i][0])
     return out
 
 
@@ -1503,6 +2465,7 @@ def _key_action(armature, name, frames, loop):
             values[("hips", "loc")][i] += (f, location[i])
     for key, fcs in curves.items():
         for fc, co in zip(fcs, values[key]):
+            co = _thin(co)
             fc.keyframe_points.add(len(co) // 2)
             fc.keyframe_points.foreach_set("co", co)
             for point in fc.keyframe_points:
@@ -1518,7 +2481,7 @@ def _key_action(armature, name, frames, loop):
 def build_clips(armature):
     """Create one Action per clip on `armature` and return {name: metadata}."""
     scene = bpy.context.scene
-    scene.render.fps = FPS
+    scene.render.fps = FPS * KEYS
     scene.render.fps_base = 1.0
     for pose_bone in armature.pose.bones:
         pose_bone.rotation_mode = "QUATERNION"
@@ -1526,8 +2489,11 @@ def build_clips(armature):
         armature.animation_data_create()
     solver = Solver(armature)
     meta = {}
+    made = []
     for builder in CLIP_BUILDERS:
         clip = builder(solver)
+        made.extend(clip if isinstance(clip, list) else [clip])
+    for clip in made:
         frames = sample_clip(solver, clip)
         action = _key_action(armature, clip.name, frames, clip.loop)
         track = armature.animation_data.nla_tracks.new()
@@ -1539,5 +2505,5 @@ def build_clips(armature):
         armature.animation_data.action = None
         meta[clip.name] = clip.meta()
     scene.frame_start = 0
-    scene.frame_end = int(round(max(m["duration"] for m in meta.values()) * FPS))
+    scene.frame_end = int(round(max(m["duration"] for m in meta.values()) * FPS * KEYS))
     return meta

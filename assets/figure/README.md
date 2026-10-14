@@ -43,6 +43,7 @@ without Blender.
 | `shapes.py` | Signed distance shapes and the surface mesher the body, hair and coat are modelled with. |
 | `meshes.py` | Mesh helpers and the plain materials. |
 | `build.py` | Runs them in order, saves the `.blend` and exports. |
+| `compact.py` | Makes the exported `.glb` smaller without changing what the page draws: drops tracks that hold a bone at rest and keys that interpolating their neighbours reproduces (within 0.05 degrees or 0.3 mm), and stores rotations as 16-bit integers. |
 | `render.py` | Draws stills for checking by eye. |
 
 The body is modelled as smooth signed-distance shapes around the skeleton's
@@ -73,6 +74,45 @@ Shape keys, exported as morph targets, vary the build and the face:
 `nose_big`. Every part that a key moves carries it under the same name, so
 clothes and hair follow the body; none of them moves a bone. Height is the
 figure's uniform scale.
+
+## The clips
+
+`clips.py` makes every clip on the skeleton from readable pose channels (where
+each foot is on the grass, how the pelvis, spine and head turn, how each arm
+swings) solved with two-bone inverse kinematics, sampled 60 times a second.
+`root` never moves: the engine moves the player and a clip moves the body
+around it. `figure.json` describes each clip for the page.
+
+- **Loops** (`loop: true`) are one full cycle: the left foot plants at phase 0
+  and the right at 0.5, each on the grass for `duty` of the cycle, and a
+  planted foot moves opposite `direction` at exactly `speed`, so a loop played
+  at the ground speed over its `speed` keeps its feet planted. `direction` is
+  one of eight, from `forward` round through `forward_left`, `left`,
+  `back_left`, `back`, `back_right`, `right` and `forward_right`.
+  - The run: `walk_*` at 1.4 m/s and `jog_*` at 4 m/s (3.6 straight back) in
+    every direction, with `walk`, `jog` and `sprint` forwards and `backpedal`.
+    To the side and back on a diagonal the pelvis opens towards the travel
+    and the feet step across, the head still on the play; straight back is a
+    backward walk or a backpedal.
+  - `set: "dribble"`: `dribble_slow`, `dribble`, `dribble_fast` and
+    `dribble_sprint`, 2 to 7.5 m/s, the right toe meeting the back of the
+    ball 0.48 m ahead at the loop's `touch` (0.4 of the cycle).
+  - `set: "jockey"`: side-on, low, shuffling without crossing the feet:
+    `jockey` (standing), `jockey_*` at 1.2 m/s, `jockey_run_*` at 2.6 and
+    `strafe_L`/`strafe_R` at 2.5.
+  - `set: "shield"`: square, wide and low, back to the opponent: `shield`
+    (standing) and `shield_B`, `shield_L`, `shield_R` at 1 m/s.
+  - Standing: `idle`, `idle_shift`, `idle_hips` and `idle_look`.
+- **One-shots** (`loop: false`), right-footed, meet the ball at their
+  `contact` where the engine carries it, 0.6 m ahead: `pass`, `pass_lofted`,
+  `shot`, `cross`, `control`, `tackle` (the slide), `tackle_standing`,
+  `header` and `throw_in`; the goalkeeper's `keeper_*`; `celebrate` and the
+  touchline gestures.
+- **Transitions** keep a planted foot still on the grass while the engine
+  turns and moves the root: `turn_L`/`turn_R` (`turn` degrees, the root
+  turning evenly over the `turning` window), `cut_L`/`cut_R` (`turn`, the
+  outside foot planting at `contact`) and `brake` (the first braking step at
+  `contact`).
 
 ## Restyling in Blender
 
@@ -107,5 +147,7 @@ The scripts remain the source of truth: a full rebuild regenerates the
 
 renders `front`, `side`, `back`, `face`, `lineup` (six variations side by
 side), `coat` and `keeper` stills of the saved figure. `--views` picks some of
-them; `--clip jog --frames 0,8 --view side` poses it with a clip;
-`--camera x,y,z,tx,ty,tz,lens` frames any detail.
+them; `--clip jog --frames 0,8 --view side` poses it with a clip, at times
+given in frames of 1/30 s (the clips are keyed 60 times a second);
+`--ball 0,-0.59,0.11` adds a ball there, to see where a dribble or a kick meets
+it; `--camera x,y,z,tx,ty,tz,lens` frames any detail.

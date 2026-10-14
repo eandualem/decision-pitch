@@ -82,6 +82,9 @@ function receive(message, now = performance.now() / 1000) {
     timeline.push(message, now);
   } else if (message.type === 'event' && actors) {
     timeline.pushEvent(message, now);
+  } else if (message.type === 'decision' && actors) {
+    actors.handleDecision(message, now);
+    overlay.handleMessage(message);
   } else if (message.type === 'manager' && touchline) {
     overlay.handleMessage(message);
     touchline.handleMessage(message, now);
