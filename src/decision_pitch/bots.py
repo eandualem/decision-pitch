@@ -11,6 +11,7 @@ from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hol
 from decision_pitch.physics import ROLLING, TOP_SPEED, Player, _step_ball
 
 SHOOTING_RANGE = 24.0  # m from goal
+CLOSE_RANGE = 16.0  # m from goal: an unpressed player on the ball carries it this close before shooting
 FREE_KICK_RANGE = 30.0  # m from goal within which a direct free kick is shot
 WALL = 3  # players in a defensive wall
 WALL_RANGE = 32.0  # m from goal within which a free kick gets a wall
@@ -154,7 +155,8 @@ def _intercept(dx: float, dy: float, vx: float, vy: float, speed: float) -> floa
 def _on_the_ball(m: Match, p: Player) -> Command:
     direction = m.attack(p.team)
     goal_x = direction * pitch.HALF_LENGTH
-    if p.position != "GK" and math.hypot(goal_x - p.x, p.y) < SHOOTING_RANGE:
+    goal = math.hypot(goal_x - p.x, p.y)
+    if p.position != "GK" and goal < SHOOTING_RANGE and (goal < CLOSE_RANGE or _pressed(m, p)):
         return _shot(m, p)
     if p.position == "GK" or _pressed(m, p):
         return _pass_or_clear(m, p)
