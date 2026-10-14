@@ -43,7 +43,7 @@ from shapes import both as _both
 STEP = 0.0025  # m: the grid the body is sampled on
 # The body's triangles (eyes excluded; a figure adds one hair mesh): the trunk and
 # limbs, the rest of the head with the hands, and the face with the ears.
-BODY_TRIANGLES = (4700, 1500, 2000)
+BODY_TRIANGLES = (4400, 1400, 1950)
 
 J = {name: np.array(p, dtype=np.float64) for name, p in rig.JOINTS.items()}
 
@@ -85,7 +85,7 @@ EDGES = {
 SHIRT_HEM = 0.955  # m: height of the shirt's hem over the shorts, at the top of the hips
 # The top of the collar: a plane through the neck, lower at the front.
 COLLAR = (np.array([0.0, 0.03, 1.490]), np.array([0.0, -0.30, 1.0]) / math.hypot(0.30, 1.0))
-NECK = Cone((0.0, 0.030, 1.42), (0.0, 0.018, 1.625), 0.066, 0.056)
+NECK = Cone((0.0, 0.030, 1.42), (0.0, 0.025, 1.625), 0.066, 0.056)
 
 
 def _keep_before(shape, edge, offset=0.0):
@@ -132,7 +132,7 @@ def shoulders():
     blade = Ellipsoid((0.085, 0.085, 1.34), (0.062, 0.030, 0.075))
     trapezius = Cone((0.035, 0.040, 1.488), (0.175, 0.035, 1.468), 0.040, 0.036)
     neck_slope = Cone((0.0, 0.045, 1.53), (0.10, 0.04, 1.478), 0.035, 0.030)
-    deltoid = Ellipsoid(UPPER_ARM.at(0.10, out=0.016, front=0.002), (0.056, 0.062, 0.088), UPPER_ARM.axes)
+    deltoid = Ellipsoid(UPPER_ARM.at(0.10, out=0.021, front=0.002), (0.058, 0.064, 0.092), UPPER_ARM.axes)
     deltoid_front = Ellipsoid(UPPER_ARM.at(0.14, out=0.004, front=0.026), (0.038, 0.036, 0.068), UPPER_ARM.axes)
     return [blade, trapezius, neck_slope, deltoid, deltoid_front]
 
@@ -185,11 +185,11 @@ def head_core():
     jaw = Ellipsoid((0.0, -0.018, 1.607), (0.059, 0.068, 0.045))
     chin = Ellipsoid((0.0, -0.072, 1.578), (0.026, 0.022, 0.021))
     muzzle = Ellipsoid((0.0, -0.068, 1.613), (0.040, 0.031, 0.034))
-    jaw_line = Cone((0.055, 0.014, 1.614), (0.018, -0.075, 1.571), 0.012, 0.012)
+    jaw_line = Cone((0.054, 0.014, 1.615), (0.018, -0.074, 1.572), 0.011, 0.011)
     cheek = Ellipsoid((0.052, -0.060, 1.660), (0.024, 0.022, 0.016))
     brow = Cone((0.010, -0.0900, 1.700), (0.050, -0.0770, 1.704), 0.0105, 0.0060)
-    buccal = Ellipsoid((0.046, -0.052, 1.625), (0.024, 0.028, 0.028))
-    head = Union([CRANIUM, face, jaw, chin, muzzle] + _both([jaw_line, cheek, brow, buccal]), k=0.022)
+    buccal = Ellipsoid((0.044, -0.050, 1.628), (0.021, 0.026, 0.026))
+    head = Union([CRANIUM, face, jaw, chin, muzzle] + _both([jaw_line, cheek, brow, buccal]), k=0.028)
     # Sockets for the eyes, then lids around them.
     socket = Ellipsoid(EYE + (0.0, -0.017, 0.002), (0.0200, 0.0160, 0.0140))
     head = Cut(head, Union(_both([socket])), k=0.006)
@@ -734,6 +734,8 @@ def build_body(armature):
 
     bm = bmesh.new()
     bm.from_mesh(body.data)
+    # Decimation is not symmetric; mirror the figure's left half over its right.
+    bmesh.ops.symmetrize(bm, input=bm.verts[:] + bm.edges[:] + bm.faces[:], direction="-X", dist=1e-5)
     bmesh.ops.triangulate(bm, faces=bm.faces[:])
     _cut_edges(bm)
     bmesh.ops.triangulate(bm, faces=bm.faces[:])
