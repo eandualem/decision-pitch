@@ -478,18 +478,28 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
   }
   assert.ok(braked, 'slowing hard, it brakes');
   for (let i = 0; i < 6; i++) {
-    turning.object.rotation.y = -4 * (i + 1) / 60; // the body turning right at 4 rad/s
-    turning.update(1 / 60, 3, 4 * (i + 1) / 60); // the run, still going the old way
+    turning.object.rotation.y = -3 * (i + 1) / 60; // the run turning right at 3 rad/s
+    turning.update(1 / 60, 3, 0);
   }
-  assert.equal(turning.state().move?.name, 'cut_R', 'and cuts as the body turns');
+  assert.equal(turning.state().move?.name, 'cut_R', 'and cuts as its run turns');
   assert.ok(turning.state().acts.some(a => a.name === 'brake' && a.weight > 0), 'the brake fading out under it');
-  // A brake that runs on fades out too.
+  // A brake that walks on fades out too.
   const runsOn = made.create({ seed: 10 });
   for (let i = 0; i < 30; i++) runsOn.update(1 / 60, 7, 0);
-  for (let i = 0; i < 20 && runsOn.state().move?.name !== 'brake'; i++) runsOn.update(1 / 60, 7 - i * 0.15, 0);
+  let slowed = 7;
+  for (let i = 0; i < 20 && runsOn.state().move?.name !== 'brake'; i++) runsOn.update(1 / 60, slowed -= 0.15, 0);
   assert.equal(runsOn.state().move?.name, 'brake');
-  for (let i = 0; i < 40; i++) runsOn.update(1 / 60, 4.5, 0);
-  assert.equal(runsOn.state().move, null, 'running on at 4.5 m/s, it ends');
+  for (let i = 0; i < 25; i++) runsOn.update(1 / 60, slowed = Math.max(1.5, slowed - 0.15), 0);
+  for (let i = 0; i < 40; i++) runsOn.update(1 / 60, 1.5, 0);
+  assert.equal(runsOn.state().move, null, 'walking on at 1.5 m/s, it ends');
+  // A body turning to face the ball as it runs is no cut.
+  const watcher = made.create({ seed: 11 });
+  for (let i = 0; i < 30; i++) watcher.update(1 / 60, 4, 0);
+  for (let i = 0; i < 20; i++) {
+    watcher.object.rotation.y = 3 * (i + 1) / 60;
+    watcher.update(1 / 60, 4, -3 * (i + 1) / 60); // its run keeps its way
+    assert.equal(watcher.state().move, null);
+  }
   // A steady curve is not a cut.
   const runner = made.create({ seed: 6 });
   for (let i = 0; i < 90; i++) {

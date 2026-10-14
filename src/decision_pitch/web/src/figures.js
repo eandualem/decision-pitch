@@ -780,7 +780,7 @@ const COUNTER = { chest: 0.5, neck: 0.3 }; // of the hips' turn the chest and ne
 // Moves the figure makes of itself from how it moves (one-shots in figure.json, when it
 // has them). A turn on the spot (turn_L, turn_R) when it turns faster than TURNING_FAST
 // below TURNING_SLOW m/s, its clip time following the turn; a cut (cut_L, cut_R) when its
-// run turns faster than CUTTING above CUTTING_SPEED, planting a moment later; a braking
+// run turns faster than CUTTING above CUTTING_SPEED; a braking
 // step (brake) when it slows harder than BRAKING from above BRAKING_SPEED without turning.
 const TURNING_FAST = 2.5; // rad/s
 const TURNING_SLOW = 1;
@@ -1193,15 +1193,15 @@ export function createFigures(template, { footLock = true } = {}) {
       lastYaw = yaw;
       lastWay = way;
       const slowing = -(ax * Math.sin(way) + az * Math.cos(way));
-      // A cut: the run turning sharply, or the body turning sharply at a run (the engine
-      // turns the body first and the run follows), towards whichever turns faster.
-      const cutting = Math.abs(running) > CUTTING || Math.abs(turning) > TURNING_FAST;
-      const cutWay = Math.abs(turning) > Math.abs(running) ? turning : running;
+      // A cut: the run itself turning sharply. A body turning while it runs (to face the
+      // ball, say) is no cut: the stride and the foot lock carry it.
+      const cutting = Math.abs(running) > CUTTING;
+      const cutWay = running;
       // Another one-shot (a kick, a gesture) takes the body: no move begins under it.
       let others = 0;
       for (let i = 0; i < acting; i++) if (!slots[i].planted) others = Math.max(others, slots[i].share);
       // A brake gives way to a cut, and ends when the figure runs on instead of stopping.
-      if (move.kind === 'brake' && ((cutting && speed > CUTTING_SPEED) || (slowing < BRAKING / 3 && speed > TURNING_SLOW * 2))) fade();
+      if (move.kind === 'brake' && ((cutting && speed > CUTTING_SPEED) || (slowing < BRAKING / 3 && speed > STOPPED))) fade();
       if (!move.kind && others === 0) {
         if (speed < TURNING_SLOW && Math.abs(turning) > TURNING_FAST) begin('turn', turning > 0 ? 'turn_L' : 'turn_R', speed);
         else if (speed > CUTTING_SPEED && cutting) begin('cut', cutWay > 0 ? 'cut_L' : 'cut_R', speed);
