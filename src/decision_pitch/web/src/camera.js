@@ -53,6 +53,10 @@ const CLOSE_UP = {
   turn: 1.5, // rad/s it may swing round the scorer when its side gets blocked, the way that is clear
   ahead: [0.4, 0.9], // s ahead it checks its side is still clear, as it moves with the scorer
   lift: 1.5, // m it rises to pass over the heads, and raised arms, of anyone who still comes too near
+  front: Math.cos(THREE.MathUtils.degToRad(60)), // the scorer's front: within 60 deg of its facing
+  turnAway: Math.cos(THREE.MathUtils.degToRad(75)), // it swings back round in front past 75 deg
+  reverse: Math.cos(THREE.MathUtils.degToRad(100)), // or cuts to the reverse angle past 100 deg
+  recut: 1.15, // times its distance a reverse angle starts from, easing in again
 };
 // What the close-up keeps clear of, in m: other players, the line of sight to the scorer,
 // and the goal frame and net. It stays over the pitch and its surround, never behind a goal.
@@ -75,18 +79,26 @@ export function createCamera(camera, pitch) {
   let closeUntil = -Infinity;
   let scorer = null;
   let closeActors = null;
-  let closeStart = 0;
+  let easeStart = 0; // when the close-up last cut in, and how far out it started
+  let easeFrom = 1;
   const closeFollow = new THREE.Vector3(); // the scorer, smoothed
   const lastScorer = new THREE.Vector3();
   const scorerVelocity = new THREE.Vector3();
   const scorerAhead = new THREE.Vector3();
+  const scorerFacing = new THREE.Vector3(); // where the scorer faces, smoothed; zero if unknown
+  const facingNow = new THREE.Vector3();
+  let behind = 0; // s the camera has been off the scorer's front
+  const swingTo = new THREE.Vector3(); // the side it is swinging round to
+  let swinging = false;
   const closeSide = new THREE.Vector3(0, 0, 1); // from the scorer towards the camera
   const others = []; // the other players' positions this frame
   const probe = new THREE.Vector3();
   const chest = new THREE.Vector3();
   const later = new THREE.Vector3();
+  const rayDirection = new THREE.Vector3();
   const tryDir = new THREE.Vector3();
   const tryArc = new THREE.Vector3();
+  const candidate = new THREE.Vector3();
   const ray = new THREE.Ray();
   const hit = new THREE.Vector3();
   const halfLength = pitch.length / 2;
@@ -118,7 +130,7 @@ export function createCamera(camera, pitch) {
     chest.copy(centre);
     chest.y = CLOSE_UP.aim;
     const length = probe.distanceTo(chest);
-    ray.set(probe, chest.clone().sub(probe).normalize());
+    ray.set(probe, rayDirection.subVectors(chest, probe).normalize());
     for (const goal of goals) {
       if (goal.containsPoint(probe)) return false;
       if (ray.intersectBox(goal, hit) && hit.distanceTo(probe) < length) return false;
@@ -132,12 +144,19 @@ export function createCamera(camera, pitch) {
   // How good a side is: the broadcast camera's side of the scorer, looking out from the
   // pitch, with no one walking between the camera and the scorer.
   function sideScore(centre, dir, distance, velocity = null) {
-    let score = dir.z + 0.5 * -dir.x * Math.sign(centre.x || 1);
+    // The scorer's face first, then the broadcast camera's side, looking out from the pitch.
+    // (After a goal every scorer heads back towards halfway for the kick-off.)
+    let score = dir.z + 1.5 * -dir.x * Math.sign(centre.x || 1);
+    if (scorerFacing.lengthSq() > 0) {
+      const front = dir.dot(scorerFacing);
+      score += 3 * front + (front >= CLOSE_UP.front ? 4 : 0);
+    }
     const ax = centre.x + dir.x * distance;
     const az = centre.z + dir.z * distance;
     for (const other of others) {
       // Room round the camera, now and where it is heading with the scorer.
-      for (const seconds of [0, ...(velocity ? CLOSE_UP.ahead : [])]) {
+      for (let k = -1; k < (velocity ? CLOSE_UP.ahead.length : 0); k++) {
+        const seconds = k < 0 ? 0 : CLOSE_UP.ahead[k];
         const d = Math.hypot(other.x - (ax + (velocity?.x ?? 0) * seconds), other.z - (az + (velocity?.z ?? 0) * seconds));
         if (d < 3) score -= (3 - d) / 3;
       }
@@ -148,6 +167,21 @@ export function createCamera(camera, pitch) {
       if (Math.hypot(other.x - (ax + vx * along), other.z - (az + vz * along)) < CLEAR.sight) score -= 2;
     }
     return score;
+  }
+
+  // Where player `id` faces, over the ground, into `out`: the drawn figure's facing when the
+  // page can tell it, else the way it is moving; false when neither is known.
+  function facing(actors, id, out) {
+    const yaw = actors?.getPlayerFacing?.(id);
+    if (typeof yaw === 'number') {
+      out.set(Math.sin(yaw), 0, Math.cos(yaw));
+      return true;
+    }
+    if (scorerVelocity.length() > 0.8) {
+      out.copy(scorerVelocity).setY(0).normalize();
+      return true;
+    }
+    return false;
   }
 
   // Whether someone stands between the camera, `distance` along `dir`, and the scorer.
@@ -176,16 +210,19 @@ export function createCamera(camera, pitch) {
 
   // The clear side with the best view, `out` set to its direction; false if none is clear.
   function pickSide(centre, out, velocity = null) {
-    for (const [room, ahead] of [[CLEAR.player, velocity], [CLEAR.player, null], [CLEAR.player * 0.6, null]]) {
+    // Clear ahead first, then clear now, then with less room round it.
+    for (let pass = 0; pass < 3; pass++) {
+      const room = pass < 2 ? CLEAR.player : CLEAR.player * 0.6;
+      const ahead = pass === 0 ? velocity : null;
       let best = -Infinity;
       for (let i = 0; i < AZIMUTHS; i++) {
         const angle = (i / AZIMUTHS) * Math.PI * 2;
-        tryDir.set(Math.sin(angle), 0, Math.cos(angle));
-        if (!clearAt(centre, tryDir, CLOSE_UP.distance, room, ahead) || !clearAt(centre, tryDir, CLOSE_UP.distance * CLOSE_UP.from, room)) continue;
-        const score = sideScore(centre, tryDir, CLOSE_UP.distance, velocity);
+        candidate.set(Math.sin(angle), 0, Math.cos(angle));
+        if (!clearAt(centre, candidate, CLOSE_UP.distance, room, ahead) || !clearAt(centre, candidate, CLOSE_UP.distance * CLOSE_UP.from, room)) continue;
+        const score = sideScore(centre, candidate, CLOSE_UP.distance, velocity);
         if (score > best) {
           best = score;
-          out.copy(tryDir);
+          out.copy(candidate);
         }
       }
       if (best > -Infinity) return true;
@@ -232,10 +269,15 @@ export function createCamera(camera, pitch) {
         closeActors = actors;
         closeup.copy(actors.getPlayerPosition(scorer) ?? actors.ballPosition);
         closeUntil = now + CLOSE;
-        closeStart = now;
+        easeStart = now;
+        easeFrom = CLOSE_UP.from;
         closeFollow.copy(closeup);
         lastScorer.copy(closeup);
         scorerVelocity.set(0, 0, 0);
+        behind = 0;
+        swinging = false;
+        if (facing(actors, scorer, facingNow)) scorerFacing.copy(facingNow);
+        else scorerFacing.set(0, 0, 0);
         gather(actors, scorer);
         if (!pickSide(closeFollow, closeSide)) closeSide.set(0, 0, 1);
         shot = request = null;
@@ -292,19 +334,62 @@ export function createCamera(camera, pitch) {
         scorerAhead.copy(closeup).addScaledVector(scorerVelocity, 1 / CLOSE_UP.follow);
         closeFollow.lerp(scorerAhead, 1 - Math.exp(-step * CLOSE_UP.follow));
         gather(closeActors, scorer);
-        const ease = THREE.MathUtils.smoothstep((now - closeStart) / CLOSE_UP.easeIn, 0, 1);
-        const distance = CLOSE_UP.distance * (CLOSE_UP.from + (1 - CLOSE_UP.from) * ease);
+        const ease = THREE.MathUtils.smoothstep((now - easeStart) / CLOSE_UP.easeIn, 0, 1);
+        const distance = CLOSE_UP.distance * (easeFrom + (1 - easeFrom) * ease);
         // Swing round the scorer, not through anyone, if its side becomes blocked now or
         // where the camera is heading, or someone walks into the line of sight.
-        const blocked = !clearAt(closeFollow, closeSide, distance, CLEAR.player, scorerVelocity) || sightBlocked(closeFollow, closeSide, distance);
-        if (blocked && pickSide(closeFollow, tryDir, scorerVelocity)) {
+        if (facing(closeActors, scorer, facingNow)) {
+          if (scorerFacing.lengthSq() === 0) scorerFacing.copy(facingNow);
+          else {
+            // Turned as an angle, so even a half turn comes through.
+            const from = Math.atan2(scorerFacing.x, scorerFacing.z);
+            const to = Math.atan2(facingNow.x, facingNow.z);
+            const angle = from + Math.atan2(Math.sin(to - from), Math.cos(to - from)) * (1 - Math.exp(-step * 6));
+            scorerFacing.set(Math.sin(angle), 0, Math.cos(angle));
+          }
+        }
+        // Off the scorer's front for a moment, it swings back round to the face.
+        behind = scorerFacing.lengthSq() > 0 && closeSide.dot(scorerFacing) < CLOSE_UP.turnAway ? behind + step : 0;
+        const blocked = !clearAt(closeFollow, closeSide, distance, CLEAR.player, scorerVelocity) ||
+          sightBlocked(closeFollow, closeSide, distance) || behind > 0.4;
+        // A blocked side or a turned back sets a new side to swing to, kept until the camera
+        // gets there or that side stops being clear.
+        if (swinging && (!clearAt(closeFollow, swingTo, distance) ||
+          (scorerFacing.lengthSq() > 0 && swingTo.dot(scorerFacing) < CLOSE_UP.turnAway))) swinging = false;
+        // The goals, the nets, the stands and the pitch's edge are never crossed: a camera
+        // the scorer's run has brought up against one cuts to a clear side.
+        if (!clearAt(closeFollow, closeSide, distance, 0) && pickSide(closeFollow, tryDir, scorerVelocity)) {
+          closeSide.copy(tryDir);
+          swinging = false;
+        }
+        if ((blocked || behind > 0.4) && !swinging && pickSide(closeFollow, tryDir, scorerVelocity) && tryDir.dot(closeSide) < 0.999) {
+          if (behind > 0.4 && tryDir.dot(closeSide) < CLOSE_UP.reverse) {
+            // The scorer has turned its back: cut round to its face, easing in again.
+            closeSide.copy(tryDir);
+            easeStart = now;
+            easeFrom = CLOSE_UP.recut;
+          } else {
+            swingTo.copy(tryDir);
+            swinging = true;
+          }
+          behind = 0;
+        }
+        if (swinging) {
           const from = Math.atan2(closeSide.x, closeSide.z);
-          let delta = Math.atan2(Math.sin(Math.atan2(tryDir.x, tryDir.z) - from), Math.cos(Math.atan2(tryDir.x, tryDir.z) - from));
+          const to = Math.atan2(swingTo.x, swingTo.z);
+          let delta = Math.atan2(Math.sin(to - from), Math.cos(to - from));
           // Round the other way if the short way passes anyone.
           const long = delta - Math.sign(delta) * Math.PI * 2;
           if (!arcClear(closeFollow, from, delta, distance) && arcClear(closeFollow, from, long, distance)) delta = long;
-          const angle = from + THREE.MathUtils.clamp(delta, -CLOSE_UP.turn * step, CLOSE_UP.turn * step);
-          closeSide.set(Math.sin(angle), 0, Math.cos(angle));
+          const turn = CLOSE_UP.turn * step;
+          const angle = from + Math.sign(delta) * turn;
+          tryArc.set(Math.sin(angle), 0, Math.cos(angle));
+          if (Math.abs(delta) <= turn || !clearAt(closeFollow, tryArc, distance, 0)) {
+            closeSide.copy(swingTo); // there, or cut there rather than swing through a goal
+            swinging = false;
+          } else {
+            closeSide.copy(tryArc);
+          }
         }
         look.copy(closeFollow);
         look.y = CLOSE_UP.aim;

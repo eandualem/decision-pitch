@@ -19,9 +19,11 @@ function setup(aspect = 16 / 9) {
   const ball = new THREE.Vector3(0, 0.3, 0);
   const scorer = new THREE.Vector3(48, 0, -3);
   const others = []; // other players near the scorer, for the close-up to keep clear of
+  const look = { yaw: null }; // the scorer's drawn facing, when a test sets it
   const actors = {
     ballPosition: ball,
     getPlayerPosition: (id) => (id === 9 ? scorer : others[id - 100] ?? null),
+    getPlayerFacing: (id) => (id === 9 ? look.yaw : null),
     forEachPlayerPosition(visit) {
       visit(9, scorer);
       others.forEach((position, i) => visit(100 + i, position));
@@ -32,7 +34,7 @@ function setup(aspect = 16 / 9) {
   let now = 0;
   const point = new THREE.Vector3();
   return {
-    camera, broadcast, ball, actors, touchline, managers, scorer, others,
+    camera, broadcast, ball, actors, touchline, managers, scorer, others, look,
     get now() { return now; },
     event(kind, fields = {}) { broadcast.handleEvent({ type: 'event', kind, ...fields }, now, actors, touchline); },
     message(team, kind = 'instruction') { broadcast.handleMessage({ type: 'manager', team, kind }, now, touchline); },
@@ -421,4 +423,25 @@ test('the close-up keeps clear of the goal, the stands and the players round the
       }
     }
   }
+});
+
+test('the close-up films the scorer from the front, and comes round again when it turns', () => {
+  const t = setup();
+  // The scorer faces the centre of the pitch (-x), standing well inside it.
+  t.scorer.set(30, 0, 5);
+  t.look.yaw = -Math.PI / 2;
+  t.run(1);
+  t.event('goal', { team: 1, player: 9 });
+  const front = () => {
+    const side = t.camera.position.clone().sub(t.scorer).setY(0).normalize();
+    return side.dot(new THREE.Vector3(Math.sin(t.look.yaw), 0, Math.cos(t.look.yaw)));
+  };
+  t.run(1, 'kickoff');
+  assert.ok(front() > Math.cos(Math.PI / 3), `in front of the scorer: ${front().toFixed(2)}`);
+  // It turns its back on the camera (towards +x) and stays so.
+  t.look.yaw = Math.PI / 2;
+  t.run(1.5, 'kickoff');
+  assert.ok(front() > Math.cos(Math.PI / 3), `round to its face again: ${front().toFixed(2)}`);
+  const c = closeUpCheck(t);
+  assert.ok(c.framed && c.share > 0.4 && c.share < 0.6, 'still framed at half the frame');
 });
