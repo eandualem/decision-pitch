@@ -82,10 +82,11 @@ export function touchClip(kind, { speed = 0, lateral = 0, height = 0, diving = f
   return CLIPS[kind] ?? null;
 }
 
-export function createPlayers(scene, teams, figure) {
+// `options` go to createFigures (figures.js).
+export function createPlayers(scene, teams, figure, options = {}) {
   const root = new THREE.Group();
   scene.add(root);
-  const made = createFigures(figure);
+  const made = createFigures(figure, options);
   const geometries = new Set();
   const materials = new Set();
   const textures = new Set();

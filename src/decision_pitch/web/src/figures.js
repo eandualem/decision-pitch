@@ -22,6 +22,7 @@ const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const smooth = (t) => t * t * (3 - 2 * t);
 const ramp = (value, low, high) => smooth(clamp((value - low) / (high - low), 0, 1));
 const fract = (value) => value - Math.floor(value);
+const mix = (a, b, t) => a + (b - a) * t;
 
 // The directions a loop may name, in radians anticlockwise from the way the figure faces
 // (so its left is +pi/2). A loop may give any other `angle`, in degrees, instead.
@@ -111,7 +112,7 @@ export function gait(clips) {
     moving.get(set).push(loops.length);
     loops.push({
       name, duration: clip.duration, speed: clip.speed, angle, stride: clip.speed * clip.duration, set,
-      touch: Number.isFinite(clip.touch) ? clip.touch : null,
+      touch: Number.isFinite(clip.touch) ? clip.touch : null, duty: clip.duty > 0 && clip.duty < 1 ? clip.duty : null,
     });
   }
   idles.sort((a, b) => (a.name === 'idle' ? -1 : b.name === 'idle' ? 1 : a.name < b.name ? -1 : 1));
@@ -182,7 +183,7 @@ export function gait(clips) {
 // Blends the loops for a figure moving over the ground at `speed` m/s, travelling at
 // `travel` radians from the way it faces (anticlockwise, so +pi/2 is to its left), drawn
 // at `scale`. Writes each loop's weight into `weights` (indexed like `gait.loops`, summing
-// to 1) and returns the shared cycle's rate in cycles per second. `mix`, indexed like
+// to 1) and returns the shared cycle's rate in cycles per second. `shares`, indexed like
 // `gait.sets`, gives each set but "run" its share (the rest is run's), and `stride` shifts
 // where along the speeds the loops blend: below 1 a figure takes shorter, quicker steps.
 //
@@ -193,17 +194,17 @@ export function gait(clips) {
 // whichever way it goes. Sets blend the same way, their strides added by their shares.
 // Below a shuffle the travel is ignored and the figure steps forwards; above it the blends
 // cross-fade.
-export function blendLoops(gait, speed, travel, scale, weights, mix = null, stride = 1) {
+export function blendLoops(gait, speed, travel, scale, weights, shares = null, stride = 1) {
   weights.fill(0);
   const { sets } = gait;
   let others = 0;
-  if (mix) for (let s = 1; s < sets.length; s++) if (mix[s] > 0) others += mix[s];
+  if (shares) for (let s = 1; s < sets.length; s++) if (shares[s] > 0) others += shares[s];
   const norm = others > 1 ? 1 / others : 1;
   const moving = speed > 0;
   const pace = speed / scale; // the speed a figure of scale 1 would move at
   let length = 0;
   for (let s = 0; s < sets.length; s++) {
-    const share = s === 0 ? Math.max(0, 1 - others) : mix && mix[s] > 0 ? mix[s] * norm : 0;
+    const share = s === 0 ? Math.max(0, 1 - others) : shares && shares[s] > 0 ? shares[s] * norm : 0;
     if (!(share > 0)) continue;
     if (moving) length += share * blendSet(gait, sets[s], pace, travel, stride, weights, share);
     else weights[sets[s].rest] += share;
@@ -443,10 +444,25 @@ export function prepareFigure(scene, animations, info = {}) {
   });
   const clips = new Map();
   for (const clip of animations) if (described[clip.name]) clips.set(clip.name, clip);
+  // Each foot's heel, on the ground under it in the rest pose, and ball, the toe joint the
+  // foot rolls over, in the foot's own space: the ends of the sole the foot lock holds.
+  const soles = ['L', 'R'].map((side) => {
+    const foot = scene.getObjectByName(`foot_${side}`);
+    const toe = scene.getObjectByName(`toe_${side}`);
+    if (!foot || !toe) return { heel: new THREE.Vector3(), ball: new THREE.Vector3(), rise: 0 };
+    const ankle = new THREE.Vector3().setFromMatrixPosition(foot.matrixWorld);
+    const tip = new THREE.Vector3().setFromMatrixPosition(toe.matrixWorld);
+    const toFoot = new THREE.Matrix4().copy(foot.matrixWorld).invert();
+    return {
+      heel: new THREE.Vector3(ankle.x - (tip.x - ankle.x) * HEEL, 0, ankle.z - (tip.z - ankle.z) * HEEL).applyMatrix4(toFoot),
+      ball: new THREE.Vector3(tip.x, tip.y, tip.z).applyMatrix4(toFoot),
+      rise: tip.y, // the ball's pivot, the toe joint, is this far above the ground standing
+    };
+  });
   const steps = gait(described);
   measureReach(scene, clips, steps);
   return {
-    scene, info, clips, described, hairs, morphs,
+    scene, info, clips, described, hairs, morphs, soles,
     gait: steps,
     layered: { play: new Map(), gesture: new Map() }, // clips with only that layer's tracks
     twins: new Map(),
@@ -538,10 +554,97 @@ function sameSkin(a, b) {
 
 const SLOTS = 4; // one-shots a figure can show at once, fading into each other
 
+// The foot lock. Blended loops whose feet move differently (a walk half into a jog, a
+// step half into a side step) leave the planted foot sliding a little, and so does a
+// figure turned or leant over its stride. While a foot is planted, by the shared phase and
+// the loops' `duty` (the share of the cycle each foot is down: the left from phase 0, the
+// right from 0.5), its ankle is held where it landed by bending the hip and knee, and let
+// go smoothly before it lifts.
+const DUTY = 0.35; // the share of the cycle a foot is down, for a loop that does not say
+// Of the stance, over which the lock lets go: it holds the sole while it is on the ground
+// and lets go once it lifts, so letting go never drags a foot over the grass.
+const LOCK_OUT = [0.95, 1.3];
+const LOCK_REACH = [0.12, 0.25]; // m a foot is held over, beyond which the lock gives way
+const HEEL = 0.35; // the heel's distance behind the ankle, over the ankle-to-toe length
+const ROCK = 0.01; // m lower the other end of the sole must be to take the weight
+const LIFTED = [0.03, 0.06]; // m up over which a sole is no longer on the ground
+
+const hip = new THREE.Vector3();
+const knee = new THREE.Vector3();
+const ankle = new THREE.Vector3();
+const axis = new THREE.Vector3();
+const bend = new THREE.Vector3();
+const was = new THREE.Vector3();
+const now = new THREE.Vector3();
+const turnThigh = new THREE.Quaternion();
+const turnShin = new THREE.Quaternion();
+const thighTurn = new THREE.Quaternion();
+const shinTurn = new THREE.Quaternion();
+const footTurn = new THREE.Quaternion();
+const parentTurn = new THREE.Quaternion();
+const ignored = new THREE.Vector3();
+const footAt = new THREE.Vector3();
+const footTo = new THREE.Vector3();
+const heelAt = new THREE.Vector3();
+const ballAt = new THREE.Vector3();
+
+// A bone's world matrix from its parent's, which must be up to date.
+function placeBone(bone) {
+  bone.updateMatrix();
+  bone.matrixWorld.multiplyMatrices(bone.parent.matrixWorld, bone.matrix);
+}
+
+// Bends the leg `thigh` > `shin` > `foot` (bones whose world matrices, and the thigh's
+// parent's, are up to date) so the ankle, the foot's origin, reaches `target` in world
+// space, or as near as the leg's length allows. The knee bends the way it already does and
+// the foot keeps its world orientation, so the sole stays as the clip has it. Sets the
+// bones' quaternions; their world matrices are left for the next scene update.
+export function reachFor(thigh, shin, foot, target) {
+  hip.setFromMatrixPosition(thigh.matrixWorld);
+  knee.setFromMatrixPosition(shin.matrixWorld);
+  ankle.setFromMatrixPosition(foot.matrixWorld);
+  const upper = hip.distanceTo(knee);
+  const lower = knee.distanceTo(ankle);
+  axis.subVectors(target, hip);
+  const far = axis.length();
+  if (!(upper > 1e-6 && lower > 1e-6 && far > 1e-6)) return;
+  axis.divideScalar(far);
+  const d = clamp(far, Math.abs(upper - lower) + 1e-4, upper + lower - 1e-4);
+  thigh.parent.matrixWorld.decompose(ignored, parentTurn, ignored);
+  // The way the knee points, square to the new line from the hip: its offset from the
+  // line to the ankle, or for a straight leg the way the hips face.
+  was.subVectors(ankle, hip).normalize();
+  bend.subVectors(knee, hip);
+  bend.addScaledVector(was, -bend.dot(was));
+  if (bend.lengthSq() < 1e-8) bend.set(0, 0, 1).applyQuaternion(parentTurn);
+  bend.addScaledVector(axis, -bend.dot(axis));
+  if (bend.lengthSq() < 1e-12) return;
+  bend.normalize();
+  const reach = (upper * upper - lower * lower + d * d) / (2 * d);
+  const rise = Math.sqrt(Math.max(0, upper * upper - reach * reach));
+  thigh.matrixWorld.decompose(ignored, thighTurn, ignored);
+  shin.matrixWorld.decompose(ignored, shinTurn, ignored);
+  foot.matrixWorld.decompose(ignored, footTurn, ignored);
+  // The thigh turns onto the new knee...
+  was.subVectors(knee, hip).divideScalar(upper);
+  now.copy(axis).multiplyScalar(reach).addScaledVector(bend, rise).divideScalar(upper);
+  turnThigh.setFromUnitVectors(was, now);
+  // ...and the shin, carried round with it, from the new knee onto the target.
+  was.subVectors(ankle, knee).divideScalar(lower).applyQuaternion(turnThigh);
+  now.copy(axis).multiplyScalar(d - reach).addScaledVector(bend, -rise).normalize();
+  turnShin.setFromUnitVectors(was, now);
+  thighTurn.premultiply(turnThigh);
+  shinTurn.premultiply(turnThigh).premultiply(turnShin);
+  thigh.quaternion.copy(parentTurn.invert()).multiply(thighTurn);
+  shin.quaternion.copy(thighTurn.invert()).multiply(shinTurn);
+  foot.quaternion.copy(shinTurn.invert()).multiply(footTurn);
+}
+
 // Makes the people of one match from `template` (see loadFigure). Materials are shared
 // between them; dispose() frees them and the people's skeletons. The template's geometry
-// and clips are never freed.
-export function createFigures(template) {
+// and clips are never freed. `footLock: false` leaves the feet as the blend has them, for
+// measuring what the lock does.
+export function createFigures(template, { footLock = true } = {}) {
   const paints = new Map();
   const owned = new Set();
   const paint = (hex) => {
@@ -598,6 +701,18 @@ export function createFigures(template) {
     });
 
     const handBones = ['hand_L', 'hand_R'].map(name => object.getObjectByName(name));
+    // The legs the foot lock bends, each with where its foot last landed.
+    const legs = ['L', 'R'].map((side, i) => ({
+      thigh: object.getObjectByName(`thigh_${side}`), shin: object.getObjectByName(`shin_${side}`),
+      foot: object.getObjectByName(`foot_${side}`), start: i * 0.5, ...template.soles[i],
+      // Where the end of the sole that bears the weight (0 the heel, 1 the ball) is held.
+      contact: new THREE.Vector3(), bearing: 0, down: false, slack: false, held: 0,
+    }));
+    const lockable = footLock && legs.every(leg => leg.thigh?.parent && leg.shin && leg.foot);
+    // Bones the page poses over the clips start each frame from their rest, in case no
+    // clip keys them.
+    const posed = lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : [];
+    const rests = posed.map(bone => bone.quaternion.clone());
     const palm = new THREE.Vector3();
     const mixer = new THREE.AnimationMixer(object);
     const loops = steps.loops.map(({ name }) => {
@@ -609,7 +724,7 @@ export function createFigures(template) {
       return action;
     });
     const weights = new Float32Array(loops.length);
-    const mix = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
+    const setShares = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
     const slots = Array.from({ length: SLOTS }, () => ({ name: null, time: 0, share: 0, layer: 'play' }));
     let acting = 0;
     // One-shot actions by clip, each with the last frame it showed in; those that showed
@@ -623,6 +738,7 @@ export function createFigures(template) {
     let rate = 0;
     let lastSpeed = 0;
     let lastTravel = 0;
+    let shownDuty = DUTY;
 
     function action(clip) {
       // The same clip twice in a frame (one fading out as it starts again) plays on a twin.
@@ -636,6 +752,65 @@ export function createFigures(template) {
       if (entry.frame !== frame) next.push(entry);
       entry.frame = frame;
       return entry.action;
+    }
+
+    // Holds each planted foot where it landed (see reachFor): the end of its sole that
+    // bears the weight, the heel as it lands and the ball as it rolls on, is kept where it
+    // touched down, and the ankle moves with the clip around it. `moving` is the share of
+    // the blend that travels, `duty` its share of the cycle a foot is down, and `taken` the
+    // share of each leg a one-shot plays.
+    function lockFeet(moving, duty, takenLeft, takenRight) {
+      let updated = null;
+      for (let i = 0; i < 2; i++) {
+        const leg = legs[i];
+        const into = fract(phase - leg.start) / duty; // how far through its stance
+        const share = moving * (1 - (i === 0 ? takenLeft : takenRight));
+        leg.held = 0;
+        if (!(into < LOCK_OUT[1]) || !(share > 1e-3)) {
+          leg.down = leg.slack = false;
+          continue;
+        }
+        const { thigh, shin, foot } = leg;
+        if (updated !== thigh.parent) {
+          thigh.parent.updateWorldMatrix(true, false);
+          updated = thigh.parent;
+        }
+        placeBone(thigh);
+        placeBone(shin);
+        placeBone(foot);
+        footAt.setFromMatrixPosition(foot.matrixWorld);
+        heelAt.copy(leg.heel).applyMatrix4(foot.matrixWorld);
+        ballAt.copy(leg.ball).applyMatrix4(foot.matrixWorld);
+        // How high each end is off the ground.
+        const heelUp = heelAt.y / scale;
+        const ballUp = ballAt.y / scale - leg.rise;
+        if (!leg.down) {
+          leg.down = true;
+          leg.slack = false;
+          leg.bearing = heelUp <= ballUp ? 0 : 1;
+          leg.contact.copy(leg.bearing ? ballAt : heelAt);
+        } else if (leg.bearing === 0 && ballUp < heelUp - ROCK) {
+          // Rolling onto the ball: it is held where it is now, by the heel's hold.
+          leg.bearing = 1;
+          leg.contact.set(ballAt.x + leg.contact.x - heelAt.x, 0, ballAt.z + leg.contact.z - heelAt.z);
+        } else if (leg.bearing === 1 && heelUp < ballUp - ROCK) {
+          leg.bearing = 0;
+          leg.contact.set(heelAt.x + leg.contact.x - ballAt.x, 0, heelAt.z + leg.contact.z - ballAt.z);
+        }
+        const bearing = leg.bearing ? ballAt : heelAt;
+        const up = leg.bearing ? ballUp : heelUp;
+        const dx = leg.contact.x - bearing.x;
+        const dz = leg.contact.z - bearing.z;
+        const off = Math.hypot(dx, dz) / scale;
+        if (off >= LOCK_REACH[1]) leg.slack = true;
+        if (leg.slack) continue;
+        // It holds from the moment the foot lands, where it is, so it takes hold without a jump.
+        leg.held = share * (1 - ramp(into, ...LOCK_OUT)) * (1 - ramp(off, ...LOCK_REACH))
+          * (1 - ramp(up, ...LIFTED));
+        if (!(leg.held > 1e-3)) continue;
+        footTo.set(footAt.x + dx * leg.held, footAt.y, footAt.z + dz * leg.held);
+        reachFor(thigh, shin, foot, footTo);
+      }
     }
 
     const person = {
@@ -696,11 +871,11 @@ export function createFigures(template) {
         lastTravel = travel;
         const step = Math.max(0, dt);
         const follow = 1 - Math.exp(-step / SET_BLEND);
-        for (let s = 1; s < mix.length; s++) {
+        for (let s = 1; s < setShares.length; s++) {
           const target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
-          mix[s] += (target - mix[s]) * follow;
+          setShares[s] += (target - setShares[s]) * follow;
         }
-        rate = blendLoops(steps, speed, travel, scale, weights, mix);
+        rate = blendLoops(steps, speed, travel, scale, weights, setShares);
         phase = fract(phase + rate * step);
         idle += step; // the clock of the loops that do not travel
         for (let i = 0; i < loops.length; i++) {
@@ -713,11 +888,15 @@ export function createFigures(template) {
         // Over the loops, which sum to one, a weight of s / (1 - s) takes a share s.
         frame++;
         const still = 1 - ramp(speed, STILL, steps.walk);
+        let takenLeft = 0;
+        let takenRight = 0;
         for (let i = 0; i < acting; i++) {
           const { name, time, share, layer } = slots[i];
           const clip = template.clips.get(name);
           const at = clamp(time, 0, clip.duration);
           const wholeShare = layer === 'whole' ? share : share * still;
+          takenLeft = Math.max(takenLeft, wholeShare);
+          takenRight = Math.max(takenRight, layer === 'play' ? share : wholeShare);
           if (wholeShare > 0) {
             const whole = action(clip);
             whole.time = at;
@@ -735,7 +914,20 @@ export function createFigures(template) {
         next = swap;
         next.length = 0;
         acting = 0;
+        for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(rests[i]);
         mixer.update(0);
+        if (lockable) {
+          let moving = 0;
+          let duty = 0;
+          for (let i = 0; i < weights.length; i++) {
+            const loop = steps.loops[i];
+            if (!(weights[i] > 0) || !(loop.speed > 0)) continue;
+            moving += weights[i];
+            duty += weights[i] * (loop.duty ?? DUTY);
+          }
+          shownDuty = moving > 0 ? duty / moving : DUTY;
+          lockFeet(moving, shownDuty, takenLeft, takenRight);
+        }
       },
       // What the figure shows, for tests and debugging.
       state() {
@@ -743,8 +935,11 @@ export function createFigures(template) {
         steps.loops.forEach((loop, i) => { if (weights[i] > 0) blend[loop.name] = weights[i]; });
         const acts = shown.map(({ action: a }) => ({ name: a.getClip().name, time: a.time, weight: a.weight }));
         const shares = {};
-        steps.sets.forEach((set, s) => { if (s > 0 && mix[s] > 0) shares[set.name] = mix[s]; });
-        return { speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach() };
+        steps.sets.forEach((set, s) => { if (s > 0 && setShares[s] > 0) shares[set.name] = setShares[s]; });
+        return {
+          speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, sets: shares, acts, reach: person.reach(),
+          feet: legs.map(leg => leg.held), duty: shownDuty,
+        };
       },
     };
     return person;

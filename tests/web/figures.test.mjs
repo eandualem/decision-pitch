@@ -8,7 +8,7 @@ import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES } from './figure-fixture.m
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const figures = await import('../../src/decision_pitch/web/src/figures.js');
-const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure } = figures;
+const { blendLoops, gait, contactTime, envelope, variation, outfit, prepareFigure, createFigures, loadFigure, reachFor } = figures;
 
 const fixture = () => {
   const { scene, animations, info } = fixtureGltf();
@@ -499,8 +499,10 @@ test('the built figure has every clip the page plays', { skip: !hasFigure && 'fi
 // returns the largest speed of a planted boot's lowest point, the point of the sole on the
 // grass (it rolls from heel to toe, but that point itself must not move), in mid-stance:
 // every loop plants the left foot at phase 0 and the right at 0.5.
-function plantedSlip(template, seed, speed, travel = 0) {
-  const made = createFigures(template);
+// `ground` is how fast the figure really moves, when it is not `speed`, and `footLock`
+// whether the page holds its planted feet.
+function plantedSlip(template, seed, speed, travel = 0, { ground = speed, footLock = true } = {}) {
+  const made = createFigures(template, { footLock });
   const person = made.create({ seed });
   const group = new THREE.Group();
   group.add(person.object);
@@ -527,7 +529,7 @@ function plantedSlip(template, seed, speed, travel = 0) {
   let worst = 0;
   for (let i = 0; i < 480; i++) {
     const t = i * dt;
-    group.position.set(Math.cos(facing + travel) * speed * t, 0, -Math.sin(facing + travel) * speed * t);
+    group.position.set(Math.cos(facing + travel) * ground * t, 0, -Math.sin(facing + travel) * ground * t);
     person.update(dt, speed, travel);
     group.updateMatrixWorld(true);
     sides.forEach((list, side) => {
@@ -565,6 +567,78 @@ test('built figure: the planted foot stays put at every speed and height', { ski
       assert.ok(slip < 0.25, `${height.toFixed(2)} m figure at 2 m/s, travel ${travel.toFixed(2)}: slides at ${slip.toFixed(3)} m/s`);
     }
   }
+});
+
+test('built figure: the foot lock holds a planted foot that the stride alone would slide', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  // Moving 15% slower than its stride, every planted foot slides forwards, unless held.
+  for (const [speed, travel] of [[3, 0], [2, Math.PI / 2], [5, -0.6]]) {
+    const loose = plantedSlip(template, 7, speed, travel, { ground: speed * 0.85, footLock: false });
+    const held = plantedSlip(template, 7, speed, travel, { ground: speed * 0.85 });
+    assert.ok(loose > speed * 0.1, `without the lock it slides at ${loose.toFixed(3)} m/s`);
+    assert.ok(held < Math.max(0.12, loose * 0.25), `${speed} m/s, travel ${travel}: held, it slides at ${held.toFixed(3)} m/s (${loose.toFixed(3)} loose)`);
+  }
+  // It lets go standing still and when a one-shot moves the whole body.
+  const made = createFigures(template);
+  const person = made.create({ seed: 3 });
+  const group = new THREE.Group();
+  group.add(person.object);
+  let most = 0;
+  for (let i = 0; i < 60; i++) {
+    group.position.z = 3 * i / 60;
+    person.update(1 / 60, 3, 0);
+    most = Math.max(most, ...person.state().feet);
+  }
+  assert.ok(most > 0.9, `a foot is held at a jog: ${most}`);
+  person.act('tackle', 0.5, 1, 'whole');
+  person.update(1 / 60, 3, 0);
+  assert.deepEqual(person.state().feet, [0, 0], 'not under a slide tackle');
+  for (let i = 0; i < 30; i++) person.update(1 / 60, 0, 0);
+  assert.deepEqual(person.state().feet, [0, 0], 'nor standing');
+  made.dispose();
+});
+
+test('a leg bends to put the ankle on a target, the knee bending its own way and the foot keeping its turn', () => {
+  const root = new THREE.Group();
+  root.position.set(3, 0, -2);
+  root.rotation.y = 0.7;
+  root.scale.setScalar(1.05);
+  const bone = (parent, position, rotation) => {
+    const result = new THREE.Bone();
+    result.position.fromArray(position);
+    result.rotation.fromArray(rotation);
+    parent.add(result);
+    return result;
+  };
+  const hips = bone(root, [0, 0.97, 0], [-1.2, 0, 0]);
+  const thigh = bone(hips, [0.1, 0, 0.02], [0.3, 0.2, 2.9]);
+  const shin = bone(thigh, [0, 0.44, 0], [-0.4, 0, 0]);
+  const foot = bone(shin, [0, 0.43, 0], [1.1, 0, 0]);
+  const world = (object) => new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+  root.updateMatrixWorld(true);
+  const ankle = world(foot);
+  const turn = foot.getWorldQuaternion(new THREE.Quaternion());
+  const bendOf = () => {
+    const [h, k, a] = [world(thigh), world(shin), world(foot)];
+    const line = a.clone().sub(h).normalize();
+    const off = k.clone().sub(h);
+    return off.sub(line.multiplyScalar(off.dot(line))).normalize();
+  };
+  const bend = bendOf();
+  const target = ankle.clone().add(new THREE.Vector3(0.08, 0.04, -0.06));
+  reachFor(thigh, shin, foot, target);
+  root.updateMatrixWorld(true);
+  assert.ok(world(foot).distanceTo(target) < 1e-6, 'the ankle is on the target');
+  assert.ok(foot.getWorldQuaternion(new THREE.Quaternion()).angleTo(turn) < 1e-6, 'the foot keeps its turn');
+  assert.ok(near(world(thigh).distanceTo(world(shin)), 0.44 * 1.05, 1e-6) && near(world(shin).distanceTo(world(foot)), 0.43 * 1.05, 1e-6), 'bones keep their length');
+  assert.ok(bendOf().dot(bend) > 0.9, 'the knee bends the way it did');
+  // Out of reach, the leg straightens towards it.
+  const far = world(thigh).add(new THREE.Vector3(0, -2, 0.3));
+  reachFor(thigh, shin, foot, far);
+  root.updateMatrixWorld(true);
+  const reach = world(foot).sub(world(thigh));
+  assert.ok(reach.length() > 0.87 * 1.05 - 1e-3, 'stretched out');
+  assert.ok(reach.normalize().dot(far.sub(world(thigh)).normalize()) > 0.999, 'towards the target');
 });
 
 test('hair, number and coat are painted even when figure.json lists only the kit regions', () => {
