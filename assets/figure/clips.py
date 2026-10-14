@@ -46,6 +46,10 @@ Z = Vector((0.0, 0.0, 1.0))
 AHEAD = Vector((0.0, -1.0, 0.0))
 
 HEEL_BACK = 0.03  # the heel's contact point, behind the ankle, on the sole
+# Shoulder shrug: from an arm raised this far from hanging (deg) to fully, the shoulder
+# rises and draws back by these angles.
+SHRUG_FROM, SHRUG_FULL = 80.0, 160.0
+SHRUG_UP, SHRUG_BACK = 25.0, 8.0
 TOE_BEND_MAX = 50.0  # degrees the toes bend at the ball before the foot pivots on the tip
 
 # --------------------------------------------------------------------------
@@ -417,11 +421,19 @@ class Solver:
             w[f"foot_{s}"] = q_foot
             w[f"toe_{s}"] = q_toe
 
-        # Arms.
+        # Arms. As an arm rises above the shoulder the shoulder shrugs up and back with it,
+        # as a real one does, so the skin over the joint rides up instead of collapsing.
         for s in SIDES:
             sign = 1.0 if s == "L" else -1.0
-            q_clav = w["chest"] @ rot(Y, -p[f"a{s}elev"] * sign) @ rot(Z, -p[f"a{s}prot"] * sign)
-            w[f"shoulder_{s}"] = q_clav
+
+            def clavicle(arm_dir):
+                local = w["chest"].inverted() @ arm_dir
+                raised = math.degrees(math.acos(max(-1.0, min(1.0, -local.z))))  # 0 hanging, 180 overhead
+                k = smoothstep((raised - SHRUG_FROM) / (SHRUG_FULL - SHRUG_FROM))
+                elev = p[f"a{s}elev"] + SHRUG_UP * k
+                prot = p[f"a{s}prot"] - SHRUG_BACK * k
+                w[f"shoulder_{s}"] = w["chest"] @ rot(Y, -elev * sign) @ rot(Z, -prot * sign)
+
             # Hanging straight down, elbow hinge pointing inwards so it bends forwards.
             u = Vector((0.0, 0.0, -1.0))
             e = Vector((-1.0, 0.0, 0.0))
@@ -429,17 +441,22 @@ class Solver:
             u = w["chest"] @ (q_arm @ u)
             e = w["chest"] @ (q_arm @ e)
             f = rot(e, p[f"a{s}elbow"]) @ u
+            clavicle(u)
             ik = p[f"a{s}ik"]
             if ik > 0.0:
-                shoulder_pos = self._chain_pos(out, f"upper_arm_{s}", w)
+                u_fk, f_fk, e_fk = u, f, e
                 target = Vector((p[f"a{s}ix"], p[f"a{s}iy"], p[f"a{s}iz"]))
                 # Elbow points backwards and out, turned by the pole channel.
                 pole = w["chest"] @ (rot(Z, -p[f"a{s}pole"] * sign) @ Vector((0.35 * sign, 1.0, -0.2)))
                 arm = self.arm[s]
-                e_ik, u_ik, f_ik, _ = self.two_bone(shoulder_pos, target, arm["upper"], arm["fore"], pole)
-                u = u.lerp(u_ik, ik).normalized()
-                f = f.lerp(f_ik, ik).normalized()
-                e = e.lerp(e_ik, ik)
+                for i in range(3):  # the shrug moves the shoulder the reach starts from
+                    if i:
+                        clavicle(u)
+                    shoulder_pos = self._chain_pos(out, f"upper_arm_{s}", w)
+                    e_ik, u_ik, f_ik, _ = self.two_bone(shoulder_pos, target, arm["upper"], arm["fore"], pole)
+                    u = u_fk.lerp(u_ik, ik).normalized()
+                    f = f_fk.lerp(f_ik, ik).normalized()
+                    e = e_fk.lerp(e_ik, ik)
             e_upper = (e - u * e.dot(u)).normalized()
             e_fore = (e - f * e.dot(f)).normalized()
             q_pron = rot(f, -p[f"a{s}pron"] * sign)
@@ -713,25 +730,27 @@ def jog_clip(solver):
         body=lambda u: {
             **trunk_cycle(u, 0.30, hz=-0.06, bob=0.022, run=True, sway=0.012, hyaw=7.0, hroll=4.0,
                           hpitch=4.0, lean=8.0, chest_yaw=9.0, look_down=2.0),
-            **arm_swing(u, -5.0, 35.0, 88.0, 14.0, abd=13.0, twist=6.0),
+            **arm_swing(u, -5.0, 35.0, 88.0, 14.0, abd=13.0, twist=-2.0),
         },
     )
     return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
 
 
 def sprint_clip(solver):
-    path_L = [(0.25, (0.08, 0.48, 0.48)), (0.5, (0.09, 0.0, 0.62)), (0.75, (0.08, -0.33, 0.42))]
+    path_L = [(0.25, (0.08, 0.38, 0.50)), (0.5, (0.09, -0.04, 0.62)), (0.75, (0.08, -0.32, 0.42))]
     gait = Gait(
         solver, frames=14, speed=7.2, direction=AHEAD, duty=0.22,
-        land={"L": (0.06, -0.20), "R": (-0.06, -0.20)},
+        land={"L": (0.06, -0.17), "R": (-0.06, -0.17)},
         yaw={"L": 4.0, "R": -4.0},
         stance_pitch=[(0.0, -12.0), (0.3, -5.0), (0.55, -10.0), (1.0, -64.0)],
         swing_pitch=[(0.25, -62.0), (0.55, -32.0), (0.85, -18.0)],
         swing_path={"L": path_L, "R": _mirror_path(path_L)},
         body=lambda u: {
             **trunk_cycle(u, 0.22, hz=-0.07, bob=0.02, run=True, sway=0.006, hyaw=9.0, hroll=4.0,
-                          hpitch=8.0, lean=15.0, chest_yaw=8.0, look_down=-7.0),
-            **arm_swing(u, -2.0, 50.0, 92.0, 18.0, abd=11.0, twist=10.0),
+                          hpitch=9.0, lean=18.0, chest_yaw=8.0, look_down=-2.0),
+            # The whole body leans: the hips run a little ahead of the feet.
+            "hy": -0.06,
+            **arm_swing(u, -2.0, 50.0, 90.0, 16.0, abd=12.0, twist=-4.0),
         },
     )
     return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
@@ -1202,7 +1221,7 @@ def keeper_dive_clip(solver, side):
         (1.25, {**air, **gather, "hx": 0.45, "hz": -0.70, "hroll": 86.0, "fLx": 0.03, "fLz": 0.20, "fRz": 0.18}),
         # Getting up: roll onto the knees and stand.
         (1.40, {"fLspace": 0.35, "fRspace": 0.35, "fLz": 0.26, "fRz": 0.20, "fLpitch": -5.0, "fRpitch": -5.0,
-                "fLx": 0.22, "fRx": 0.05, "hroll": 66.0, "hz": -0.64}),
+                "fLx": 0.22, "fRx": 0.05, "hroll": 66.0, "hz": -0.61}),
         (1.55, {"hx": 0.40, "hz": -0.48, "hroll": 40.0, "hpitch": 30.0, "sflex": 20.0, "sside": 2.0, "cside": 0.0,
                 "look_body": 0.3, "look_down": 15.0,
                 "fLspace": 0.0, "fRspace": 0.0, "fLflat": 1.0, "fRflat": 1.0,
