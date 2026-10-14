@@ -285,11 +285,12 @@ export function createCamera(camera, pitch) {
   let wasWide = false;
   let initialized = false;
 
-  function ask(kind, now, touchline, { team = null, both = false, from = now, seconds = CUTAWAY } = {}) {
+  // A shot `through` a phase lasts as long as the drawn match is in it.
+  function ask(kind, now, touchline, { team = null, both = false, from = now, seconds = CUTAWAY, through = null } = {}) {
     if (!touchline || (!both && kind !== 'restart' && (team === null || team === undefined))) return;
     const busy = Math.max(shot ? RANK[shot.kind] : -1, request ? RANK[request.kind] : -1);
     if (kind !== 'goal' && (now < closeUntil || RANK[kind] <= busy)) return;
-    request = { kind, team, both, from, seconds, touchline };
+    request = { kind, team, both, from, seconds, through, touchline };
   }
 
   function start(now) {
@@ -298,12 +299,17 @@ export function createCamera(camera, pitch) {
       team = nextRestartTeam;
       nextRestartTeam = 1 - nextRestartTeam;
     }
-    shot = { kind: request.kind, team, both: request.both, until: now + request.seconds, touchline: request.touchline };
+    shot = {
+      kind: request.kind, team, both: request.both, until: now + request.seconds, through: request.through,
+      touchline: request.touchline,
+    };
     lastShot = now;
     request = null;
   }
 
   return {
+    // Whether the shot on screen is the wide shot, once this frame's update has chosen it.
+    get wide() { return shown === 'wide'; },
     handleEvent(event, now, actors, touchline) {
       if (event.kind === 'goal') {
         scorer = event.player;
@@ -331,7 +337,9 @@ export function createCamera(camera, pitch) {
       } else if (RESTARTS.has(event.kind) && now - lastShot >= RESTART_GAP) {
         ask('restart', now, touchline);
       } else if (event.kind === 'half_time') {
-        ask('period', now, touchline, { both: true });
+        // The whole break, so the second half's line-up is placed out of view and the wide
+        // shot comes back on it as it kicks off.
+        ask('period', now, touchline, { both: true, seconds: Infinity, through: 'half_time' });
       } else if (event.kind === 'full_time') {
         const [home, away] = event.score ?? [0, 0];
         const winner = home > away ? 0 : away > home ? 1 : null;
@@ -346,7 +354,7 @@ export function createCamera(camera, pitch) {
     update(ballPosition, dt, now, drawn) {
       const phase = typeof drawn === 'string' ? drawn : drawn?.phase;
       drawnPhase = phase;
-      if (shot && (now >= shot.until || !DEAD.has(phase))) shot = null;
+      if (shot && (now >= shot.until || !DEAD.has(phase) || (shot.through && phase !== shot.through))) shot = null;
       if (request && now >= request.from) {
         if (DEAD.has(phase)) start(now);
         else if (phase === 'throw_in' || now > request.from + START_WITHIN) request = null;

@@ -32,7 +32,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     ballPosition: { x: 1, y: 2, z: 3 },
     update: (...args) => calls.push(['actors.update', ...args]),
     handleEvent: (...args) => calls.push(['actors.event', ...args]),
-    fadeNumbers: () => calls.push(['actors.fade']),
+    showNumbers: (...args) => calls.push(['actors.numbers', ...args]),
     dispose: () => calls.push(['actors.dispose']),
   });
   const component = (name) => () => ({
@@ -60,7 +60,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     createCamera: (camera) => {
       calls.push(['camera.create', camera.fov]);
       camera.fov = 20; // a wide shot narrows the lens
-      return component('camera')();
+      return { ...component('camera')(), wide: false };
     },
     createMoments: component('moments'),
     createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline, loadFigure,
@@ -90,7 +90,7 @@ const snapshot = (t, phase = 'play') => ({ type: 'snapshot', t, phase, players: 
 
 const named = (calls, name) => calls.filter(([called]) => called === name);
 
-test('draws snapshots a fixed delay behind, never blending across a restart', () => {
+test('draws snapshots a fixed delay behind, blending into a restart', () => {
   const app = setup();
   app.send(hello);
   app.send(snapshot(1)); // arrives at page time 1 s: the clocks are level
@@ -102,13 +102,14 @@ test('draws snapshots a fixed delay behind, never blending across a restart', ()
   assert.equal(update[2].t, 1.1);
   assert.ok(Math.abs(update[3] - 0.5) < 1e-9);
   assert.equal(update[6].t, 1.1, 'the newest snapshot is passed on for wind-ups');
-  assert.equal(named(app.calls, 'moments.snapshot').at(-1)[1].t, 1.1, 'the score bar shows the drawn snapshot');
+  assert.equal(named(app.calls, 'moments.snapshot').at(-1)[1].t, 1, 'the score bar shows the snapshot the drawn match has reached');
   app.wait(50);
   app.send(snapshot(1.2, 'kickoff'));
   app.tick(50); // 1.25 s draws 1.15 s: between a play and a kick-off snapshot
   update = named(app.calls, 'actors.update').at(-1);
-  assert.equal(update[1].t, 1.1, 'held at the last snapshot of play');
-  assert.equal(update[1], update[2]);
+  assert.equal(update[1].t, 1.1);
+  assert.equal(update[2].t, 1.2, 'play is blended into the restart, not held');
+  assert.ok(Math.abs(update[3] - 0.5) < 1e-9);
   app.tick(60);
   update = named(app.calls, 'actors.update').at(-1);
   assert.equal(update[1].phase, 'kickoff');
@@ -117,8 +118,9 @@ test('draws snapshots a fixed delay behind, never blending across a restart', ()
   assert.deepEqual(touchline.slice(1, 4), camera.slice(1, 4), 'the managers follow the drawn ball');
   assert.equal(camera[4], 'kickoff', 'the camera knows the drawn phase');
   app.send(snapshot(1.3, 'goal_kick'));
+  app.send(snapshot(1.4));
   app.tick(16);
-  assert.equal(named(app.calls, 'camera.update').at(-1)[4], 'kickoff', 'not the newest phase');
+  assert.equal(named(app.calls, 'camera.update').at(-1)[4], 'goal_kick', 'the phase drawn towards, not the newest');
   assert.equal(touchline[4].ballPosition, touchline[1], 'and are given the players');
 });
 
@@ -168,7 +170,7 @@ test('events wait for the drawn match to reach them; decisions and managers do n
   assert.equal(named(app.calls, 'touchline.message')[0][2], 1.192, 'with the page time');
 });
 
-test('events left behind by a stall only update the overlay', () => {
+test('events left behind by a stall only update the records', () => {
   const app = setup();
   app.send(hello);
   app.send(snapshot(1));
@@ -178,6 +180,8 @@ test('events left behind by a stall only update the overlay', () => {
   for (let k = 1; k <= 180; k++) { app.wait(1000 / 30); app.send(snapshot(1 + k / 30)); }
   app.tick(0);
   assert.deepEqual(named(app.calls, 'overlay.message').map(([, m]) => m.kind), ['substitution', 'corner']);
+  assert.deepEqual(named(app.calls, 'actors.event').map(([, m, , late]) => [m.kind, late]),
+    [['substitution', true], ['corner', false]], 'the players keep their records, and know it is late');
   assert.deepEqual(named(app.calls, 'moments.event').map(([, m]) => m.kind), ['corner']);
   assert.deepEqual(named(app.calls, 'touchline.event').map(([, m]) => m.kind), ['corner']);
 });
@@ -308,13 +312,14 @@ test('each match\'s camera starts from the same lens, whatever the last match le
   assert.deepEqual(named(app.calls, 'camera.create').map(([, fov]) => fov), [40, 40]);
 });
 
-test('the numbers above the players fade by the camera of this frame, after it moves', () => {
+test('the numbers above the players follow the shot of this frame, after the camera chooses it', () => {
   const app = setup();
   app.send(hello);
   app.send(snapshot(1));
   app.wait(100);
   app.send(snapshot(1.1));
   app.tick(50);
-  const order = app.calls.map(([name]) => name).filter(name => ['actors.update', 'camera.update', 'actors.fade'].includes(name));
-  assert.deepEqual(order.slice(-3), ['actors.update', 'camera.update', 'actors.fade']);
+  const order = app.calls.map(([name]) => name).filter(name => ['actors.update', 'camera.update', 'actors.numbers'].includes(name));
+  assert.deepEqual(order.slice(-3), ['actors.update', 'camera.update', 'actors.numbers']);
+  assert.equal(named(app.calls, 'actors.numbers').at(-1)[1], false, 'the camera is not on the wide shot');
 });

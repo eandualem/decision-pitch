@@ -34,9 +34,6 @@ const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper l
 const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
 const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
 const CELEBRATION = 4.2; // s a looping celebration lasts
-// m from the camera over which a player's number above its head fades in: gone in the
-// close-up and the cutaways, where it would loom over the faces, there on the wide shot.
-const BADGE = [14, 22];
 // m: the dark spot under the ball, a little wider than it, so the white ball on its own
 // shadow keeps a contrasting edge on the broadcast camera at its real size.
 const BALL_SHADOW = 0.19;
@@ -83,7 +80,7 @@ export function touchClip(kind, { speed = 0, lateral = 0, height = 0, diving = f
   return CLIPS[kind] ?? null;
 }
 
-export function createPlayers(scene, teams, figure, camera = null) {
+export function createPlayers(scene, teams, figure) {
   const root = new THREE.Group();
   scene.add(root);
   const made = createFigures(figure);
@@ -362,9 +359,10 @@ export function createPlayers(scene, teams, figure, camera = null) {
     }
     for (const actor of actors.values()) actor.group.visible = false;
     // At a throw-in, whoever of the team it was given to comes to the ball picks it up;
-    // an opponent standing nearer, the player who put it out, say, does not.
+    // an opponent standing nearer, the player who put it out, say, does not. Not before
+    // the drawn match reaches the throw-in, whose event says which team that is.
     taker = null;
-    if (after.phase === 'throw_in' && !reset) {
+    if (from.phase === 'throw_in' && after.phase === 'throw_in' && !reset) {
       let nearest = THROWER;
       for (const player of after.players) {
         const candidate = actors.get(player.id);
@@ -383,8 +381,10 @@ export function createPlayers(scene, teams, figure, camera = null) {
       const actor = actors.get(player.id);
       if (!actor) continue;
       const old = previous.get(player.id) || player;
+      // One placed rather than moved stays put until the drawn match reaches the snapshot
+      // that places it, so a restart's placing is never drawn before its moment.
       const teleport = Math.hypot(player.x - old.x, player.y - old.y) > 8;
-      const k = teleport ? 1 : blend;
+      const k = teleport ? 0 : blend;
       const { group, person } = actor;
       group.visible = true;
       group.position.set(mix(old.x, player.x, k), 0, -mix(old.y, player.y, k));
@@ -469,7 +469,7 @@ export function createPlayers(scene, teams, figure, camera = null) {
     const ballTeleport = Math.hypot(newBall.x - oldBall.x, newBall.y - oldBall.y) > 10;
     let start = oldBall;
     let end = newBall;
-    let f = ballTeleport ? 1 : blend;
+    let f = ballTeleport ? 0 : blend; // a placed ball too: a goal's leaves the goalmouth at the goal
     if (!reset && !ballTeleport) {
       let startT = from.t;
       for (const touch of newBall.touches ?? NONE) {
@@ -581,16 +581,11 @@ export function createPlayers(scene, teams, figure, camera = null) {
       const actor = actors.get(id);
       return actor?.group.visible ? out.set(actor.vx, 0, -actor.vy) : null;
     },
-    // Fades each drawn player's number by its distance from the camera. Called once the
-    // camera has moved for this frame, so a cut to a close-up never shows them for a frame.
-    fadeNumbers() {
-      if (!camera) return;
-      for (const actor of actors.values()) {
-        if (!actor.group.visible) continue;
-        const seen = smooth(clamp((camera.position.distanceTo(actor.group.position) - BADGE[0]) / (BADGE[1] - BADGE[0]), 0, 1));
-        actor.badge.material.opacity = seen;
-        actor.badge.visible = seen > 0.01;
-      }
+    // Shows the numbers above the players on the wide shot only: in the close-up and the
+    // cutaways they would loom over the faces and hang over the background. Called once
+    // the camera has chosen this frame's shot, so a cut never shows them for a frame.
+    showNumbers(wide) {
+      for (const actor of actors.values()) actor.badge.visible = wide;
     },
     // The way a drawn player's figure faces, as its yaw in the scene (0 faces +z, so its
     // direction is (sin y, 0, cos y)), or null when it is not drawn.
@@ -603,9 +598,11 @@ export function createPlayers(scene, teams, figure, camera = null) {
     forEachPlayerPosition(visit) {
       for (const [id, actor] of actors) if (actor.group.visible) visit(id, actor.group.position);
     },
-    handleEvent(event, now) {
+    // An event left behind by a stall (`late`) still says who takes the next throw-in,
+    // but its celebration has passed.
+    handleEvent(event, now, late = false) {
       if (event.kind === 'throw_in') throwTeam = event.team ?? null;
-      if (event.kind !== 'goal') return;
+      if (event.kind !== 'goal' || late) return;
       for (const actor of actors.values()) {
         if (actor.team === event.team) actor.celebrateAt = now;
       }

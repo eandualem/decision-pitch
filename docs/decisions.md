@@ -440,7 +440,9 @@ touchline. (It kept its size here; the human figures below changed it.) While th
 briefly to a manager: after the scorer's close-up, at a card, at a
 substitution, at half time and full time, when a manager gives advice
 during a stoppage and, at most about once in 25 seconds, at a goal kick,
-corner or free kick. Throw-ins are taken too quickly for a cut, in about a
+corner or free kick. The half-time shot lasts the whole break, so the second
+half's line-up is placed out of view and the wide shot comes back on it as it
+kicks off. Throw-ins are taken too quickly for a cut, in about a
 second, so nothing cuts away at one. It never cuts away during open play.
 
 **Buffered interpolation.** The page renders a fixed delay, about 100 ms,
@@ -450,12 +452,17 @@ arrival, keeps a short buffer of snapshots and samples the pair that brackets
 the render time. The offset follows the least-delayed arrivals of the last
 half second and the server's measured drift, so a server running slower than
 real time, as a loaded laptop with a local model may, is followed without
-held frames. It never interpolates across a change of phase or period or a
-clock that goes back, so restarts that place players still do not sweep them
-across the pitch; the one exception is a restart kicked into play, where the
-engine places no one, and a player who still jumps more than 8 m is drawn
-there at once. It holds the last state when the buffer runs dry and drops the
-backlog after a stall. Events carry `t` and are released on the same
+held frames. It never interpolates across a change of period or a clock that
+goes back. It does blend play into a restart and a restart into play, so play
+does not hitch as it stops: a restart puts players right by at most 0.2 m, and
+a player who jumps more than 8 m, or a ball placed more than 10 m away, stays
+put until the drawn match reaches the snapshot that places it and is then drawn
+there at once, never swept across the pitch; the score bar likewise shows the
+snapshot the drawn match has reached, so a goal's ball leaves the goalmouth and
+its score changes at the goal's moment. It holds the last state when the
+buffer runs dry and drops the backlog after a stall; an event left behind by a
+stall only updates the records, the overlay and which team takes the next
+throw-in. Events carry `t` and are released on the same
 timeline, so a goal banner, a celebration or a contact pose appears when the
 drawn ball gets there. `decision` and `manager` messages stay immediate.
 Animation runs on the browser's frame timestamp, and the draw loop allocates
@@ -642,9 +649,9 @@ reverse angle, when the scorer turns, and only from places that stay on the
 pitch, outside the goals and nets and clear of every other player and of the
 line of sight. Across twelve goals in recorded bot matches the scorer stayed
 in frame throughout, the camera never entered a player, a goal or the stands,
-and it filmed the scorer's front most of the time. Close to the camera the
-numbers above the players fade out, and the moment banner sits in the lower
-left, clear of the scorer.
+and it filmed the scorer's front most of the time. The numbers above the
+players show on the wide shot only, never in the close-up or a manager shot,
+and the moment banner sits in the lower left, clear of the scorer.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
 camera and in a close-up in a way that articulated boxes cannot, and stride
