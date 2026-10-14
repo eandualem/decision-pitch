@@ -59,8 +59,8 @@ const TURN = [[-0.14, 0], [-0.04, 1], [0.12, 1], [0.45, 0]];
 // A touch interrupts a player's pose only once that pose has played this long, or if it
 // matters more: two players trading the ball in a duel do not twitch with every exchange.
 const REPOSE = 0.25; // s
-const WEIGHT = { control: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
-const CLIPS = { control: 'control', deflect: 'control', tackle: 'tackle', throw: 'throw_in' };
+const WEIGHT = { control: 0, knock: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
+const CLIPS = { control: 'control', knock: 'control', deflect: 'control', tackle: 'tackle', throw: 'throw_in' };
 // Clips that move the whole body even at a run: the slide, the throw and the goalkeeper's.
 // The others keep the stride's support leg and hips over a run.
 const WHOLE = new Set(['tackle', 'throw_in', 'keeper_catch', 'keeper_catch_high']);
