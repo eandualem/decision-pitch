@@ -588,7 +588,11 @@ lands on the touch: `kick` plays `shot` when the ball leaves fast and `pass`
 otherwise, `control`, `tackle` and `throw` play theirs, and `deflect` plays
 `control`. The engine keeps a player moving while it plays the ball, so a
 player above a walking pace plays only the clip's upper body and kicking leg
-over its running stride; the whole clip plays only near standstill. A
+over its running stride; the whole clip plays only near standstill, except
+the tackle, a slide that the engine carries along the grass. A carried ball is
+met by the boot at its back, not its centre, and during a throw-in the taker
+holds the ball in its hands until the clip releases it, where the engine has it
+at its feet: presentation only, like the carried ball. A
 goalkeeper starts its dive, to its left or right by its travel against its
 facing, when the snapshot first marks it diving, whether or not it reaches the
 ball; a `save` or `catch` then times the dive's full stretch to the touch, and
