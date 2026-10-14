@@ -630,8 +630,21 @@ in frame in every frame of open play and every restart, and every receiver
 of a pass longer than 25 m was in view at least half a second before the ball
 arrived. Measured against the narrower frame, pans are faster than before
 (95th percentile 0.20 against 0.075 frame widths a second), while over the
-ground the frame moves as fast as it did; they ease in and out. The scorer's
-close-up and the managers' cutaways keep their own 40 degree lens.
+ground the frame moves as fast as it did; they ease in and out. The managers'
+cutaways keep their 40 degree lens.
+
+**The scorer's close-up.** After a goal the camera cuts in to the scorer, 7 m
+away and a little below eye height through a 30 degree lens, so the scorer
+fills about half the frame's height and the face can be seen; it eases in,
+follows the scorer for the close-up's 3.8 s and cuts away as before. It picks a
+side in front of the scorer where possible, swinging round, or cutting to the
+reverse angle, when the scorer turns, and only from places that stay on the
+pitch, outside the goals and nets and clear of every other player and of the
+line of sight. Across twelve goals in recorded bot matches the scorer stayed
+in frame throughout, the camera never entered a player, a goal or the stands,
+and it filmed the scorer's front most of the time. Close to the camera the
+numbers above the players fade out, and the moment banner sits in the lower
+left, clear of the scorer.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
 camera and in a close-up in a way that articulated boxes cannot, and stride
