@@ -26,10 +26,11 @@ LOOPS = ["idle", "walk", "jog", "sprint", "backpedal", "strafe_L", "strafe_R"] +
 ]
 DIRECTIONS = ["forward", "forward_left", "left", "back_left", "back", "back_right", "right", "forward_right"]
 WALK, JOG = (1.2, 1.6), (3.4, 4.5)  # m/s: the paces every direction has a loop at
-PLAYS = ["pass", "shot", "control", "tackle", "header", "throw_in", "celebrate"]
+PLAYS = ["pass", "shot", "control", "tackle", "header", "throw_in", "celebrate", "tackle_standing", "cross",
+         "pass_lofted"]
 KEEPER = ["keeper_dive_L", "keeper_dive_R", "keeper_catch", "keeper_catch_high"]
 TOUCHLINE = ["instruct", "change", "clap", "protest", "cheer", "despair"]
-TOUCHES = ["pass", "shot", "control", "tackle", "header", "throw_in"] + KEEPER
+TOUCHES = ["pass", "shot", "control", "tackle", "header", "throw_in", "tackle_standing", "cross", "pass_lofted"] + KEEPER
 
 FIGURE_TRIANGLES = 11_000  # body, eyes and the largest hair style: about 10k as a guide
 GLB_BYTES = 2_000_000  # about 2 MB at most

@@ -708,6 +708,88 @@ def idle_clip(solver):
     return Clip("idle", frames, sample, loop=True)
 
 
+def _held(u, peak, sharp=0.45):
+    """A wave over the cycle that holds near +1 around `peak` and -1 half a cycle on."""
+    c = math.cos(2.0 * math.pi * (u - peak))
+    return math.copysign(abs(c) ** sharp, c)
+
+
+def _standing(p, u, weight, look=0.0):
+    """Feet planted in the stance, the weight `weight` (-1 right .. 1 left) over a foot:
+    the pelvis over it and dropping on the other side, the free knee bending as its heel
+    lifts, the trunk balancing it."""
+    p.update({"fLx": 0.13, "fLy": 0.01, "fLyaw": 9.0, "fRx": -0.13, "fRy": -0.01, "fRyaw": -9.0,
+              "hx": 0.045 * weight, "hy": wave(u, 0.6, 0.006),
+              "hz": -0.035 - 0.012 * abs(weight) + wave2(u, 0.25, 0.003),
+              "hroll": 4.5 * weight, "hyaw": 2.0 * weight + wave(u, 0.1, 1.0), "hpitch": 2.0,
+              "sside": -2.5 * weight, "cside": -1.0 * weight, "sflex": 1.0 + wave(u, 0.0, 0.6), "cflex": -1.0,
+              "fLpitch": -7.0 * max(0.0, -weight), "fRpitch": -7.0 * max(0.0, weight),
+              "kLout": 6.0 + 6.0 * max(0.0, -weight), "kRout": 6.0 + 6.0 * max(0.0, weight)})
+    return p
+
+
+def idle_shift_clip(solver):
+    """Standing, shifting the weight from one leg to the other and back, looking about."""
+    frames = 120
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        p = _standing(dict(NEUTRAL), u, _held(u, 0.2))
+        p.update({"look_yaw": wave(u, 0.45, 14.0) + wave2(u, 0.1, 3.0), "look_down": 3.0 + wave(u, 0.8, 3.0),
+                  "look_tilt": wave(u, 0.3, 2.0) - 2.0 * _held(u, 0.2)})
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}elev": wave(u, 0.0, 1.0), f"a{side}flex": 3.0 + wave(u, 0.3 if side == "L" else 0.8, 2.5),
+                      f"a{side}abd": 9.0 + 1.5 * sign * _held(u, 0.2), f"a{side}elbow": 16.0 + wave(u, 0.4, 4.0),
+                      f"a{side}twist": 4.0, f"a{side}pron": 15.0, f"a{side}wrist": 6.0})
+        return p
+
+    return Clip("idle_shift", frames, sample, loop=True)
+
+
+def idle_hips_clip(solver):
+    """Hands on the hips, chest up, breathing, the weight settling on one leg and back."""
+    frames = 120
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        weight = 0.6 * _held(u, 0.3, 0.6)
+        p = _standing(dict(NEUTRAL), u, weight)
+        breath = wave(4.0 * u, 0.0)  # four breaths a cycle
+        p.update({"cflex": -3.0 - 1.0 * breath, "sflex": 0.0, "look_down": 0.0 + wave(u, 0.6, 3.0),
+                  "look_yaw": wave(u, 0.15, 10.0), "look_tilt": -1.5 * weight})
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}ik": 1.0, f"a{side}ix": 0.215 * sign + 0.01 * breath * sign,
+                      f"a{side}iy": 0.03, f"a{side}iz": 1.0 - 0.01 * abs(weight),
+                      f"a{side}pole": 75.0, f"a{side}pron": 40.0, f"a{side}wrist": 25.0,
+                      f"a{side}elev": 1.5 * breath})
+        return p
+
+    return Clip("idle_hips", frames, sample, loop=True)
+
+
+def idle_look_clip(solver):
+    """Looking back over the left shoulder, then the right, the chest turning with the head."""
+    frames = 135
+    T = frames / FPS
+
+    def sample(t):
+        u = t / T
+        look = smoothstep(1.0 - abs(u - 0.28) / 0.18) - smoothstep(1.0 - abs(u - 0.76) / 0.16)
+        p = _standing(dict(NEUTRAL), u, 0.5 * _held(u, 0.28, 0.8))
+        p.update({"look_yaw": 72.0 * look, "look_down": 2.0 - 4.0 * abs(look), "look_tilt": 3.0 * look})
+        p["hyaw"] += 8.0 * look
+        p["stwist"] = 9.0 * look
+        p["ctwist"] = 14.0 * look
+        for side, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({f"a{side}flex": 3.0 - 6.0 * look * sign, f"a{side}abd": 9.0, f"a{side}elbow": 18.0,
+                      f"a{side}twist": 4.0, f"a{side}pron": 15.0, f"a{side}wrist": 6.0})
+        return p
+
+    return Clip("idle_look", frames, sample, loop=True)
+
+
 def walk_clip(solver):
     path_L = [(0.3, (0.085, 0.27, 0.20)), (0.6, (0.09, -0.06, 0.125)), (0.85, (0.085, -0.36, 0.12))]
     gait = Gait(
@@ -1732,6 +1814,120 @@ def tackle_clip(solver):
     return Clip("tackle", int(round(end * FPS)), shot, loop=False, contact=contact)
 
 
+def tackle_standing_clip(solver):
+    """A block tackle on its feet: a step in with the left foot, low and over the ball,
+    the right foot turned out and reaching in so its inside meets the ball, held there
+    a moment, then back. The slide is `tackle`."""
+    contact = 0.32
+    end = 1.0
+    keys = [
+        (0.08, {"hz": -0.06, "look_down": 18.0, "fRpitch": -6.0}),
+        (0.15, {"fLz": 0.045, "fLy": -0.10, "fLpitch": 4.0}),
+        (0.25, {"fLx": 0.16, "fLy": -0.30, "fLz": 0.0, "fLpitch": 8.0, "fLyaw": 6.0,
+                "hx": 0.04, "hy": -0.12, "hz": -0.12, "hpitch": 10.0, "hyaw": -4.0,
+                "sflex": 14.0, "cflex": 5.0, "look_down": 26.0,
+                "fRx": -0.13, "fRy": -0.12, "fRz": 0.10, "fRyaw": -55.0, "fRpitch": -12.0, "fRflat": 0.0,
+                "aLabd": 38.0, "aLflex": 22.0, "aLelbow": 40.0, "aRabd": 34.0, "aRflex": -8.0, "aRelbow": 36.0}),
+        (0.29, {"fLpitch": 0.0}),
+        (contact, {"fRx": -0.04, "fRy": -0.55, "fRz": 0.05, "fRyaw": -82.0, "fRpitch": 4.0, "fRtoe": 0.0,
+                   "hx": 0.05, "hy": -0.17, "hz": -0.16, "hpitch": 12.0, "hyaw": -8.0, "hroll": -3.0,
+                   "sflex": 18.0, "cflex": 6.0, "sside": 3.0, "look_down": 32.0,
+                   "aLabd": 52.0, "aLflex": 32.0, "aLelbow": 34.0, "aRabd": 42.0, "aRflex": 12.0, "aRelbow": 30.0}),
+        (0.46, {"fRx": -0.05, "fRy": -0.53, "fRz": 0.05, "hz": -0.15, "look_down": 30.0}),
+        (0.64, {"fRx": -0.12, "fRy": -0.26, "fRz": 0.0, "fRyaw": -16.0, "fRpitch": 0.0, "fRflat": 1.0,
+                "hx": 0.01, "hy": -0.14, "hz": -0.09, "hpitch": 6.0, "hyaw": 0.0, "hroll": 0.0,
+                "sflex": 9.0, "cflex": 2.0, "sside": 0.0, "look_down": 14.0}),
+        (end, {"fLx": 0.16, "fLy": -0.30, "fLyaw": 6.0, "fRx": -0.12, "fRy": -0.26, "fRyaw": -16.0,
+               "hx": 0.0, "hy": -0.15, "hz": -0.04}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSIDE_R, BALL + Vector((0.0, BALL_RADIUS, -0.01)), ("fRx", "fRy", "fRz"))
+    return Clip("tackle_standing", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def cross_clip(solver):
+    """A cross from the right: the left foot planted wide of the ball, leaning back and
+    away, the right leg swinging from out to the right across the ball to wrap it, the
+    instep under its back, and following through across the body, the left arm out."""
+    contact = 0.45
+    end = 1.35
+    keys = [
+        (0.10, {"look_down": 18.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.06, "fLy": -0.10, "fLx": 0.16, "fLpitch": 4.0}),
+        (0.30, {"fLx": 0.27, "fLy": -0.40, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 22.0,
+                "hx": 0.07, "hy": -0.16, "hz": -0.075, "hyaw": -28.0, "hroll": 7.0, "hpitch": 2.0,
+                "sflex": 1.0, "cflex": -7.0, "ctwist": 18.0, "sside": 8.0,
+                "fRx": -0.24, "fRy": 0.18, "fRz": 0.36, "fRyaw": -32.0, "fRpitch": -55.0, "fRflat": 0.0, "fRtoe": 4.0,
+                "aLabd": 86.0, "aLflex": 30.0, "aLelbow": 24.0, "aLtwist": -10.0,
+                "aRabd": 36.0, "aRflex": -32.0, "aRelbow": 30.0}),
+        (0.36, {"fLpitch": 0.0}),
+        (0.395, {"fRx": -0.17, "fRy": -0.02, "fRz": 0.25, "fRyaw": -30.0, "fRpitch": -50.0}),
+        (contact, {"fRx": -0.06, "fRy": -0.36, "fRz": 0.05, "fRyaw": -34.0, "fRpitch": -48.0,
+                   "hx": 0.08, "hy": -0.22, "hz": -0.085, "hyaw": 8.0, "hroll": 2.0, "hpitch": 3.0,
+                   "sflex": 3.0, "cflex": -5.0, "ctwist": -6.0, "sside": 6.0, "look_down": 26.0,
+                   "aLabd": 82.0, "aLflex": 22.0, "aLelbow": 28.0, "aLtwist": -10.0,
+                   "aRabd": 22.0, "aRflex": 30.0, "aRelbow": 50.0, "aRtwist": 30.0}),
+        (0.55, {"fRx": 0.14, "fRy": -0.70, "fRz": 0.38, "fRyaw": 8.0, "fRpitch": -40.0,
+                "hyaw": 28.0, "ctwist": -14.0, "look_down": 14.0}),
+        (0.66, {"fRx": 0.30, "fRy": -0.74, "fRz": 0.66, "fRyaw": 20.0, "fRpitch": -32.0,
+                "hx": 0.05, "hy": -0.25, "hz": -0.065, "hyaw": 38.0, "hroll": -2.0, "sside": 2.0,
+                "ctwist": -18.0, "look_down": 4.0, "look_yaw": 12.0,
+                "aLabd": 46.0, "aLflex": -18.0, "aLelbow": 30.0, "aRabd": 16.0, "aRflex": 50.0, "aRtwist": 45.0,
+                "aRelbow": 62.0}),
+        (0.88, {"fRx": 0.08, "fRy": -0.55, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": 22.0, "fRflat": 1.0, "fRtoe": 0.0,
+                "fLpitch": -24.0, "hx": 0.06, "hy": -0.34, "hz": -0.06, "hyaw": 22.0, "look_yaw": 10.0}),
+        (0.96, {"fRpitch": 0.0}),
+        (1.12, {"fLpitch": 0.0}),
+        (end, {"fLx": 0.27, "fLy": -0.40, "fLyaw": 22.0, "fRx": 0.08, "fRy": -0.55, "fRyaw": 22.0,
+               "hx": 0.14, "hy": -0.42, "hz": -0.035, "hyaw": 16.0, "hroll": 0.0, "sside": 0.0, "ctwist": 0.0,
+               "look_yaw": 0.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSTEP_R, BALL + Vector((-0.03, BALL_RADIUS * 0.8, 0.0)),
+        ("fRx", "fRy", "fRz"))
+    return Clip("cross", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def pass_lofted_clip(solver):
+    """A lofted pass over the top: like the shot with a shorter backswing, leaning back,
+    the instep under the ball and a high follow-through."""
+    contact = 0.42
+    end = 1.25
+    keys = [
+        (0.10, {"look_down": 18.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.05, "fLy": -0.08, "fLpitch": 4.0}),
+        (0.28, {"fLx": 0.20, "fLy": -0.36, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 6.0,
+                "hx": 0.05, "hy": -0.14, "hz": -0.07, "hyaw": -18.0, "hroll": 4.0, "hpitch": 2.0,
+                "sflex": 0.0, "cflex": -6.0, "ctwist": 12.0, "sside": 5.0,
+                "fRx": -0.10, "fRy": 0.22, "fRz": 0.36, "fRyaw": -14.0, "fRpitch": -60.0, "fRflat": 0.0, "fRtoe": 5.0,
+                "aLabd": 76.0, "aLflex": 32.0, "aLelbow": 26.0, "aLtwist": -10.0,
+                "aRabd": 36.0, "aRflex": -30.0, "aRelbow": 30.0}),
+        (0.335, {"fLpitch": 0.0}),
+        (0.375, {"fRx": -0.07, "fRy": 0.0, "fRz": 0.24, "fRyaw": -12.0, "fRpitch": -62.0}),
+        (contact, {"fRx": -0.03, "fRy": -0.34, "fRz": 0.03, "fRyaw": -14.0, "fRpitch": -50.0,
+                   "hx": 0.05, "hy": -0.22, "hz": -0.08, "hyaw": 6.0, "hroll": -1.0, "hpitch": 0.0,
+                   "sflex": 4.0, "cflex": -4.0, "ctwist": -6.0, "sside": 4.0, "look_down": 28.0,
+                   "aLabd": 86.0, "aLflex": 26.0, "aLelbow": 28.0, "aLtwist": -10.0,
+                   "aRabd": 16.0, "aRflex": 34.0, "aRelbow": 50.0, "aRtwist": 30.0}),
+        (0.52, {"fRx": -0.03, "fRy": -0.72, "fRz": 0.42, "fRpitch": -34.0}),
+        (0.63, {"fRx": -0.02, "fRy": -0.92, "fRz": 0.88, "fRpitch": -20.0, "fRyaw": -6.0,
+                "fLpitch": -16.0, "hy": -0.26, "hz": -0.065, "hyaw": 12.0, "hroll": -2.0,
+                "sflex": 1.0, "cflex": -7.0, "ctwist": -10.0, "look_down": 4.0,
+                "aLabd": 58.0, "aLflex": -12.0, "aLelbow": 26.0, "aRabd": 14.0, "aRflex": 44.0, "aRtwist": 42.0,
+                "aRelbow": 58.0}),
+        (0.86, {"fRx": -0.11, "fRy": -0.54, "fRz": 0.0, "fRpitch": 8.0, "fRyaw": -10.0, "fRflat": 1.0, "fRtoe": 0.0,
+                "fLpitch": -28.0, "hy": -0.31, "hz": -0.06, "hx": 0.0}),
+        (0.95, {"fRpitch": 0.0}),
+        (1.08, {"fLpitch": 0.0}),
+        (end, {"fLx": 0.20, "fLy": -0.36, "fLyaw": 6.0, "fRx": -0.11, "fRy": -0.54, "fRyaw": -10.0,
+               "hx": 0.0, "hy": -0.33, "hz": -0.035, "hyaw": 0.0, "hroll": 0.0, "sside": 0.0, "ctwist": 0.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03})
+    aim(solver, shot, contact, "foot_R", INSTEP_R, BALL + Vector((0.0, BALL_RADIUS * 0.85, -0.008)),
+        ("fRx", "fRy", "fRz"))
+    return Clip("pass_lofted", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
 def header_clip(solver):
     contact = 0.56
     air = {"fLpitch": -40.0, "fRpitch": -40.0, "fLflat": 0.0, "fRflat": 0.0}
@@ -2104,10 +2300,12 @@ def despair_clip(solver):
 
 
 CLIP_BUILDERS = [
-    idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
+    idle_clip,
+    walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
     walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
     dribble_clips, jockey_clips, shield_clips, turn_clips, cut_clips,
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
+    tackle_standing_clip, cross_clip, pass_lofted_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
 ]

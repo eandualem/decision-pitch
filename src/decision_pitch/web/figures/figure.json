@@ -59,6 +59,11 @@
    "duration": 0.9,
    "loop": false
   },
+  "cross": {
+   "contact": 0.45,
+   "duration": 1.3333,
+   "loop": false
+  },
   "cut_L": {
    "contact": 0.25,
    "duration": 0.7333,
@@ -274,6 +279,11 @@
    "duration": 1.1,
    "loop": false
   },
+  "pass_lofted": {
+   "contact": 0.42,
+   "duration": 1.2667,
+   "loop": false
+  },
   "protest": {
    "duration": 2.6,
    "loop": false
@@ -338,6 +348,11 @@
   "tackle": {
    "contact": 0.4,
    "duration": 1.5,
+   "loop": false
+  },
+  "tackle_standing": {
+   "contact": 0.32,
+   "duration": 1.0,
    "loop": false
   },
   "throw_in": {
