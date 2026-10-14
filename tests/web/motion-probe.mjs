@@ -10,7 +10,7 @@
 // URL: ?view=overview | station:NAME | follow:ID | follow:play, &side=fixed|side|front|behind,
 // &hud=0. From a browser tool: `await __motion.measure(10)` returns the numbers below.
 //
-// Foot sliding, per stance: a stance is a run of 4 frames or more in which the ball of the
+// Foot sliding, per stance (and in `acts`, by the one-shot showing through the stance): a stance is a run of 4 frames or more in which the ball of the
 // foot (the toe bone's joint) stays within 2.5 cm of the lowest it has been over the last
 // 1.5 s. `slip` is the foot's median speed over the ground through the stance (cm/s), so a
 // planted foot reads near 0 whatever its landing and lift; `drift` how far it moves over
@@ -34,6 +34,7 @@ const STEP_APART = 0.05; // of a cycle
 const SHORTEST = 4; // frames a stance lasts to count
 const VISIBLE = 20; // cm/s a planted foot slides at that shows
 const SIDES = ['fixed', 'side', 'front', 'behind'];
+const NONE = [];
 
 const params = new URLSearchParams(location.search);
 const pitch = await new Promise((resolve) => {
@@ -127,7 +128,10 @@ function measureFrame(dt) {
       if (foot.heights.length > MEMORY) foot.heights.shift();
       const down = !jumped && v.y < Math.min(...foot.heights) + LOW;
       if (down) {
-        foot.stance ??= { foot: [], body: [], dt: [], speed: [] };
+        foot.stance ??= { foot: [], body: [], dt: [], speed: [], acts: new Map() };
+        for (const act of state.acts ?? NONE) {
+          if (act.weight > 0.2) { const name = act.name.split(':')[0]; foot.stance.acts.set(name, (foot.stance.acts.get(name) ?? 0) + 1); }
+        }
         const prior = foot.stance.foot.at(-1);
         if (prior && s && state.speed < 0.3) s.standing.push(Math.hypot(v.x - prior[0], v.z - prior[1]) / dt * 100);
         foot.stance.foot.push([v.x, v.z]);
@@ -198,7 +202,7 @@ function measureFrame(dt) {
 }
 
 // A finished stance's slip, drift and share of the travel.
-function stance(s, { foot, body, dt, speed }) {
+function stance(s, { foot, body, dt, speed, acts }) {
   const n = foot.length;
   if (n < SHORTEST) return;
   const slips = [];
@@ -215,7 +219,11 @@ function stance(s, { foot, body, dt, speed }) {
   if (moving) s.movingStances++;
   s.footPath += footPath;
   if (quantile(speed, 0.5) > 0.3) s.bodyPath += bodyPath;
-  s.stances.push({ slip: quantile(slips, 0.5), drift: Math.hypot(foot[to][0] - foot[from][0], foot[to][1] - foot[from][1]) * 100 });
+  // The one-shot shown longest through the stance, if any, that the stance is put down to.
+  let act = 'loops';
+  let most = n / 4;
+  for (const [name, frames] of acts) if (frames > most) { most = frames; act = name; }
+  s.stances.push({ slip: quantile(slips, 0.5), drift: Math.hypot(foot[to][0] - foot[from][0], foot[to][1] - foot[from][1]) * 100, act });
 }
 
 const quantile = (list, q) => {
@@ -225,6 +233,17 @@ const quantile = (list, q) => {
 };
 const share = (list) => (list.length ? +(list.filter(x => x.slip > VISIBLE).length / list.length).toFixed(3) : null);
 const mean = (list) => (list.length ? +(list.reduce((a, b) => a + b, 0) / list.length).toFixed(3) : null);
+
+// Stances by the one-shot showing through them: which clips the sliding comes from.
+function byAct(list) {
+  const acts = {};
+  for (const s of list) for (const x of s.stances) (acts[x.act] ??= []).push(x);
+  for (const [name, stances] of Object.entries(acts)) {
+    const slips = stances.map(x => x.slip);
+    acts[name] = { stances: stances.length, slipMedian: quantile(slips, 0.5), slipP90: quantile(slips, 0.9), sliding: share(stances) };
+  }
+  return acts;
+}
 
 // Foot numbers for a list of players' stats.
 function feet(list) {
@@ -259,9 +278,12 @@ function report(rec) {
   const groups = {};
   for (const s of stations) {
     const list = s.players.map(id => rec.players.get(id)).filter(Boolean);
-    if (list.length) groups[s.name] = feet(list);
+    if (list.length) groups[s.name] = { ...feet(list), acts: byAct(list) };
   }
-  return { seconds: rec.seconds, frames: rec.frames, all: feet([...rec.players.values()]), stations: groups, pairs, players };
+  return {
+    seconds: rec.seconds, frames: rec.frames, all: feet([...rec.players.values()]), acts: byAct([...rec.players.values()]),
+    stations: groups, pairs, players,
+  };
 }
 
 let finished = null;
