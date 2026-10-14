@@ -434,7 +434,11 @@ the player it instructs, or signalling a change when it asks for a
 substitution) and when the `substitution` event is made, celebrates its team's
 goals and holds its head at the other team's. The `hello` message lists each
 team's assistant models; one assistant figure stands behind the manager per
-assistant model, and none when there are none. There is no crowd.
+assistant model, and none when there are none. There is no crowd. The wide
+shot keeps the near technical areas in frame while play is in midfield or on
+that side, and while the ball is dead the camera cuts briefly to a manager's
+reaction: after the scorer's close-up and when a substitution is made. It
+never cuts away during open play.
 
 **Buffered interpolation.** The page renders a fixed delay, about 100 ms,
 behind the newest snapshot instead of chasing the last two. A timeline module
