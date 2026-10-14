@@ -27,8 +27,10 @@ export function createCamera(camera, pitch) {
         look.y = 1;
         desired.set(closeup.x + 10 * portrait, 12 * portrait, closeup.z + 20 * portrait);
       } else {
+        // Aim a little towards the near touchline so the managers' technical areas stay
+        // in the bottom of the frame; the far touchline has room to spare at the top.
         look.set(THREE.MathUtils.clamp(ballPosition.x * 0.65, -pitch.length * 0.32, pitch.length * 0.32), 0,
-          THREE.MathUtils.clamp(ballPosition.z * 0.34, -pitch.width * 0.2, pitch.width * 0.2));
+          pitch.width * 0.13 + THREE.MathUtils.clamp(ballPosition.z * 0.25, -pitch.width * 0.125, pitch.width * 0.125));
         desired.set(look.x, 53 * portrait, look.z + 64 * portrait);
       }
       const blend = initialized ? 1 - Math.exp(-Math.min(dt, 0.1) * 2.4) : 1;
