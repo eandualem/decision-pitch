@@ -501,8 +501,11 @@ figure at run time. The ball is drawn at the engine's 0.11 m radius.
 
 **Source and build.** The scripts and the saved `.blend` live in
 `assets/figure/`: `rig.py` (the skeleton), `body.py` (the body, clothing
-regions, hair and variations), `clips.py` (the animation) and `build.py`, which
-runs them in order and exports. One command rebuilds everything:
+regions, coat and variations, modelled as smooth signed-distance shapes in
+`shapes.py` and meshed with the helpers in `meshes.py`), `hair.py` (hair styles
+and brows), `clips.py` (the animation), `render.py` (stills for checking the
+figure) and `build.py`, which runs them in order and exports. Its README says
+how to restyle the figure. One command rebuilds everything:
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --python assets/figure/build.py
@@ -513,7 +516,9 @@ with `figure.json` beside it, which describes the clips for the page. The
 scripts are the source of truth: a full rebuild regenerates the `.blend`. A
 person who restyles the figure by hand in the `.blend` exports it with the same
 script's export-only mode, which leaves the `.blend` as it is, and carries the
-change into the scripts if it should survive the next rebuild. No
+change into the scripts if it should survive the next rebuild. A rebuild
+gives the same `.glb` and `figure.json` byte for byte, and the `.blend` the same
+content (Blender gives some internal ids random values). No
 third-party model, motion capture, texture or asset pack is used; colours are
 plain materials, so the `.glb` stays small.
 
@@ -521,9 +526,11 @@ plain materials, so the `.glb` stays small.
 the soles at the origin, facing Blender's −Y, so it faces +z in the page like
 the bodies before it. About 10,000 triangles with hair. The page scales a
 figure uniformly between 1.70 and 1.95 m. A simple modelled face (brow, nose,
-ears, eyes and mouth) holds up in the close-up after a goal. Shape keys,
-exported as morph targets, vary build and face; several hair meshes, one shown
-per figure, vary the hair; the page picks skin tone, hair colour, hair style,
+ears, eyes and mouth) holds up in the close-up after a goal; the body is
+modelled and reduced on one side and mirrored, so it is symmetric. Shape keys,
+exported as morph targets, vary build and face; six hair meshes (shaved,
+buzz, short, curly, swept and tied back), one shown per figure, vary the hair,
+and each carries the brows; the page picks skin tone, hair colour, hair style,
 build and height from each player's id, so a player looks the same in every
 browser and the 22 do not look repeated.
 
@@ -531,7 +538,8 @@ browser and the 22 do not look repeated.
 material slots that the page recolours per team and per figure: `skin` (head
 and neck), `shirt` (torso and upper arms), `sleeve` (forearms), `hands`,
 `shorts`, `legs` (between shorts and socks), `socks` and `boots`, plus `hair`
-and fixed face materials. A short-sleeved outfield kit paints `sleeve` and
+and one fixed `eyes` material, on its own small mesh, which also draws the
+mouth's line. A short-sleeved outfield kit paints `sleeve` and
 `legs` with the skin tone; a goalkeeper's long sleeves and gloves paint
 `sleeve` with the keeper colour and `hands` with a glove colour. A manager wears
 a separate mesh over the same body, a hip-length zip-up track jacket with a
