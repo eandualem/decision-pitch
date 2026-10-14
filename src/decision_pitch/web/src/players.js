@@ -457,11 +457,6 @@ export function createPlayers(scene, teams, figure, camera = null) {
       }
       person.object.rotation.y = actor.facing + Math.PI / 2;
       person.update(step, actor.speed, actor.way - actor.facing);
-      if (camera) {
-        const seen = smooth(clamp((camera.position.distanceTo(group.position) - BADGE[0]) / (BADGE[1] - BADGE[0]), 0, 1));
-        actor.badge.material.opacity = seen;
-        actor.badge.visible = seen > 0.01;
-      }
     }
 
     // The ball as the engine sends it, through the point of each touch at its moment.
@@ -575,6 +570,17 @@ export function createPlayers(scene, teams, figure, camera = null) {
     getPlayerPosition(id) {
       const actor = actors.get(id);
       return actor?.group.visible ? actor.group.position : null;
+    },
+    // Fades each drawn player's number by its distance from the camera. Called once the
+    // camera has moved for this frame, so a cut to a close-up never shows them for a frame.
+    fadeNumbers() {
+      if (!camera) return;
+      for (const actor of actors.values()) {
+        if (!actor.group.visible) continue;
+        const seen = smooth(clamp((camera.position.distanceTo(actor.group.position) - BADGE[0]) / (BADGE[1] - BADGE[0]), 0, 1));
+        actor.badge.material.opacity = seen;
+        actor.badge.visible = seen > 0.01;
+      }
     },
     // The way a drawn player's figure faces, as its yaw in the scene (0 faces +z, so its
     // direction is (sin y, 0, cos y)), or null when it is not drawn.

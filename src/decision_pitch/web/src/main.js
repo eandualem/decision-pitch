@@ -178,6 +178,7 @@ function draw(frameTime) {
     for (const event of timeline.release()) show(event, now, timeline.late(event));
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
+    actors.fadeNumbers(); // by where the camera is this frame, after a cut too
     touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }

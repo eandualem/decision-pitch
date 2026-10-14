@@ -754,13 +754,18 @@ test('the number above a player fades out as the camera comes close, and its fac
   const s = snap(1, [player(2, 0, 0, { heading: 0.5 })], { x: 5, y: 0 });
   camera.position.set(0, 35, 60); // the wide shot, far off
   actors.update(s, s, 1, 1 / 60, 1);
+  actors.fadeNumbers();
   assert.equal(badge.visible, true);
   assert.equal(badge.material.opacity, 1);
-  camera.position.set(4, 2, 5); // a close-up, 7 m away
+  // A cut to a close-up, 7 m away: the camera moves after the players have, in the same
+  // frame, and the numbers go with this frame's camera.
   actors.update(s, s, 1, 1 / 60, 1.02);
-  assert.equal(badge.visible, false, 'gone in the close-up');
+  camera.position.set(4, 2, 5);
+  actors.fadeNumbers();
+  assert.equal(badge.visible, false, 'gone in the frame of the cut');
   camera.position.set(0, 10, 16); // in between
   actors.update(s, s, 1, 1 / 60, 1.04);
+  actors.fadeNumbers();
   assert.ok(badge.material.opacity > 0 && badge.material.opacity < 1, `fading: ${badge.material.opacity}`);
   assert.ok(Math.abs(actors.getPlayerFacing(2) - (0.5 + Math.PI / 2)) < 1e-9, 'facing its heading');
   assert.equal(actors.getPlayerFacing(99), null);

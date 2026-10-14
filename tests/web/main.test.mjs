@@ -32,6 +32,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     ballPosition: { x: 1, y: 2, z: 3 },
     update: (...args) => calls.push(['actors.update', ...args]),
     handleEvent: (...args) => calls.push(['actors.event', ...args]),
+    fadeNumbers: () => calls.push(['actors.fade']),
     dispose: () => calls.push(['actors.dispose']),
   });
   const component = (name) => () => ({
@@ -305,4 +306,15 @@ test('each match\'s camera starts from the same lens, whatever the last match le
   app.send(hello);
   app.send(hello); // a reconnect: the server sends a new hello
   assert.deepEqual(named(app.calls, 'camera.create').map(([, fov]) => fov), [40, 40]);
+});
+
+test('the numbers above the players fade by the camera of this frame, after it moves', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.tick(50);
+  const order = app.calls.map(([name]) => name).filter(name => ['actors.update', 'camera.update', 'actors.fade'].includes(name));
+  assert.deepEqual(order.slice(-3), ['actors.update', 'camera.update', 'actors.fade']);
 });
