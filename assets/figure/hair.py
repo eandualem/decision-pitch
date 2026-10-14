@@ -42,7 +42,7 @@ class Hairline(S.Shape):
 def _hair_region():
     """Where hair grows: above the hairline, around the ears, with sideburns."""
     top = Hairline()
-    sideburn = Cone((0.076, -0.004, 1.705), (0.074, -0.010, 1.658), 0.0075)
+    sideburn = Cone((0.077, -0.006, 1.710), (0.075, -0.013, 1.652), 0.0085, 0.0065)
     region = Union([top] + both([sideburn]), k=0.01)
     ear = Ellipsoid((0.080, 0.012, 1.664), (0.030, 0.034, 0.040))
     return Cut(region, Union(both([ear])), k=0.008)
@@ -78,7 +78,8 @@ def _hair_styles(head):
     region = _hair_region()
 
     def layer(thickness):
-        return Layer(head, region, thickness, edge=0.03, edge_min=0.0022)
+        # Thinning to a millimetre and a half over the last 4 cm, so the hairline is soft.
+        return Layer(head, region, thickness, edge=0.04, edge_min=0.0015)
 
     def ramp(v, lo, hi):
         return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
@@ -117,12 +118,12 @@ HAIR_TRIANGLES = {"hair_bald": 160, "hair_buzz": 520, "hair_short": 900, "hair_c
                   "hair_swept": 1000, "hair_bun": 1000}
 
 
-def _meshed(shape, step, lo, hi, head, name, collection, triangles):
+def _meshed(shape, step, lo, hi, head, name, collection, triangles, smoothing=1):
     """`shape` meshed on a grid of `step`, without the part inside the head (its open edge
-    is hidden there), decimated to `triangles`."""
+    is hidden there), smoothed and decimated to `triangles`."""
     verts, quads = S.mesh_field(shape, step, lo, hi)
     verts, quads = keep_vertices(verts, quads, head.at(verts) > -0.0012)
-    obj = mesh_object(name, smooth(verts, quads, 1), quads, collection)
+    obj = mesh_object(name, smooth(verts, quads, smoothing), quads, collection)
     collapse(obj, triangles)
     return obj
 
@@ -137,7 +138,8 @@ def build_hair(head, collection):
         if style is None:
             obj = mesh_object(name, np.zeros((0, 3)), [], collection)
         else:
-            obj = _meshed(style, HAIR_STEP, lo, hi, head, name, collection, HAIR_TRIANGLES[name] - BROW_TRIANGLES)
+            # A second smoothing pass takes the grid's steps out of the thin hairline.
+            obj = _meshed(style, HAIR_STEP, lo, hi, head, name, collection, HAIR_TRIANGLES[name] - BROW_TRIANGLES, 2)
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         bm.from_mesh(brows.data)  # appends the brows
