@@ -141,7 +141,10 @@ test('events wait for the drawn match to reach them; decisions and managers do n
   const routed = app.calls.slice(before).map(([name, message]) => [name, message.type]);
   assert.deepEqual(routed, [
     ['overlay.message', 'decision'], ['overlay.message', 'manager'], ['touchline.message', 'manager'],
+    ['camera.message', 'manager'],
   ]);
+  const advice = named(app.calls, 'camera.message').at(-1);
+  assert.equal(typeof advice[3].handleMessage, 'function', 'the camera can find the manager');
   assert.equal(named(app.calls, 'touchline.message')[0][2], 1.192, 'with the page time');
 });
 

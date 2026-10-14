@@ -66,6 +66,7 @@ function receive(message) {
   } else if (message.type === 'manager' && touchline) {
     overlay.handleMessage(message);
     touchline.handleMessage(message, now);
+    broadcast.handleMessage(message, now, touchline);
   } else if (overlay) {
     overlay.handleMessage(message);
   }
