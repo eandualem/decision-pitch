@@ -15,18 +15,12 @@ const TEAMS = [
 ];
 
 function setup(teams = TEAMS) {
-  const canvases = [];
+  const texts = [];
   const context2d = {
     measureText: (text) => ({ width: text.length * 28 }),
-    beginPath() {}, roundRect() {}, fill() {}, fillRect() {}, fillText(text) { this.text = text; },
+    beginPath() {}, roundRect() {}, fill() {}, fillRect() {}, fillText(text) { texts.push(text); },
   };
-  const document = {
-    createElement: () => {
-      const canvas = { getContext: () => context2d };
-      canvases.push(canvas);
-      return canvas;
-    },
-  };
+  const document = { createElement: () => ({ getContext: () => context2d }) };
   const context = { THREE, document };
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -46,7 +40,7 @@ function setup(teams = TEAMS) {
       .map(shoulder => shoulder.children.find(child => child.isGroup).children[1].getWorldPosition(world).clone());
   };
   return {
-    scene, touchline, players, actors, ball, find, hands, shoulders, technicalArea: context.technicalArea,
+    scene, touchline, players, actors, ball, find, hands, shoulders, texts, technicalArea: context.technicalArea,
     get now() { return now; },
     run(seconds, step = 1 / 60) {
       for (let t = 0; t < seconds; t += step) {
@@ -92,7 +86,10 @@ test('assistant figures stand behind the manager only for listed assistant model
       assert.ok(assistant.position.z > manager.position.z, 'a step behind, away from the pitch');
       assert.ok(Math.abs(assistant.position.x - manager.position.x) < 4);
     }
-    assert.notEqual(first.position.x, second.position.x, 'side by side, not stacked');
+    assert.ok(Math.abs(first.position.x - second.position.x) > 2, 'side by side, not stacked');
+    const labels = [first, second].map(assistant => assistant.children.filter(child => child.isSprite).length);
+    assert.deepEqual(labels, [1, 0], 'one label for the assistant model both run on');
+    assert.deepEqual(t.texts, ['Built-in', 'gpt-5.4-mini', 'gpt-5.4-nano ×2']);
     assert.equal(t.scene.getObjectByName('touchline').children.length, 4);
   } finally {
     t.touchline.dispose();

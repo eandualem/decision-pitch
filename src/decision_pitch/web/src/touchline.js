@@ -6,8 +6,11 @@ import * as THREE from 'three';
 // the figures react to the messages and events the page already receives.
 const AREA = { offset: 8, half: 4.5, depth: 2.5 }; // metres from halfway and touchline
 const WALK = 1.5; // m/s
-const GESTURES = { instruct: 2.8, change: 2.6, clap: 1.8, celebrate: 4.2, despair: 3.6 };
+// Seconds each gesture lasts. A goal reaction outlasts the camera's close-up of the
+// scorer, so the reaction shot that follows it still finds the managers reacting.
+const GESTURES = { instruct: 2.8, change: 2.6, clap: 2.6, celebrate: 6.5, despair: 5.5 };
 const REACTIONS = new Set(['celebrate', 'despair']); // a goal outranks other gestures
+const ASSISTANT_REACTION = 3.5; // s: assistants react more briefly than the manager
 
 export function technicalArea(pitch, team) {
   const x = (team === 0 ? -1 : 1) * AREA.offset;
@@ -53,8 +56,9 @@ export function createTouchline(scene, teams, pitch) {
     const ctx = canvas.getContext('2d');
     const font = 'bold 52px sans-serif';
     ctx.font = font;
+    const width = Math.ceil(Math.min(ctx.measureText(text).width, 640) + 76);
+    canvas.width = width;
     canvas.height = 96;
-    canvas.width = Math.ceil(Math.min(ctx.measureText(text).width, 640) + 76);
     ctx.font = font; // resizing a canvas resets its context
     ctx.fillStyle = 'rgba(9, 18, 26, 0.82)';
     ctx.beginPath();
@@ -123,11 +127,15 @@ export function createTouchline(scene, teams, pitch) {
       mesh(box, complexion, elbow, 0, -0.3, 0, 0.11, 0.12, 0.12);
       arms.push({ shoulder, elbow, s });
     }
-    const tag = label(name, colours.shirt, role === 'manager' ? 0.8 : 0.55);
-    tag.position.y = role === 'manager' ? 2.6 : 2.3;
-    group.add(tag);
-    const back = role === 'manager' ? 0 : 1.3;
-    const offset = role === 'manager' ? 0 : (index % 2 === 0 ? -side : side) * 1.5 * (1 + Math.floor(index / 2));
+    if (name) {
+      const tag = label(name, colours.shirt, role === 'manager' ? 1.1 : 0.7);
+      tag.position.y = role === 'manager' ? 3.1 : 2.75;
+      group.add(tag);
+    }
+    // Assistants stand a step back and well to the side, so the camera above the
+    // stands sees each figure and label clear of the manager's.
+    const back = role === 'manager' ? 0 : 0.9;
+    const offset = role === 'manager' ? 0 : (index % 2 === 0 ? -side : side) * 2 * (1 + Math.floor(index / 2));
     const result = {
       team, role, area, group, body, torso, legs, arms, offset,
       x: area.x + offset, z: area.z + back, goal: area.x + offset, vx: 0, stride: index,
@@ -142,7 +150,13 @@ export function createTouchline(scene, teams, pitch) {
 
   teams.forEach((team, index) => {
     managers.push(figure(index, 'manager', 0, team.manager ?? 'Manager'));
-    (team.assistants ?? []).forEach((name, i) => figure(index, 'assistant', i, name));
+    // One label for each assistant model, on the first figure it helps, with how many.
+    const assistants = team.assistants ?? [];
+    assistants.forEach((name, i) => {
+      const count = assistants.filter(other => other === name).length;
+      const first = assistants.indexOf(name) === i;
+      figure(index, 'assistant', i, first ? (count > 1 ? `${name} ×${count}` : name) : null);
+    });
   });
 
   function gesture(f, kind, now, target = null) {
@@ -150,7 +164,7 @@ export function createTouchline(scene, teams, pitch) {
     if (busy && REACTIONS.has(f.gesture) && !REACTIONS.has(kind)) return;
     f.gesture = kind;
     f.gestureAt = now;
-    f.gestureUntil = now + GESTURES[kind];
+    f.gestureUntil = now + (f.role === 'manager' ? GESTURES[kind] : Math.min(GESTURES[kind], ASSISTANT_REACTION));
     f.target = target;
   }
 
@@ -187,6 +201,15 @@ export function createTouchline(scene, teams, pitch) {
         p.ex[i] = -1.57;
         p.ey[i] = -s * (0.6 + 0.8 * Math.max(0, Math.sin(age * 11)));
         p.ez[i] = 0;
+      } else if (kind === 'celebrate' && age >= 3.5) {
+        // Then fists clenched and pumped.
+        const pump = Math.max(0, Math.sin(age * 8));
+        p.sx[i] = -0.25;
+        p.sz[i] = s * (1.2 + pump * 0.5);
+        p.ex[i] = 0;
+        p.ey[i] = 0;
+        p.ez[i] = s * 1.75;
+        p.lift = pump * 0.06;
       } else if (kind === 'celebrate') {
         const pump = Math.sin(age * 9 + (f.role === 'manager' ? 0 : 1.3));
         p.sx[i] = -0.2 + pump * 0.18;
@@ -275,6 +298,10 @@ export function createTouchline(scene, teams, pitch) {
         f.body.position.y += (p.lift - f.body.position.y) * ease;
         f.torso.rotation.x += (p.lean - f.torso.rotation.x) * ease;
       }
+    },
+    // The manager's drawn position, for a camera reaction shot.
+    getManagerPosition(team) {
+      return managers[team]?.group.position ?? null;
     },
     handleMessage(message, now) {
       if (message.type !== 'manager') return;

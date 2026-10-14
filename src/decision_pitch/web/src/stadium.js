@@ -242,7 +242,7 @@ export function createStadium(scene, renderer, pitch) {
     const depth = DUGOUT.depth;
     const half = DUGOUT.width / 2;
     dugouts.push([x, DUGOUT.height / 2, front + depth, DUGOUT.width, DUGOUT.height, 0.14, 0x1b2b35]);
-    dugouts.push([x, DUGOUT.height, front + depth / 2, DUGOUT.width + 0.3, 0.1, depth + 0.3, 0x9fb4bd]);
+    dugouts.push([x, DUGOUT.height, front + depth / 2, DUGOUT.width + 0.3, 0.1, depth + 0.3, 0x2f4553]);
     for (const end of [-1, 1]) {
       dugouts.push([x + end * half, DUGOUT.height / 2, front + depth / 2, 0.12, DUGOUT.height, depth, 0x1b2b35]);
     }
