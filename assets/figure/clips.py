@@ -620,8 +620,9 @@ def trunk_cycle(u, duty, hz, bob, run, sway, hyaw, hroll, hpitch, lean, chest_ya
 
 
 class Clip:
-    def __init__(self, name, frames, sample, loop, speed=None, contact=None):
+    def __init__(self, name, frames, sample, loop, speed=None, direction=None, contact=None):
         self.name = name
+        self.direction = direction
         self.frames = frames
         self.sample = sample  # time (s) -> pose channels
         self.loop = loop
@@ -632,6 +633,7 @@ class Clip:
         out = {"loop": self.loop, "duration": round(self.frames / FPS, 4)}
         if self.speed is not None:
             out["speed"] = self.speed
+            out["direction"] = self.direction
         if self.contact is not None:
             out["contact"] = round(self.contact, 4)
         return out
@@ -677,7 +679,7 @@ def idle_clip(solver):
             })
         return p
 
-    return Clip("idle", frames, sample, loop=True, speed=0.0)
+    return Clip("idle", frames, sample, loop=True)
 
 
 def walk_clip(solver):
@@ -695,14 +697,14 @@ def walk_clip(solver):
             **arm_swing(u, -2.0, 16.0, 22.0, 10.0, abd=7.0, twist=4.0, pron=10.0),
         },
     )
-    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed)
+    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
 
 
 def jog_clip(solver):
-    path_L = [(0.25, (0.07, 0.42, 0.33)), (0.5, (0.08, 0.10, 0.42)), (0.75, (0.07, -0.30, 0.30))]
+    path_L = [(0.25, (0.07, 0.42, 0.33)), (0.5, (0.08, 0.10, 0.42)), (0.78, (0.07, -0.36, 0.26))]
     gait = Gait(
         solver, frames=22, speed=3.5, direction=AHEAD, duty=0.30,
-        land={"L": (0.055, -0.22), "R": (-0.055, -0.22)},
+        land={"L": (0.055, -0.25), "R": (-0.055, -0.25)},
         yaw={"L": 5.0, "R": -5.0},
         stance_pitch=[(0.0, 4.0), (0.12, 0.0), (0.45, 0.0), (0.75, -25.0), (1.0, -62.0)],
         swing_pitch=[(0.2, -60.0), (0.5, -30.0), (0.8, 0.0)],
@@ -713,7 +715,7 @@ def jog_clip(solver):
             **arm_swing(u, -5.0, 35.0, 88.0, 14.0, abd=13.0, twist=6.0),
         },
     )
-    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed)
+    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
 
 
 def sprint_clip(solver):
@@ -731,10 +733,81 @@ def sprint_clip(solver):
             **arm_swing(u, 2.0, 55.0, 90.0, 20.0, abd=12.0, twist=6.0),
         },
     )
-    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed)
+    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
 
 
-CLIP_BUILDERS = [idle_clip, walk_clip, jog_clip, sprint_clip]
+
+def backpedal_clip(solver):
+    path_L = [(0.3, (0.09, -0.22, 0.18)), (0.6, (0.095, 0.06, 0.23)), (0.85, (0.09, 0.27, 0.155))]
+    gait = Gait(
+        solver, frames=16, speed=2.5, direction=-AHEAD, duty=0.42,
+        land={"L": (0.09, 0.24), "R": (-0.09, 0.24)},
+        yaw={"L": 8.0, "R": -8.0},
+        stance_pitch=[(0.0, -16.0), (0.3, -4.0), (0.7, -4.0), (1.0, -16.0)],
+        swing_pitch=[(0.3, -22.0), (0.6, -30.0), (0.85, -22.0)],
+        swing_path={"L": path_L, "R": _mirror_path(path_L)},
+        body=lambda u: {
+            **trunk_cycle(u, 0.42, hz=-0.085, bob=0.014, run=True, sway=0.012, hyaw=4.0, hroll=3.0,
+                          hpitch=6.0, lean=10.0, chest_yaw=5.0, look_down=-6.0, flex_bob=1.0),
+            **arm_swing(u, 8.0, 20.0, 78.0, 8.0, abd=16.0, twist=4.0),
+        },
+    )
+    return Clip("backpedal", gait.frames, gait, loop=True, speed=gait.speed, direction="back")
+
+
+def strafe_clip(solver, side):
+    """A side-step towards `side`, the leading foot reaching out and the other closing."""
+    lead, trail = ("L", "R") if side == "L" else ("R", "L")
+    m = 1.0 if side == "L" else -1.0  # +X is the figure's left
+    land = {lead: (0.38 * m, -0.01), trail: (-0.08 * m, 0.01)}
+    paths = {
+        lead: [(0.25, (0.10 * m, 0.0, 0.17)), (0.55, (0.25 * m, -0.02, 0.19)), (0.85, (0.36 * m, -0.01, 0.13))],
+        trail: [(0.25, (-0.44 * m, 0.0, 0.17)), (0.55, (-0.28 * m, 0.02, 0.19)), (0.85, (-0.12 * m, 0.01, 0.13))],
+    }
+    # The left foot always lands at phase 0: when it trails, the body's cycle is offset.
+    shift = 0.0
+
+    def body(u):
+        v = (u + shift) % 1.0
+        p = trunk_cycle(v, 0.30, hz=-0.115, bob=0.012, run=True, sway=0.0, hyaw=2.0, hroll=2.0,
+                        hpitch=6.0, lean=8.0, chest_yaw=3.0, look_down=0.0, flex_bob=0.8)
+        p["hx"] = 0.02 * m
+        p["kLout"] = p["kRout"] = 12.0
+        p["sside"] += 2.0 * m
+        p["look_yaw"] = 0.0
+        for s, sign in (("L", 1.0), ("R", -1.0)):
+            p.update({
+                f"a{s}flex": 14.0 + wave2(v, 0.15, 3.0),
+                f"a{s}abd": 22.0 + wave2(v, 0.1, 6.0) * (1.0 if s == lead else -0.5),
+                f"a{s}elbow": 72.0 + wave2(v, 0.2, 6.0),
+                f"a{s}twist": 8.0,
+                f"a{s}pron": 25.0,
+                f"a{s}wrist": 6.0,
+            })
+        return p
+
+    gait = Gait(
+        solver, frames=16, speed=2.5, direction=X * m, duty=0.30,
+        land=land,
+        yaw={"L": 6.0, "R": -6.0},
+        stance_pitch=[(0.0, -8.0), (0.25, 0.0), (0.6, 0.0), (1.0, -24.0)],
+        swing_pitch=[(0.3, -20.0), (0.6, -12.0), (0.85, -9.0)],
+        swing_path=paths,
+        body=body,
+    )
+    return Clip(f"strafe_{side}", gait.frames, gait, loop=True, speed=gait.speed,
+                direction="left" if side == "L" else "right")
+
+
+def strafe_L_clip(solver):
+    return strafe_clip(solver, "L")
+
+
+def strafe_R_clip(solver):
+    return strafe_clip(solver, "R")
+
+
+CLIP_BUILDERS = [idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip]
 
 
 # --------------------------------------------------------------------------
@@ -755,7 +828,7 @@ def _key_action(armature, name, frames, loop):
     action = bpy.data.actions.new(name)
     action.use_fake_user = True
     armature.animation_data.action = action
-    bones = list(frames[0][0])
+    bones = [b for b in frames[0][0] if b != "root"]  # the root never moves
     previous = {}
     curves = {}
     for bone in bones:
