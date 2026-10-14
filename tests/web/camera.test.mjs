@@ -145,8 +145,10 @@ test('after the scorer close-up a goal cuts to the scoring manager while the bal
   t.run(3, 'kickoff');
   assert.ok(t.camera.position.distanceTo(t.actors.getPlayerPosition(9)) < 30, 'close on the scorer');
   assert.ok(!t.broadcast.wide, 'the close-up is not the wide shot');
+  assert.ok(!t.broadcast.managers, 'nor a shot of the managers');
   t.run(1, 'kickoff');
   assert.equal(t.on(), 1, 'cut to the scoring manager');
+  assert.ok(t.broadcast.managers && !t.broadcast.wide);
   assert.equal(t.camera.fov, 40, 'through the close-ups\' lens');
   const manager = t.managers[1];
   const centre = t.screen(manager.x, 1.3, manager.z);
@@ -159,6 +161,7 @@ test('after the scorer close-up a goal cuts to the scoring manager while the bal
   assert.equal(t.on(), 1, 'for 2.5 s');
   t.run(0.4, 'kickoff');
   assert.ok(t.wide(), 'then cuts straight back to the wide shot');
+  assert.ok(!t.broadcast.managers);
 });
 
 test('a shot waits for the drawn match to reach its stoppage, and ends when drawn play restarts', () => {

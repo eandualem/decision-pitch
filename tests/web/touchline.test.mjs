@@ -72,8 +72,24 @@ test('each team has a labelled manager in its own technical area beside the half
       const height = t.touchline.inspect(name).height;
       assert.ok(height >= 1.7 && height <= 1.95, `a person's height: ${height}`);
       assert.ok(labels[0].position.y - labels[0].scale.y / 2 > height + 0.3, 'the label clears the head');
+      assert.ok(labels[0].scale.y <= height / 3, `smaller than the head and shoulders: ${labels[0].scale.y}`);
       assert.ok(manager.children.some(child => child.getObjectByName?.('rig')), 'the human figure');
     }
+  } finally {
+    t.touchline.dispose();
+  }
+});
+
+test('the name labels show in the managers\' shots only', () => {
+  const t = setup();
+  try {
+    const labels = [];
+    t.scene.traverse(object => { if (object.isSprite) labels.push(object); });
+    assert.equal(labels.length, 3, 'two managers and one assistant model');
+    t.touchline.showLabels(false);
+    assert.ok(labels.every(label => !label.visible), 'hidden on the wide shot');
+    t.touchline.showLabels(true);
+    assert.ok(labels.every(label => label.visible), 'shown on the managers');
   } finally {
     t.touchline.dispose();
   }

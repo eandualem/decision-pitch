@@ -310,6 +310,8 @@ export function createCamera(camera, pitch) {
   return {
     // Whether the shot on screen is the wide shot, once this frame's update has chosen it.
     get wide() { return shown === 'wide'; },
+    // Whether it is a shot of the managers.
+    get managers() { return shown === 'managers'; },
     handleEvent(event, now, actors, touchline) {
       if (event.kind === 'goal') {
         scorer = event.player;

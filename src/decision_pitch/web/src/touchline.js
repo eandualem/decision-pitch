@@ -54,6 +54,7 @@ export function createTouchline(scene, teams, pitch, figure) {
   materials.add(shadowMaterial);
   const figures = [];
   const managers = [];
+  const tags = [];
 
   function label(text, colour, height) {
     const canvas = document.createElement('canvas');
@@ -98,10 +99,12 @@ export function createTouchline(scene, teams, pitch, figure) {
     const person = made.create({ seed: group.name, role, colours });
     group.add(person.object);
     if (name) {
-      const size = role === 'manager' ? 1.1 : 0.7;
+      // Sized for the managers' shots, the only ones that show it.
+      const size = role === 'manager' ? 0.5 : 0.36;
       const tag = label(name, colours.shirt, size);
       tag.position.y = person.height + LABEL_GAP + size / 2;
       group.add(tag);
+      tags.push(tag);
     }
     // Assistants stand a step back and well to the side, so the camera above the
     // stands sees each figure and label clear of the manager's.
@@ -195,6 +198,12 @@ export function createTouchline(scene, teams, pitch, figure) {
         f.person.update(step, Math.abs(f.vx), travel);
       }
     },
+    // Shows the name labels in the managers' shots only: on the wide shot they would hang
+    // at the frame's lower edge over managers still out of view. Called once the camera
+    // has chosen this frame's shot, so a cut never shows them for a frame.
+    showLabels(managersShot) {
+      for (const tag of tags) tag.visible = managersShot;
+    },
     // The manager's drawn position, for a camera reaction shot.
     getManagerPosition(team) {
       return managers[team]?.group.position ?? null;
@@ -236,6 +245,7 @@ export function createTouchline(scene, teams, pitch, figure) {
       for (const value of textures) value.dispose();
       figures.length = 0;
       managers.length = 0;
+      tags.length = 0;
     },
   };
 }
