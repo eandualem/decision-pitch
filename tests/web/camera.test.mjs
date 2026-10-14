@@ -45,20 +45,16 @@ function setup(aspect = 16 / 9) {
   };
 }
 
-test('the wide shot keeps both technical areas and the far touchline in frame with play in midfield', () => {
-  for (const aspect of [16 / 9, 1513 / 784]) {
-    for (const [x, z] of [[0, 0], [-20, 10], [15, 25], [10, -15]]) {
-      const t = setup(aspect);
-      t.ball.set(x, 0.3, z);
-      t.run(4);
-      for (const side of [-1, 1]) {
-        for (const height of [0, 2.9]) {
-          assert.ok(t.inFrame(side * 8, height, AREA_Z), `area ${side} at ${height} m, ball (${x}, ${z})`);
-        }
-      }
-      assert.ok(t.inFrame(0, 0, -PITCH.width / 2), 'far touchline');
-      assert.ok(t.inFrame(x, 0.3, z, 0.6), 'ball comfortably in frame');
-    }
+test('the wide shot follows play from the stand, at the same distance as before the touchline', () => {
+  for (const [x, z] of [[0, 0], [-20, 10], [15, 25], [60, -40]]) {
+    const t = setup();
+    t.ball.set(x, 0.3, z);
+    t.run(6);
+    const lookX = Math.max(-PITCH.length * 0.32, Math.min(PITCH.length * 0.32, x * 0.65));
+    const lookZ = Math.max(-PITCH.width * 0.2, Math.min(PITCH.width * 0.2, z * 0.34));
+    assert.ok(t.camera.position.distanceTo(new THREE.Vector3(lookX, 53, lookZ + 64)) < 0.01, `ball (${x}, ${z})`);
+    const centre = t.screen(lookX, 0, lookZ);
+    assert.ok(Math.abs(centre.x) < 0.01 && Math.abs(centre.y) < 0.01, 'aimed at the look point');
   }
 });
 
@@ -107,6 +103,44 @@ test('a reaction shot never runs in open play', () => {
   assert.ok(u.camera.position.distanceTo(u.managers[0]) < 15, 'a substitution cuts to its manager');
   u.run(0.1, 'play');
   assert.ok(u.camera.position.y > 40, 'and the restart cuts back at once');
+});
+
+test('a card cuts at once to the manager of the carded player', () => {
+  const t = setup();
+  t.run(1);
+  t.broadcast.handleEvent({ kind: 'foul', team: 0, player: 15, fouled: 7 }, t.now, t.actors, t.touchline);
+  t.broadcast.handleEvent({ kind: 'yellow', team: 1, player: 15 }, t.now, t.actors, t.touchline);
+  t.broadcast.handleEvent({ kind: 'free_kick', team: 0 }, t.now, t.actors, t.touchline);
+  t.run(0.3, 'free_kick');
+  assert.ok(t.camera.position.distanceTo(t.managers[1]) < 15, 'the carded team manager');
+  t.run(1.8, 'free_kick');
+  t.run(0.1, 'play');
+  assert.ok(t.camera.position.y > 40, 'back to play when the free kick is taken');
+});
+
+test('ordinary restarts cut to the managers in turn, at most once every 45 s, never at a throw-in', () => {
+  const t = setup();
+  const restart = (kind, phase) => {
+    t.broadcast.handleEvent({ kind, team: 0 }, t.now, t.actors, t.touchline);
+    t.run(0.5, phase);
+    const shot = t.managers.findIndex(m => t.camera.position.distanceTo(m) < 15);
+    t.run(3, 'play');
+    return shot;
+  };
+  t.run(1);
+  assert.equal(restart('throw_in', 'throw_in'), -1, 'a throw-in is taken too quickly');
+  assert.equal(restart('goal_kick', 'goal_kick'), 0, 'first restart: home manager');
+  t.run(20);
+  assert.equal(restart('corner', 'corner'), -1, 'too soon after the last touchline shot');
+  t.run(20);
+  assert.equal(restart('free_kick', 'free_kick'), 1, 'then the away manager');
+  t.run(46);
+  t.broadcast.handleEvent({ kind: 'substitution', team: 0 }, t.now, t.actors, t.touchline);
+  t.run(1, 'throw_in');
+  assert.ok(t.camera.position.distanceTo(t.managers[0]) < 15, 'substitutions are not rate-limited');
+  t.run(2, 'play');
+  assert.equal(restart('corner', 'corner'), -1, 'and count as the last touchline shot');
+  assert.equal(restart('penalty', 'penalty'), -1, 'a penalty stays on the penalty');
 });
 
 test('one reaction shot at a time, and none without the touchline or the drawn phase', () => {

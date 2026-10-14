@@ -184,6 +184,25 @@ test('a substitution request rolls the arms, and the substitution made is applau
   }
 });
 
+test('a card against its player has the manager protest, arms spread', () => {
+  const t = setup();
+  try {
+    t.ball.set(0, 0.3, 0);
+    t.run(1);
+    t.touchline.handleEvent({ type: 'event', kind: 'yellow', t: 20, team: 0, player: 4 }, t.now);
+    t.run(0.8);
+    const [right, left] = t.hands('manager-0');
+    assert.ok(right.distanceTo(left) > 1.2, `arms spread: ${right.distanceTo(left)}`);
+    assert.ok(right.y > 1.0 && right.y < 1.8 && left.y > 1.0 && left.y < 1.8, 'at chest height');
+    const [otherRight, otherLeft] = t.hands('manager-1');
+    assert.ok(otherRight.distanceTo(otherLeft) < 0.6, 'the other manager keeps its arms folded');
+    t.run(2.5);
+    assert.ok(t.hands('manager-0').every(hand => hand.y < 1.4));
+  } finally {
+    t.touchline.dispose();
+  }
+});
+
 test('a goal sets the scoring staff celebrating and the other manager holding its head', () => {
   const t = setup();
   try {

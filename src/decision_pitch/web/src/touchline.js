@@ -8,7 +8,7 @@ const AREA = { offset: 8, half: 4.5, depth: 2.5 }; // metres from halfway and to
 const WALK = 1.5; // m/s
 // Seconds each gesture lasts. A goal reaction outlasts the camera's close-up of the
 // scorer, so the reaction shot that follows it still finds the managers reacting.
-const GESTURES = { instruct: 2.8, change: 2.6, clap: 2.6, celebrate: 6.5, despair: 5.5 };
+const GESTURES = { instruct: 2.8, change: 2.6, clap: 2.6, protest: 2.6, celebrate: 6.5, despair: 5.5 };
 const REACTIONS = new Set(['celebrate', 'despair']); // a goal outranks other gestures
 const ASSISTANT_REACTION = 3.5; // s: assistants react more briefly than the manager
 
@@ -201,6 +201,14 @@ export function createTouchline(scene, teams, pitch) {
         p.ex[i] = -1.57;
         p.ey[i] = -s * (0.6 + 0.8 * Math.max(0, Math.sin(age * 11)));
         p.ez[i] = 0;
+      } else if (kind === 'protest') {
+        // Arms spread, palms up: a card against its own player.
+        p.sx[i] = -0.5;
+        p.sz[i] = s * (0.85 + Math.sin(age * 6) * 0.15);
+        p.ex[i] = 0;
+        p.ey[i] = 0;
+        p.ez[i] = s * 0.55;
+        p.lean = 0.06;
       } else if (kind === 'celebrate' && age >= 3.5) {
         // Then fists clenched and pumped.
         const pump = Math.max(0, Math.sin(age * 8));
@@ -313,6 +321,8 @@ export function createTouchline(scene, teams, pitch) {
     handleEvent(event, now) {
       if (event.kind === 'substitution' && managers[event.team]) {
         gesture(managers[event.team], 'clap', now, event.on ?? null);
+      } else if ((event.kind === 'yellow' || event.kind === 'red') && managers[event.team]) {
+        gesture(managers[event.team], 'protest', now);
       } else if (event.kind === 'goal') {
         for (const f of figures) gesture(f, f.team === event.team ? 'celebrate' : 'despair', now);
       }
