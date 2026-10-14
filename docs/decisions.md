@@ -435,8 +435,8 @@ substitution) and when the `substitution` event is made, celebrates its team's
 goals and holds its head at the other team's. The `hello` message lists each
 team's assistant models; one assistant figure stands behind the manager per
 assistant model, and none when there are none. There is no crowd. The wide
-shot stays on the match, at the same size as before, so the managers are in it
-when play comes near their touchline. While the ball is dead the camera cuts
+shot stays on the match, so the managers are in it when play comes near their
+touchline. (It kept its size here; the human figures below tightened it.) While the ball is dead the camera cuts
 briefly to a manager: after the scorer's close-up, at a card, at a
 substitution, at half time and full time, when a manager gives advice
 during a stoppage and, at most about once in 25 seconds, at a goal kick,
@@ -599,7 +599,17 @@ ball; a `save` or `catch` then times the dive's full stretch to the touch, and
 a catch with no dive plays `keeper_catch` or `keeper_catch_high` by the ball's
 height. Goals play `celebrate`; managers play their gesture clips on the upper
 body over their walk. The ball keeps its contrast and its shadow to stay
-readable on the broadcast camera at its real size. The engine is unchanged: headers stay unplayed until
+readable on the broadcast camera at its real size.
+
+**A closer wide shot.** The broadcast wide shot comes about a third closer to
+play, showing roughly a third to half of the pitch like a real main camera,
+instead of standing about 83 m from it. From the old distance a 1280×720
+recording drew a player about 15 pixels tall and the real-size ball as a dot of
+two or three pixels, so the figures and the ball this section adds could not
+be read. The frame still follows the ball and leads a little the way play is
+going, so a long pass's receiver comes into view early, and it pans no faster
+relative to the frame than before; the cuts to the scorer and the managers are
+unchanged. The engine is unchanged: headers stay unplayed until
 the engine has them, and the `header` clip is ready for that.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
