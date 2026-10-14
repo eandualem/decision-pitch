@@ -1456,7 +1456,7 @@ def cut_clip(solver, turn=60.0, speed=6.0):
     pushes off, the left foot stepping out on the new line. `contact` is the plant. The
     feet stay planted for a root that comes in at `speed`, turns its travel `turn`
     degrees over the plant and leaves at three quarters of the pace."""
-    end, contact = 0.75, 0.25
+    end, contact = 22 / FPS, 0.25
 
     speeds = [(0.0, speed), (contact, speed), (contact + 0.16, 0.75 * speed), (end, 0.75 * speed)]
     pace = Linear(speeds)
