@@ -338,7 +338,7 @@ class Match:
     def _may_kick(self, p: Player) -> bool:
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
             return False
-        if self.phase == "play" or self.phase == "penalty":
+        if self.phase == "play":
             return True
         if self.since_restart >= (KICKOFF_WAIT if self.phase == "kickoff" else RETREAT_WAIT):
             self._keep_distance(everyone=True)  # anyone still out of place is placed
@@ -561,9 +561,6 @@ class Match:
     def _keep_distance(self, everyone: bool = False) -> None:
         """Put right the players only just out of place for the restart, or `everyone`;
         the others are running back (see _move)."""
-        if self.phase == "penalty":
-            self._line_up_for_penalty()
-            return
         for p in self.players:
             if everyone or self._out_of_place(p) <= OUT_OF_PLACE:
                 p.x, p.y = self._allowed_spot(p)
@@ -572,6 +569,8 @@ class Match:
         """The nearest spot to `p` where the laws let it stand for this restart, `margin` m
         clear of the line: in its own half at a kick-off, and as far from the ball as the
         restart requires if it is an opponent of the restarting team."""
+        if self.phase == "penalty":
+            return self._penalty_spot(p, margin)
         x, y = p.x, p.y
         if self.phase == "kickoff" and x * -self.attack(p.team) < 0:
             x = -self.attack(p.team) * margin  # back over halfway
@@ -580,9 +579,8 @@ class Match:
         return x, y
 
     def _out_of_place(self, p: Player) -> float:
-        """How far `p` is from where the laws let it stand for this restart; 0 in play, and
-        at a penalty, whose line-up is placed."""
-        if self.phase not in RESTARTS or self.phase == "penalty":
+        """How far `p` is from where the laws let it stand for this restart; 0 in play."""
+        if self.phase not in RESTARTS:
             return 0.0
         x, y = self._allowed_spot(p)
         return math.hypot(x - p.x, y - p.y)
@@ -597,27 +595,23 @@ class Match:
             dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
         return self.ball.x + dx / dist * distance, self.ball.y + dy / dist * distance
 
-    def _keep_away(self, p: Player, distance: float) -> None:
-        p.x, p.y = self._away(p, p.x, p.y, distance)
-
-    def _line_up_for_penalty(self) -> None:
-        """The defending goalkeeper on its goal line; everyone else but the taker outside the
-        penalty area and arc, and behind the penalty mark."""
+    def _penalty_spot(self, p: Player, margin: float) -> tuple[float, float]:
+        """Where `p` may stand for a penalty: the defending goalkeeper on its goal line between
+        the posts; everyone else but the taker outside the penalty area and arc, and behind
+        the penalty mark."""
+        if p.id == self.taker:
+            return p.x, p.y
         goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
         out = -math.copysign(1.0, goal)  # from the goal line towards halfway
-        for p in self.players:
-            if p.id == self.taker:
-                continue
-            if p.team != self.restart_team and p.position == "GK":
-                p.x = goal + out * PLAYER_RADIUS
-                p.y = max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, p.y))
-                p.vx = p.vy = 0.0
-                continue
-            if abs(p.x - goal) <= pitch.PENALTY_DEPTH and abs(p.y) <= pitch.PENALTY_HALF_WIDTH:
-                p.x = goal + out * (pitch.PENALTY_DEPTH + 1.0)
-            if (p.x - self.ball.x) * out < 0:
-                p.x = self.ball.x  # level with the mark at the nearest
-            self._keep_away(p, RESTART_DISTANCE["penalty"])
+        if p.team != self.restart_team and p.position == "GK":
+            return goal + out * PLAYER_RADIUS, max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, p.y))
+        x, y = p.x, p.y
+        if abs(x - goal) <= pitch.PENALTY_DEPTH and abs(y) <= pitch.PENALTY_HALF_WIDTH:
+            x = goal + out * (pitch.PENALTY_DEPTH + 0.01)  # just outside, so a step in is put right
+        if (x - self.ball.x) * out < 0:
+            x = self.ball.x  # level with the mark at the nearest
+        x += out * margin
+        return self._away(p, x, y, RESTART_DISTANCE["penalty"] + margin)
 
     def _end_half(self) -> None:
         self.owner = None

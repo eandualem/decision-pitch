@@ -54,7 +54,8 @@ a test or from the command line without a browser.
   from a seeded random generator, so a match can be replayed exactly.
 - **Restarts.** Only the restarting team can play the ball, and opponents
   keep the required distance from it until it is played. A player out of
-  place (inside that distance, or at a kick-off in the wrong half) runs back
+  place (inside that distance, at a kick-off in the wrong half, or at a
+  penalty inside the area or ahead of the mark) runs back
   at full speed whatever its command, as the laws ask, and the restart waits
   for it; one only a few centimetres out, as when it walks up to the line,
   is put right at once. Anyone still out of place after 10 s at a kick-off,

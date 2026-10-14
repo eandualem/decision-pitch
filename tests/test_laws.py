@@ -164,7 +164,7 @@ def test_a_foul_in_the_penalty_area_is_a_penalty_taken_by_the_fouled_player():
     penalty = m.drain_events()[-1]
     assert (penalty["kind"], penalty["team"], penalty["player"]) == ("penalty", 0, 10)
     assert (m.ball.x, m.ball.y) == (pitch.HALF_LENGTH - pitch.PENALTY_MARK, 0.0)
-    run(m, 1.0)
+    run(m, 10.0)  # they run there, the goalkeeper from the far touchline
     for p in m.players:
         if p.id == 10:
             continue
@@ -185,7 +185,10 @@ def test_players_beside_the_penalty_area_wait_behind_the_mark():
     beside = m.player(9)
     beside.x, beside.y = 50.0, 25.0
     m.command(9, Hold())
-    m.step()
+    for _ in range(round(4.0 / STEP)):
+        x = beside.x
+        m.step()
+        assert x - beside.x <= TOP_SPEED * STEP + OUT_OF_PLACE  # it runs, not jumps
     assert beside.x <= m.ball.x
 
 
@@ -197,7 +200,7 @@ def test_a_half_waits_for_a_penalty_awarded_at_its_end():
     m.command(10, KickTo(pitch.HALF_LENGTH + 2, 2.0, 24.0))
     m.step()
     assert m.phase == "penalty"
-    run(m, 5.0)
+    run(m, RETREAT_WAIT + 3.0)  # the line-up, then the kick
     events = kinds(m.drain_events())
     assert events[-1] == "half_time" and events[-2] in ("goal", "goal_kick", "corner")
 
