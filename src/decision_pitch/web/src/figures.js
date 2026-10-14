@@ -16,6 +16,8 @@ const SHUFFLE = [0.15, 0.35];
 const STILL = 0.4; // m/s below which a one-shot plays with its whole body
 const SET_BLEND = 0.18; // s over which a set (dribble, jockey, shield) comes in or goes
 export const TOUCH_PHASE = 0.4; // where a loop without a `touch` meets a carried ball
+// How much faster or slower than its own pace a stride may go to meet the ball on time.
+const STEER = [0.75, 1.3];
 const MOST = 0.999; // the largest share of a bone a one-shot takes from the loops
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -1226,7 +1228,8 @@ export function createFigures(template, { footLock = true } = {}) {
       // Advances the loops by `dt` s for a figure moving over the ground at `speed` m/s,
       // travelling `travel` radians from the way it faces (anticlockwise), and poses it.
       // `sets` (optional) gives each loop set by name ({ dribble, jockey, shield }) the
-      // share, 0 to 1, it should have: each comes in and goes over a fraction of a second.
+      // share, 0 to 1, it should have: each comes in and goes over a fraction of a second;
+      // and `touchIn`, when above 0, the seconds until the boot is to meet the ball.
       update(dt, speed, travel, sets = null) {
         lastSpeed = speed;
         lastTravel = travel;
@@ -1258,6 +1261,14 @@ export function createFigures(template, { footLock = true } = {}) {
         switching.dt = step;
         rate = blendLoops(steps, speed, travel, scale, weights, setShares, style.stride, switching);
         hips = steps.yaw;
+        // To meet the ball in `touchIn` s, the stride comes to its touch then, at the nearest
+        // pace to its own that does it.
+        const touchIn = sets?.touchIn ?? 0;
+        if (touchIn > 0 && rate > 0) {
+          const ahead = fract(person.touch() - phase);
+          const cycles = ahead + Math.max(0, Math.round(rate * touchIn - ahead));
+          rate = clamp(cycles / touchIn, rate * STEER[0], rate * STEER[1]);
+        }
         phase = fract(phase + rate * step);
         idle += step; // the clock of the loops that do not travel
         for (let i = 0; i < loops.length; i++) {

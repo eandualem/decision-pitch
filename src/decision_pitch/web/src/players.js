@@ -61,11 +61,28 @@ const TURN = [[-0.14, 0], [-0.04, 1], [0.12, 1], [0.45, 0]];
 // A touch interrupts a player's pose only once that pose has played this long, or if it
 // matters more: two players trading the ball in a duel do not twitch with every exchange.
 const REPOSE = 0.25; // s
-const WEIGHT = { control: 0, knock: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
-const CLIPS = { control: 'control', knock: 'control', deflect: 'control', tackle: 'tackle', throw: 'throw_in' };
+const WEIGHT = { control: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
+const CLIPS = { control: 'control', deflect: 'control', throw: 'throw_in' };
 // Clips that move the whole body even at a run: the slide, the throw and the goalkeeper's.
 // The others keep the stride's support leg and hips over a run.
 const WHOLE = new Set(['tackle', 'throw_in', 'keeper_catch', 'keeper_catch_high']);
+// Which kick a kick plays. A model player's decision says, for a moment (DECIDED); otherwise
+// the ball's flight does: lifted from a wide attacking place in towards the middle, a cross;
+// lifted elsewhere, a lofted pass; along the ground, the shot when it leaves fast.
+const DECIDED_KICKS = { shoot: 'shot', cross: 'cross', through_ball: 'pass_lofted', clear: 'pass_lofted' };
+const LOFTED = 0.3; // rad above the ground a lifted kick leaves at, at least
+const WIDE = 18; // m from the middle of the pitch a cross comes from, at least
+const DEEP = 22; // m from halfway
+const GRAVITY = 9.81;
+// A tackle at a run is the slide; one made more slowly, the standing block.
+const SLIDE = 4.5; // m/s
+// A clip a figure lacks plays the nearest it has.
+const INSTEAD = { cross: 'pass_lofted', pass_lofted: 'pass', shot: 'pass', tackle_standing: 'tackle' };
+// A sprinter knocks the ball ahead (a `knock` touch) and catches it up (its `control`):
+// neither is a clip. Its stride is timed so its boot meets the ball at each, within STEER
+// of its own pace, and it keeps the look of a run with the ball while it chases (CHASE s).
+const CHASE = 4;
+const CATCH = 0.75; // m between a chaser and the ball it knocked when it plays it again (the engine's reach)
 
 // What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up:
 // a dive to that side if it is diving or the ball is beyond its reach, else a catch.
@@ -74,10 +91,20 @@ export function reach(lateral, height, diving) {
   return height > 1.5 ? 'keeper_catch_high' : 'keeper_catch';
 }
 
-// The clip a touch plays: `speed` is how fast a kick sent the ball, `lateral` and `height`
-// where a goalkeeper met it, and `diving` whether it was diving.
-export function touchClip(kind, { speed = 0, lateral = 0, height = 0, diving = false } = {}) {
-  if (kind === 'kick') return speed > SHOT ? 'shot' : 'pass';
+// The clip a touch plays: `speed` is how fast a kick sent the ball, `loft` the angle it
+// left the ground at, `crossing` whether it went from a wide attacking place in towards the
+// middle and `decision` the kicker's latest decision, if a model's; `running` how fast a
+// tackler ran; `lateral` and `height` where a goalkeeper met the ball, and `diving` whether
+// it was diving. A knock, the sprinter's touch of its stride, plays none.
+export function touchClip(kind, {
+  speed = 0, loft = 0, crossing = false, decision = null, running = 0, lateral = 0, height = 0, diving = false,
+} = {}) {
+  if (kind === 'kick') {
+    if (decision && DECIDED_KICKS[decision]) return DECIDED_KICKS[decision];
+    if (loft >= LOFTED) return crossing ? 'cross' : 'pass_lofted';
+    return speed > SHOT ? 'shot' : 'pass';
+  }
+  if (kind === 'tackle') return running >= SLIDE ? 'tackle' : 'tackle_standing';
   if (kind === 'save' || kind === 'catch') return reach(lateral, height, diving);
   return CLIPS[kind] ?? null;
 }
@@ -133,7 +160,9 @@ export function createPlayers(scene, teams, figure, options = {}) {
         diving: false, armed: false,
         celebrateAt: -Infinity,
         // The loop sets the figure shows (figures.js) and the model's latest decision.
-        sets: { dribble: 0, jockey: 0, shield: 0 }, decision: null, decidedAt: -Infinity,
+        sets: { dribble: 0, jockey: 0, shield: 0, touchIn: 0 }, decision: null, decidedAt: -Infinity,
+        strideAt: -Infinity, // when its boot is to meet the ball it knocked on or catches up
+        chasing: false, // the ball it knocked ahead
       });
     });
   });
@@ -164,6 +193,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
   const turn = new THREE.Quaternion();
   let spinRate = 0; // rad/s
   const seen = new Map(); // touches already posed, by time and player, with their time
+  let lastTouch = null; // the latest touch seen
   let taker = null; // the player picking the ball up for a throw-in
   let throwTeam = null; // the team the last throw-in was given to
   let thrower = null; // the player with a throw-in under way
@@ -175,18 +205,26 @@ export function createPlayers(scene, teams, figure, options = {}) {
 
   // Start the pose for each touch the engine reports, timed to its moment of contact. A
   // touch in a snapshot still ahead of the render time gets its wind-up.
-  function notice(snapshot, time) {
+  function notice(snapshot, time, now) {
     for (const touch of snapshot?.ball?.touches ?? NONE) {
       // The engine records at most one touch per player per step.
       const key = Math.round(touch.t * 1000) * 4096 + touch.player;
       if (seen.has(key)) continue;
       seen.set(key, touch.t);
       if (seen.size > 32) for (const [old, t] of seen) if (t < time - 2) seen.delete(old);
-      startPose(touch, snapshot, time);
+      const before = lastTouch;
+      lastTouch = touch;
+      // A sprinter's knock, and its catching up with it: the touch of its stride.
+      const actor = actors.get(touch.player);
+      if (actor && (touch.kind === 'knock' || (touch.kind === 'control' && before?.kind === 'knock' && before.player === touch.player))) {
+        actor.strideAt = touch.t - STEP;
+        continue;
+      }
+      startPose(touch, snapshot, time, now);
     }
   }
 
-  function startPose(touch, snapshot, time) {
+  function startPose(touch, snapshot, time, now) {
     const at = touch.t - STEP;
     const actor = actors.get(touch.player);
     if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT)) return;
@@ -202,16 +240,26 @@ export function createPlayers(scene, teams, figure, options = {}) {
     }
     const playing = actor.pose;
     if (playing && (playing.at > at || (at - playing.at < REPOSE && WEIGHT[touch.kind] <= WEIGHT[playing.kind]))) return;
-    const pose = { kind: touch.kind, touch, at, from: time - at, aim: null, aimed: 0, shot: 0, clip: touchClip(touch.kind), cut: Infinity };
+    const pose = {
+      kind: touch.kind, touch, at, from: time - at, aim: null, aimed: 0, speed: 0, loft: 0, crossing: false,
+      decision: actor.decision !== null && now - actor.decidedAt < DECIDED ? actor.decision : null,
+      clip: null, was: null, ease: 1, cut: Infinity,
+    };
     if (touch.kind === 'kick' || touch.kind === 'throw') {
       aim(pose, snapshot); // the first snapshot to report the touch, if it can tell
       pose.aimed = pose.from;
-      pose.shot = touchClip(touch.kind, pose) === 'shot' ? 1 : 0;
     }
-    const clip = actor.person.clip(touch.kind === 'kick' ? 'pass' : pose.clip);
+    pose.clip = playable(actor, touchClip(touch.kind, { ...pose, running: actor.speed }));
+    const clip = pose.clip && actor.person.clip(pose.clip);
     if (!clip) return;
     pose.end = clip.duration - clip.contact;
     replace(actor, pose, time);
+  }
+
+  // `name`, or the nearest clip to it the figure has (INSTEAD).
+  function playable(actor, name) {
+    while (name && !actor.person.clip(name)) name = INSTEAD[name] ?? null;
+    return name;
   }
 
   // A pose cut short by the next fades out under it rather than vanishing.
@@ -308,6 +356,10 @@ export function createPlayers(scene, teams, figure, options = {}) {
     if (!reported || distance <= 0.15 || distance > FASTEST * elapsed) return false;
     pose.aim = Math.atan2(dy, dx);
     pose.speed = distance / elapsed;
+    // The angle it left the ground at, from how high it has risen against gravity.
+    const rise = snapshot.ball.z - touch.z;
+    pose.loft = rise > 0.02 ? Math.atan2(rise / elapsed + GRAVITY * elapsed / 2, pose.speed) : 0;
+    pose.crossing = Math.abs(touch.y) > WIDE && Math.abs(touch.x) > DEEP && Math.sin(pose.aim) * Math.sign(touch.y) < -0.3;
     return true;
   }
 
@@ -318,19 +370,28 @@ export function createPlayers(scene, teams, figure, options = {}) {
     const w = envelope(u, pose.from, pose.held ? Infinity : pose.end, 0.06, 0.2) * clamp(1 - (time - pose.cut) / FADE, 0, 1);
     if (!(w > 0)) return;
     if (pose === actor.pose && (pose.kind === 'kick' || pose.kind === 'throw')) {
-      if (pose.aim === null && (aim(pose, after) || aim(pose, latest))) pose.aimed = u;
-      // A kick learnt late to be a shot eases from the pass into it.
-      if (pose.aim !== null) pose.shot = mix(pose.shot, touchClip(pose.kind, pose) === 'shot' ? 1 : 0, 1 - Math.exp(-step / 0.05));
+      if (pose.aim === null && (aim(pose, after) || aim(pose, latest))) {
+        pose.aimed = u;
+        // A kick learnt late to be another eases from the one it began as into it.
+        const kick = playable(actor, touchClip(pose.kind, pose));
+        if (pose.kind === 'kick' && kick && kick !== pose.clip) {
+          pose.was = pose.clip;
+          pose.clip = kick;
+          pose.ease = 0;
+          const clip = actor.person.clip(kick);
+          pose.end = Math.max(pose.end, clip.duration - clip.contact);
+        }
+      }
+      pose.ease = mix(pose.ease, 1, 1 - Math.exp(-step / 0.05));
       // A turn starts from where the body is, even when the aim is known only late.
       const turning = track(TURN, u) * Math.min(w, clamp((u - pose.aimed) / 0.06, 0, 1));
       if (pose.aim !== null) actor.facing = angle(actor.facing, pose.aim, turning);
     }
     const { person } = actor;
     if (pose.kind === 'kick') {
-      const pass = person.clip('pass');
-      const shot = person.clip('shot');
-      if (pose.shot < 1) person.act('pass', contactTime(u, pose.from, pass.contact), w * (1 - pose.shot));
-      if (pose.shot > 0 && shot) person.act('shot', contactTime(u, pose.from, shot.contact), w * pose.shot);
+      const kick = person.clip(pose.clip);
+      if (pose.was && pose.ease < 1) person.act(pose.was, contactTime(u, pose.from, person.clip(pose.was).contact), w * (1 - pose.ease));
+      person.act(pose.clip, contactTime(u, pose.from, kick.contact), w * (pose.was ? pose.ease : 1));
     } else if (pose.held) {
       // A caught ball is held at the chest at the clip's end, over the steps once it is done.
       const clip = person.clip(pose.clip);
@@ -346,9 +407,12 @@ export function createPlayers(scene, teams, figure, options = {}) {
   // shielding it when slow with an opponent close behind, and jockeying the opponent who
   // has it, close, facing it and not closing in. Bots send no decisions, so this is all
   // read from the play; a model player's decision to shield adds to it.
-  function readSets(actor, player, carrier, players, now) {
+  function readSets(actor, player, carrier, players, now, time, loose) {
     const { sets } = actor;
     sets.dribble = sets.jockey = sets.shield = 0;
+    // Chasing the ball it knocked ahead, it runs as it does with the ball.
+    actor.chasing = loose && lastTouch?.kind === 'knock' && lastTouch.player === player.id && time - lastTouch.t < CHASE;
+    if (actor.chasing) sets.dribble = 1;
     if (!carrier) return;
     const cos = Math.cos(actor.facing);
     const sin = Math.sin(actor.facing);
@@ -398,8 +462,8 @@ export function createPlayers(scene, teams, figure, options = {}) {
     // The engine preserves its last velocities and commands at the interval/whistle.
     const stopped = after.phase === 'half_time' || after.phase === 'full_time';
     if (!stopped) {
-      notice(after, time);
-      if (latest !== after) notice(latest, time);
+      notice(after, time, now);
+      if (latest !== after) notice(latest, time, now);
     }
     for (const actor of actors.values()) actor.group.visible = false;
     // At a throw-in, whoever of the team it was given to comes to the ball picks it up;
@@ -507,7 +571,19 @@ export function createPlayers(scene, teams, figure, options = {}) {
       if (actor.speed > 1e-6) {
         actor.way = angle(actor.way, Math.atan2(actor.vy, actor.vx), 1 - Math.exp(-actor.speed * step / TURNING));
       }
-      readSets(actor, player, onBall, after.players, now);
+      readSets(actor, player, onBall, after.players, now, time, !stopped && !reset && after.phase === 'play' && after.ball.owner == null);
+      // When its boot is to meet the ball: a touch seen ahead, or for a sprinter chasing its
+      // knock, when it will catch the ball up, at the speeds they are going.
+      let touchIn = actor.strideAt > time ? actor.strideAt - time : 0;
+      if (!(touchIn > 0) && actor.chasing && span > 0) {
+        const c = Math.cos(actor.way);
+        const sn = Math.sin(actor.way);
+        const gap = (after.ball.x - player.x) * c + (after.ball.y - player.y) * sn - CATCH;
+        const rolling = ((after.ball.x - from.ball.x) * c + (after.ball.y - from.ball.y) * sn) / span;
+        const closing = actor.speed - rolling;
+        if (gap > 0 && closing > 0.5) touchIn = gap / closing;
+      }
+      actor.sets.touchIn = touchIn;
       person.object.rotation.y = actor.facing + Math.PI / 2;
       person.update(step, actor.speed, actor.way - actor.facing, actor.sets);
     }
@@ -678,6 +754,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
       actors.clear();
       previous.clear();
       seen.clear();
+      lastTouch = null;
     },
   };
 }

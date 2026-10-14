@@ -261,8 +261,16 @@ test('each touch plays its clip', () => {
   assert.equal(touchClip('kick'), 'pass', 'a kick whose speed is not known yet');
   assert.equal(touchClip('control'), 'control');
   assert.equal(touchClip('deflect'), 'control');
-  assert.equal(touchClip('knock'), 'control', 'a sprint knocks the ball on with a light touch');
-  assert.equal(touchClip('tackle'), 'tackle');
+  assert.equal(touchClip('knock'), null, 'a sprint\'s knock is the light touch of its stride, not a clip');
+  assert.equal(touchClip('tackle', { running: 6 }), 'tackle', 'at a run, the slide');
+  assert.equal(touchClip('tackle', { running: 2 }), 'tackle_standing', 'slower, the standing block');
+  assert.equal(touchClip('kick', { speed: 22, loft: 0.5 }), 'pass_lofted', 'a long ball in the air is no shot');
+  assert.equal(touchClip('kick', { speed: 14, loft: 0.5, crossing: true }), 'cross', 'lifted in from wide');
+  assert.equal(touchClip('kick', { speed: 25, loft: 0.06 }), 'shot');
+  assert.equal(touchClip('kick', { speed: 10, decision: 'shoot' }), 'shot', 'a model that decided to shoot shoots');
+  assert.equal(touchClip('kick', { speed: 10, decision: 'through_ball' }), 'pass_lofted');
+  assert.equal(touchClip('kick', { speed: 14, decision: 'cross' }), 'cross');
+  assert.equal(touchClip('kick', { speed: 12, decision: 'pass' }), 'pass');
   assert.equal(touchClip('throw'), 'throw_in');
   assert.equal(touchClip('save', { lateral: 1.2, height: 0.6 }), 'keeper_dive_L', 'beyond its reach to its left');
   assert.equal(touchClip('save', { lateral: -1.2, height: 0.6 }), 'keeper_dive_R');
@@ -679,6 +687,91 @@ test('a defender close to the player on the ball, facing it and not closing in, 
   // Facing away from the player on the ball, it does not jockey.
   play((t) => [[player(1, t, 0, { speed: 1 }), player(2, -10, 10), player(3, t + 3, 0.5, { heading: 0, speed: 1 }), player(4, 30, 30)], { x: t + 0.6, y: 0, owner: 1 }], 1, 3);
   assert.equal(actors.inspect(3).context.jockey, 0);
+  actors.dispose();
+});
+
+// Player 1 at (x, y) kicks the ball from 0.6 m ahead at `velocity` [vx, vy, vz] m/s, and
+// returns the clips it shows just after; `before` runs first (a decision, say).
+function kick(template, [x, y], velocity, before = () => {}) {
+  const { actors } = match(template);
+  before(actors);
+  const touch = { player: 1, kind: 'kick', t: 2 + 1 / 60, x: x + 0.6, y, z: 0.11 };
+  const elapsed = STEP; // from the touch's step to the next snapshot
+  const others = [player(2, -30, 0), player(3, 30, 30), player(4, 30, -30)];
+  const a = snap(2, [player(1, x, y), ...others], { x: x + 0.6, y, owner: 1 });
+  const flight = { x: x + 0.6 + velocity[0] * elapsed, y: y + velocity[1] * elapsed, z: 0.11 + velocity[2] * elapsed - 4.9 * elapsed * elapsed };
+  const b = snap(2 + STEP, [player(1, x, y), ...others], { ...flight, touches: [touch] });
+  actors.update(a, a, 1, 1 / 60, 1.95, b);
+  actors.update(a, b, 0.4, 1 / 60, 2.01, b);
+  const shown = actors.inspect(1).acts.filter(act => act.weight > 0).map(act => act.name.split(':')[0]);
+  actors.dispose();
+  return shown;
+}
+
+test('a kick plays the cross, the lofted pass or the shot by how the ball flies and what a model decided', () => {
+  const lifted = [10.5 * Math.cos(-2.4), 10.5 * Math.sin(-2.4), 5.8]; // about 0.5 rad up, in towards the middle
+  assert.deepEqual(kick(figureMore, [40, 25], lifted), ['cross'], 'lifted in from a wide attacking place');
+  assert.deepEqual(kick(figureMore, [0, 5], [10.5, -2, 5.8]), ['pass_lofted'], 'lifted from midfield');
+  assert.deepEqual(kick(figureMore, [0, 5], [24, 0, 0]), ['shot'], 'fast along the ground');
+  assert.deepEqual(kick(figureMore, [0, 5], [9, 0, 0]), ['pass'], 'slower along the ground');
+  const decided = (action) => (actors) => actors.handleDecision({ type: 'decision', player: 1, model: 'Laya', action, ms: 90 }, 1.9);
+  assert.deepEqual(kick(figureMore, [0, 5], [12, 0, 0], decided('shoot')), ['shot'], 'a model that decided to shoot shoots');
+  assert.deepEqual(kick(figureMore, [0, 5], [12, 0, 0], decided('through_ball')), ['pass_lofted'], 'and a through ball is the lofted pass');
+  assert.deepEqual(kick(figureMore, [0, 5], [12, 0, 0], (actors) => {
+    actors.handleDecision({ type: 'decision', player: 1, model: 'Laya', action: 'shoot', ms: 90 }, -5);
+  }), ['pass'], 'a decision long gone does not');
+  // A figure without the new kicks plays the pass.
+  assert.deepEqual(kick(figure, [40, 25], lifted), ['pass']);
+});
+
+test('a tackle at a run is the slide, a slower one the standing block', () => {
+  const tackle = (template, speed) => {
+    const { actors, play } = match(template);
+    const touch = { player: 3, kind: 'tackle', t: 2.2, x: 5.6, y: 0, z: 0.11 };
+    play((t) => [[
+      player(1, 5, 0), player(2, -30, 0), player(3, 5 - 0.7 - speed * (2.2 - t), 0, { speed }), player(4, 30, 30),
+    ], { x: 5.6, y: 0, owner: t < 2.2 ? 1 : 3, touches: t >= touch.t && t < touch.t + 0.1 ? [touch] : [] }], 1.2, 1);
+    const shown = actors.inspect(3).acts.filter(act => act.weight > 0).map(act => act.name);
+    actors.dispose();
+    return shown;
+  };
+  assert.deepEqual(tackle(figureMore, 6), ['tackle'], 'sliding in, the whole body');
+  const standing = tackle(figureMore, 1.5);
+  assert.ok(standing.length && standing.every(name => name.split(':')[0] === 'tackle_standing'), `the standing block: ${standing}`);
+  assert.ok(tackle(figure, 1.5).every(name => name.startsWith('tackle')), 'a figure without the block slides');
+});
+
+test('a sprinter knocking the ball on meets it with its stride, not a clip, and keeps its run with the ball', () => {
+  const { actors } = match();
+  // Knocked at 11 m/s, slowing at 4 m/s2, from 0.6 m ahead: the sprinter at 7.5 m/s is
+  // within the engine's reach of it (0.75 m) again, and knocks it on, after u s.
+  const u = (3.5 + Math.sqrt(3.5 * 3.5 - 8 * 0.15)) / 4;
+  const knocks = [2, 2 + u];
+  const ballAt = (t) => {
+    if (t < knocks[0]) return { x: 7.5 * t + 0.6, owner: 1 };
+    const k = t < knocks[1] ? 0 : 1;
+    const from = k ? 7.5 * knocks[1] + 0.75 : 7.5 * knocks[0] + 0.6;
+    const u = t - knocks[k];
+    return { x: from + 11 * u - 2 * u * u, owner: null };
+  };
+  const at = (t) => {
+    const touches = knocks.filter(k => t >= k && t < k + 0.1).map(k => ({ player: 1, kind: 'knock', t: k, x: ballAt(k - 1 / 60).x, y: 0, z: 0.11 }));
+    return snap(t, [player(1, 7.5 * t, 0, { speed: 7.5 }), player(2, 0, 20), player(3, 30, 25), player(4, -30, -20)], { ...ballAt(t), y: 0, touches });
+  };
+  let met = null;
+  for (let t = 1; t < 4.2; t += STEP / 2) {
+    const k = Math.floor((t - 1) / STEP + 1e-9);
+    const t0 = 1 + k * STEP;
+    actors.update(at(t0), at(t0 + STEP), (t - t0) / STEP, STEP / 2, t, at(t0 + 4 * STEP));
+    const state = actors.inspect(1);
+    assert.deepEqual(state.acts, [], `no clip at ${t.toFixed(2)} s`);
+    if (t > 2.3 && t < 3.6) assert.equal(state.context.dribble, 1, 'chasing its knock, it runs as with the ball');
+    // Where its stride is as its boot meets the ball the second time.
+    if (Math.abs(t - (knocks[1] - 1 / 60)) < STEP / 4 + 1e-9) met = state.phase;
+  }
+  assert.ok(met !== null);
+  const off = Math.abs(((met - 0.4) % 1 + 1.5) % 1 - 0.5);
+  assert.ok(off < 0.06, `the stride's touch lands on the knock: ${off.toFixed(3)} of a stride off`);
   actors.dispose();
 });
 
