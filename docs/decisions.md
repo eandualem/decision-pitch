@@ -455,8 +455,11 @@ real time, as a loaded laptop with a local model may, is followed without
 held frames. It never interpolates across a change of period or a clock that
 goes back. It does blend play into a restart and a restart into play, so play
 does not hitch as it stops: a restart puts players right by at most 0.2 m, and
-a player who jumps more than 8 m, or a ball placed more than 10 m away, is drawn
-there at once, never swept across the pitch. It holds the last state when the
+a player who jumps more than 8 m, or a ball placed more than 10 m away, stays
+put until the drawn match reaches the snapshot that places it and is then drawn
+there at once, never swept across the pitch; the score bar likewise shows the
+snapshot the drawn match has reached, so a goal's ball leaves the goalmouth and
+its score changes at the goal's moment. It holds the last state when the
 buffer runs dry and drops the backlog after a stall; an event left behind by a
 stall only updates the records, the overlay and which team takes the next
 throw-in. Events carry `t` and are released on the same

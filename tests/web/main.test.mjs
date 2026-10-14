@@ -102,7 +102,7 @@ test('draws snapshots a fixed delay behind, blending into a restart', () => {
   assert.equal(update[2].t, 1.1);
   assert.ok(Math.abs(update[3] - 0.5) < 1e-9);
   assert.equal(update[6].t, 1.1, 'the newest snapshot is passed on for wind-ups');
-  assert.equal(named(app.calls, 'moments.snapshot').at(-1)[1].t, 1.1, 'the score bar shows the drawn snapshot');
+  assert.equal(named(app.calls, 'moments.snapshot').at(-1)[1].t, 1, 'the score bar shows the snapshot the drawn match has reached');
   app.wait(50);
   app.send(snapshot(1.2, 'kickoff'));
   app.tick(50); // 1.25 s draws 1.15 s: between a play and a kick-off snapshot

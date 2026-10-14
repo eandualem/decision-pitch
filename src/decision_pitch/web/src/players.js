@@ -381,8 +381,10 @@ export function createPlayers(scene, teams, figure) {
       const actor = actors.get(player.id);
       if (!actor) continue;
       const old = previous.get(player.id) || player;
+      // One placed rather than moved stays put until the drawn match reaches the snapshot
+      // that places it, so a restart's placing is never drawn before its moment.
       const teleport = Math.hypot(player.x - old.x, player.y - old.y) > 8;
-      const k = teleport ? 1 : blend;
+      const k = teleport ? 0 : blend;
       const { group, person } = actor;
       group.visible = true;
       group.position.set(mix(old.x, player.x, k), 0, -mix(old.y, player.y, k));
@@ -467,7 +469,7 @@ export function createPlayers(scene, teams, figure) {
     const ballTeleport = Math.hypot(newBall.x - oldBall.x, newBall.y - oldBall.y) > 10;
     let start = oldBall;
     let end = newBall;
-    let f = ballTeleport ? 1 : blend;
+    let f = ballTeleport ? 0 : blend; // a placed ball too: a goal's leaves the goalmouth at the goal
     if (!reset && !ballTeleport) {
       let startT = from.t;
       for (const touch of newBall.touches ?? NONE) {

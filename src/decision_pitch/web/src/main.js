@@ -170,8 +170,9 @@ function draw(frameTime) {
   lastFrame = now;
   const frame = actors && timeline.sample(now);
   if (frame) {
-    if (frame.after !== shown) {
-      shown = frame.after;
+    // The snapshot the drawn match has reached: a goal's new score waits for its moment.
+    if (frame.before !== shown) {
+      shown = frame.before;
       moments.setSnapshot(shown);
       overlay.setSnapshot(shown);
     }

@@ -800,6 +800,21 @@ test('a throw-in left behind by a stall still sets the throwing team; a late goa
   actors.dispose();
 });
 
+test('a goal between snapshots: the ball and a placed player stay put until the drawn match reaches the kick-off', () => {
+  const ui = setup();
+  const before = snap(3, [player(2, 50, 1), player(1, 40, 0)], { x: 51.5, y: 0.5 });
+  const after = snap(3 + STEP, [player(2, 50.2, 1), player(1, -20, 0)], { x: 0, y: 0 }, 'kickoff');
+  ui.actors.update(before, after, 0.5, 1 / 60, 3);
+  assert.ok(ui.actors.ballPosition.x > 51, `the ball is still at the goalmouth: ${ui.actors.ballPosition.x}`);
+  assert.ok(Math.abs(ui.actors.getPlayerPosition(1).x - 40) < 1e-9, 'the placed player has not jumped yet');
+  assert.ok(Math.abs(ui.actors.getPlayerPosition(2).x - 50.1) < 1e-9, 'the others move on');
+  const next = snap(3 + 2 * STEP, [player(2, 50.4, 1), player(1, -20, 0)], { x: 0, y: 0 }, 'kickoff');
+  ui.actors.update(after, next, 0, 1 / 60, 3 + STEP);
+  assert.ok(Math.abs(ui.actors.ballPosition.x) < 0.5, 'on the spot once the kick-off is reached');
+  assert.ok(Math.abs(ui.actors.getPlayerPosition(1).x + 20) < 1e-9);
+  ui.actors.dispose();
+});
+
 test('the throw-in is not picked up while play is still being drawn to a stop', () => {
   const scene = new THREE.Scene();
   const actors = createPlayers(scene, [
