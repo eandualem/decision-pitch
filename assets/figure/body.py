@@ -177,6 +177,7 @@ def neck_core():
 
 EYE = np.array([0.0330, -0.0712, 1.684])  # left eyeball centre
 EYE_RADIUS = 0.0124
+MOUTH = np.array([0.0, -0.0998, 1.6047])  # the middle of the line between the lips
 CRANIUM = Ellipsoid((0.0, 0.012, 1.708), (0.080, 0.096, 0.092))
 
 
@@ -191,7 +192,7 @@ def head_core():
     buccal = Ellipsoid((0.044, -0.050, 1.628), (0.021, 0.026, 0.026))
     head = Union([CRANIUM, face, jaw, chin, muzzle] + _both([jaw_line, cheek, brow, buccal]), k=0.028)
     # Sockets for the eyes, then lids around them.
-    socket = Ellipsoid(EYE + (0.0, -0.017, 0.002), (0.0200, 0.0160, 0.0140))
+    socket = Ellipsoid(EYE + (0.0, -0.017, 0.002), (0.0172, 0.0160, 0.0140))
     head = Cut(head, Union(_both([socket])), k=0.006)
     lid = Shell(Ellipsoid(EYE, (EYE_RADIUS,) * 3), 0.0016)
     box = (lid.lo - 0.01, lid.hi + 0.01)
@@ -207,11 +208,14 @@ def head_core():
     head = Union([head, nose], k=0.006)
     nostril = Ellipsoid((0.0068, -0.1020, 1.6275), (0.0040, 0.0050, 0.0030))
     head = Cut(head, Union(_both([nostril])), k=0.002)
-    # Mouth: lips and the line between them.
-    upper_lip = Ellipsoid((0.0, -0.0910, 1.6110), (0.0235, 0.012, 0.0075))
-    lower_lip = Ellipsoid((0.0, -0.0885, 1.5975), (0.0215, 0.012, 0.0085))
-    head = Union([head, upper_lip, lower_lip], k=0.005)
-    head = Cut(head, Ellipsoid((0.0, -0.0995, 1.6047), (0.0225, 0.012, 0.0013)), k=0.0015)
+    # Mouth: an upper lip in two halves that meet in a bow, a fuller lower lip, the line
+    # between them and the corners set in.
+    upper_half = Ellipsoid((0.0085, -0.0915, 1.6115), (0.0165, 0.0115, 0.0070), S.rotation(ry=-0.18))
+    lower_lip = Ellipsoid((0.0, -0.0895, 1.5975), (0.0205, 0.0125, 0.0088))
+    head = Union([head, lower_lip] + _both([upper_half]), k=0.004)
+    head = Cut(head, Ellipsoid(MOUTH, (0.0230, 0.012, 0.0014)), k=0.0015)
+    corner = Ellipsoid((0.0235, -0.0875, MOUTH[2]), (0.0040, 0.0060, 0.0045))
+    head = Cut(head, Union(_both([corner])), k=0.003)
     # Ears: a shell with the hollow carved from the outside.
     ear_axes = S.rotation(rx=0.25, rz=-0.12)
     ear = Ellipsoid((0.0790, 0.010, 1.665), (0.013, 0.022, 0.031), ear_axes)
@@ -466,14 +470,36 @@ def _assign(obj, names, per_face):
 
 # Eyes ------------------------------------------------------------------------------
 
-def build_eyes(collection):
-    """Two eyeballs, white with a brown iris and a dark pupil, looking ahead.
+def _mouth_line(body):
+    """A thin dark strip along the line between the lips, lying on the body's surface.
+
+    It is the shadowed inside of the mouth, dark whatever the skin tone, and reads as
+    a mouth in a close-up where the shading of small lips does not.
+    """
+    bvh = BVHTree.FromObject(body, bpy.context.evaluated_depsgraph_get())
+    columns = 9
+    half_width = 0.0205
+    verts = []
+    for i in range(columns):
+        u = i / (columns - 1) * 2 - 1  # -1 at the figure's right corner, 1 at its left
+        x = u * half_width
+        height = 0.0013 * (1.0 - 0.55 * u * u)
+        for z in (MOUTH[2] - height, MOUTH[2] + height):
+            hit, normal, _, _ = bvh.ray_cast(Vector((x, -0.3, z)), Vector((0.0, 1.0, 0.0)))
+            verts.append(hit + normal * 0.0005)
+    faces = [(2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1) for i in range(columns - 1)]
+    return verts, faces
+
+
+def build_eyes(collection, body=None):
+    """Two eyeballs, white with a brown iris and a dark pupil, looking ahead, and
+    the mouth line when `body` is given.
 
     Only the front of each eyeball is modelled (rings out from the pupil to a
-    little past the side); the back is inside the head. They are their own mesh
-    so that only they carry vertex colours.
+    little past the side); the back is inside the head. They are their own mesh,
+    with the fixed material `eyes`, so that only they carry vertex colours.
     """
-    segments, rings, reach = 12, 6, math.radians(105)
+    segments, rings, reach = 12, 6, math.radians(95)
     verts, faces, colours = [], [], []
     for sign in (1, -1):
         centre = np.array([EYE[0] * sign, EYE[1], EYE[2]])
@@ -495,10 +521,21 @@ def build_eyes(collection):
         for r in range(1, rings):
             for k in range(segments):
                 faces.append((ring(r, k), ring(r + 1, k), ring(r + 1, k + 1), ring(r, k + 1)))
+    eye_faces = len(faces)
+    if body is not None:
+        mouth_verts, mouth_faces = _mouth_line(body)
+        first = len(verts)
+        verts += [np.array(v) for v in mouth_verts]
+        faces += [tuple(first + i for i in f) for f in mouth_faces]
     mesh = bpy.data.meshes.new("eyes")
     mesh.from_pydata([tuple(v) for v in verts], [], faces)
     layer = mesh.color_attributes.new("eye_colour", "BYTE_COLOR", "CORNER")
     for poly in mesh.polygons:
+        if poly.index >= eye_faces:
+            for loop in poly.loop_indices:
+                layer.data[loop].color = (0.20, 0.07, 0.06, 1.0)  # the mouth line
+            poly.use_smooth = True
+            continue
         side = 1 if mesh.vertices[poly.vertices[0]].co.x > 0 else -1
         centre = Vector((EYE[0] * side, EYE[1], EYE[2]))
         for loop in poly.loop_indices:
@@ -510,7 +547,9 @@ def build_eyes(collection):
             elif -d.y > 0.80:
                 colour = (0.16, 0.09, 0.05, 1.0)
             else:
-                colour = (0.80, 0.78, 0.74, 1.0)
+                # The white, shaded towards the corners where the lids overhang it.
+                shade = 0.45 + 0.55 * max(0.0, min(1.0, (-d.y - 0.25) / 0.45))
+                colour = (0.74 * shade, 0.71 * shade, 0.67 * shade, 1.0)
             layer.data[loop].color = colour
         poly.use_smooth = True
     obj = bpy.data.objects.new("eyes", mesh)
@@ -763,7 +802,7 @@ def build_body(armature):
         poly.use_smooth = True
     _skin(body, armature)
 
-    eyes = build_eyes(collection)
+    eyes = build_eyes(collection, body)
     _bind(eyes, armature, {"head": np.ones(len(eyes.data.vertices))})
     number = build_number(body, collection)
     _transfer(number, body, armature)

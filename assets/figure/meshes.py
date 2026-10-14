@@ -97,7 +97,7 @@ def material(name):
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     colour = COLOURS.get(name, (0.8, 0.8, 0.8))
     bsdf.inputs["Base Color"].default_value = (*colour, 1.0)
-    bsdf.inputs["Roughness"].default_value = {"boots": 0.4, "eyes": 0.55}.get(name, 0.75)
+    bsdf.inputs["Roughness"].default_value = {"boots": 0.4, "eyes": 0.8}.get(name, 0.75)
     mat.diffuse_color = (*colour, 1.0)
     if name == "eyes":
         attr = mat.node_tree.nodes.new("ShaderNodeVertexColor")
