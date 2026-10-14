@@ -31,6 +31,7 @@ Sent once when the page connects.
       "name": "Harbour",
       "colours": {"shirt": "#1f5fbf", "shorts": "#ffffff", "keeper": "#f2c230"},
       "manager": "Built-in",
+      "assistants": [],
       "players": [
         {"id": 1, "number": 1, "name": "Vale", "position": "GK", "model": "Laya"}
       ]
@@ -44,7 +45,10 @@ start in `players` and its substitutes in `bench`, in the same shape. `id` is
 unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
 player's decision model, or `null` for the built-in bot; a substitute's is
 `null` until its manager chooses one. `manager` is the team's manager:
-`Built-in`, or the language model's name.
+`Built-in`, or the language model's name. `assistants` lists the model of
+each assistant helping the team's manager, one entry per assistant (for
+example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
+manager and for a language-model manager with none.
 
 ### `snapshot`
 
