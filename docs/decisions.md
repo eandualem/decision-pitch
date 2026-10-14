@@ -184,6 +184,10 @@ sensible football, the same rules for both teams:
 - **Off the ball**, `dribble`, `pass`, `shoot` and `clear` play as the
   built-in bot does: the one player who can reach the ball first goes for it
   and the others keep their places, instead of every one of them running at it.
+- **A goalkeeper** off the ball whose action is `press` or `mark` plays as the
+  bot keeper does: it gets across to a shot, comes for a loose ball in its own
+  area when it is the nearest, and otherwise keeps its line. Without this, a
+  keeper answering `mark` spent 93% of play more than 20 m off its line.
 - **At a restart** only the taker goes to the ball. A taker whose action is a
   pass, shot or clearance takes the restart that way; any other action takes
   it as its bot would, so a model that never chooses a kick cannot stall the
