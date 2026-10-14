@@ -165,6 +165,16 @@ def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
     assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
 
 
+def test_the_team_shape_moves_up_with_the_ball_but_not_into_its_own_six_yard_box():
+    m = in_play(ball=(20.0, 0.0))
+    m.owner = 10  # a home forward has the ball 20 m into the opponents' half
+    midfielder, defender = m.player(7), m.player(3)
+    assert bots._home(m, midfielder, attacking=True)[0] > 15  # close behind the ball, not 17 m back
+    m.ball.place(-40.0, 0.0)
+    m.owner = 20  # an away forward near the home area
+    assert bots._home(m, defender)[0] == -pitch.HALF_LENGTH + bots.SHAPE_DEEPEST
+
+
 def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():
     m = in_play(ball=(40.5, 0.0))
     m.owner = 10  # a home forward has the ball in the opponents' half

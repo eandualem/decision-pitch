@@ -27,6 +27,8 @@ ROUND_UNTIL = 0.3  # cosine from the carrier's facing at which it goes for the b
 CHASE_AHEAD = 3.0  # s of a loose ball's path searched for the player who reaches it first
 CHASE_STEP = 0.1  # s between the points of that path
 SAVE_MARGIN = 1.0  # m outside a post within which a goalkeeper still covers a shot
+SHAPE_FOLLOW = 0.9  # how far the team's shape moves with the ball, as a share of the ball's move
+SHAPE_DEEPEST = 8.0  # m from its own goal line that an outfield player's place goes back to at most
 
 
 def play(match: Match) -> None:
@@ -250,9 +252,9 @@ def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
     if p.position == "GK":
         return _goal_line_spot(m, p)
     bx, by = m.ball.x * direction, m.ball.y * direction  # the ball in the team's frame
-    x = p.home[0] + 0.5 * bx + (8 if attacking else 0) + 15
+    x = p.home[0] + SHAPE_FOLLOW * bx + (8 if attacking else 0) + 15
     y = p.home[1] * 0.85 + 0.25 * by
-    x = max(-pitch.HALF_LENGTH + 4, min(pitch.HALF_LENGTH - 6, x))
+    x = max(-pitch.HALF_LENGTH + SHAPE_DEEPEST, min(pitch.HALF_LENGTH - 6, x))
     if m.phase == "goal_kick" and p.team != m.restart_team:
         x = min(x, pitch.HALF_LENGTH - pitch.PENALTY_DEPTH - 1)  # outside the area until the kick
     return direction * x, direction * y
