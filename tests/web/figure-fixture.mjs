@@ -89,9 +89,15 @@ export const CODES = Object.fromEntries([...new Set([...Object.keys(LOOPS), ...O
   ...Object.keys(MORE_ONE_SHOTS)])].map((name, i) => [name, i + 1]));
 export const MARKERS = ['hand_L', 'thigh_R', 'foot_L'];
 
+// A clip that also holds a bone at a turn of its own all through: the jockey stance holds
+// the left forearm 40 degrees about x, as a settled blend does.
+export const HELD = { jockey: { bone: 'forearm_L', turn: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 40 * Math.PI / 180) } };
+
 function clip(name, duration) {
   const code = CODES[name];
   const tracks = MARKERS.map(bone => new THREE.VectorKeyframeTrack(`${bone}.position`, [0, duration], [code, 0, 0, code, duration, 0]));
+  const held = HELD[name];
+  if (held) tracks.push(new THREE.QuaternionKeyframeTrack(`${held.bone}.quaternion`, [0, duration], [...held.turn.toArray(), ...held.turn.toArray()]));
   return new THREE.AnimationClip(name, duration, tracks);
 }
 

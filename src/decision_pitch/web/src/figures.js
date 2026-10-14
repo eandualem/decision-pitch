@@ -993,13 +993,15 @@ export function createFigures(template, { footLock = true } = {}) {
     let moved = false;
     let tilt = 0;
     const switching = switchingState(steps);
-    // Bones the page poses over the clips start each frame from their rest, in case no
-    // clip keys them.
+    // Bones the page poses over the clips start each frame from what the clips last gave
+    // them: the mixer writes a bone only when its blend changes, so a settled blend leaves
+    // the page's pose of last frame in place unless it is taken off; and a bone no clip
+    // keys keeps its rest.
     const posed = [
       ...(lockable ? legs.flatMap(leg => [leg.thigh, leg.shin, leg.foot]) : []), ...(base ? [base] : []),
       ...[spine, chest, neck].filter(Boolean), ...arms.flatMap(arm => [arm.upper, arm.fore]).filter(Boolean),
     ];
-    const rests = posed.map(bone => bone.quaternion.clone());
+    const mixed = posed.map(bone => bone.quaternion.clone());
     const turn = new THREE.Quaternion();
     const palm = new THREE.Vector3();
     const mixer = new THREE.AnimationMixer(object);
@@ -1518,8 +1520,9 @@ export function createFigures(template, { footLock = true } = {}) {
         next = swap;
         next.length = 0;
         acting = 0;
-        for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(rests[i]);
+        for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(mixed[i]);
         mixer.update(0);
+        for (let i = 0; i < posed.length; i++) mixed[i].copy(posed[i].quaternion);
         pose();
         if (lockable) {
           let moving = 0;

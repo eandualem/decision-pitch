@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
-import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES } from './figure-fixture.mjs';
+import { fixtureGltf, LOOPS, MORE_LOOPS, HAIRS, CODES, HELD } from './figure-fixture.mjs';
 
 globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
 const figures = await import('../../src/decision_pitch/web/src/figures.js');
@@ -643,6 +643,26 @@ test('standing, each person has its own idle and changes it now and then, with a
   made.dispose();
 });
 
+test('the page\'s pose goes over what the clips give each frame, even once a blend has settled', () => {
+  // The mixer writes a bone only when its blend changes: standing in the jockey stance,
+  // whose clip holds the left forearm turned, the forearm stays turned once the stance has
+  // come all the way in, with the page's elbow bend over it, and never drops to its rest.
+  const made = createFigures(fixtureMore());
+  const person = made.create({ seed: 6 });
+  const forearm = person.object.getObjectByName('forearm_L');
+  const before = new THREE.Quaternion();
+  for (let i = 0; i < 400; i++) {
+    before.copy(forearm.quaternion);
+    person.update(1 / 60, 0, 0, { dribble: 0, jockey: 1, shield: 0 });
+    // Coming in over a fraction of a second, then still.
+    if (i > 0) assert.ok(forearm.quaternion.angleTo(before) < (i < 120 ? 0.08 : 0.002), `the forearm jumps at frame ${i}`);
+  }
+  assert.ok(person.state().sets.jockey > 0.999999, 'settled');
+  assert.ok(forearm.quaternion.angleTo(HELD.jockey.turn) < 0.31, 'held as the clip holds it, bent at most a little more');
+  assert.ok(forearm.quaternion.angleTo(new THREE.Quaternion()) > 0.4, 'not at its rest');
+  made.dispose();
+});
+
 test('a late-seen wind-up plays faster, at most twice, and contact lands on the touch', () => {
   assert.equal(contactTime(0, -0.1, 0.4), 0.4);
   assert.ok(near(contactTime(0.2, -0.1, 0.4), 0.6), 'its own pace after contact');
@@ -1022,6 +1042,22 @@ test('built figure: after a turn on the spot the legs go back to the clips\' own
   // The knee's inside angle: 180 degrees straight; under 110, a deep crouch.
   const deepest = Math.min(...held.drifting);
   assert.ok(deepest > 110 * Math.PI / 180, `no crouch drifting on: ${(deepest * 180 / Math.PI).toFixed(0)} degrees`);
+});
+
+test('built figure: standing in the jockey stance, no bone jumps once the blend settles', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  const made = createFigures(template);
+  const person = made.create({ seed: 6 });
+  const bones = [];
+  person.object.traverse(node => { if (node.isBone) bones.push(node); });
+  const before = bones.map(bone => bone.quaternion.clone());
+  for (let i = 0; i < 300; i++) {
+    bones.forEach((bone, k) => before[k].copy(bone.quaternion));
+    person.update(1 / 60, 0, 0, { jockey: 1 });
+    if (i < 5) continue;
+    bones.forEach((bone, k) => assert.ok(bone.quaternion.angleTo(before[k]) < 0.05, `${bone.name} jumps at frame ${i}`));
+  }
+  made.dispose();
 });
 
 test('a leg bends to put the ankle on a target, the knee bending its own way and the foot keeping its turn', () => {
