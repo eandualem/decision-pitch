@@ -62,9 +62,11 @@ The state of play, about 30 times a second.
   "clock": "12:14",
   "phase": "play",
   "score": [1, 0],
-  "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7},
+  "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7,
+           "touches": [{"player": 7, "kind": "control", "t": 734.183, "x": 11.8, "y": -3.0, "z": 0.11}]},
   "players": [
-    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"}
+    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
+    {"id": 1, "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
   ]
 }
 ```
@@ -73,8 +75,25 @@ The state of play, about 30 times a second.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
   `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
+- `ball.touches`: the touches of the ball in the last 0.1 s, oldest first, or
+  `[]`. Each touch is repeated in the snapshots of that tenth of a second, so
+  none falls between two snapshots. `player` touched it; `t` is the match time
+  of the engine step it happened in; `x`, `y` and `z` are where the ball was
+  as that step began, before the touch moved it. A player who takes the ball
+  and kicks it in the same step makes one touch, the kick. `kind` is one of:
+  `kick` (a pass, shot or clearance, or the kick that takes a restart; a pass
+  and a shot are not told apart), `throw` (the kick that takes a throw-in),
+  `control` (a player takes a loose ball, or a teammate's, in play), `tackle`
+  (a player takes the ball from an opponent who has it, in play), `deflect`
+  (the ball comes too fast to control and bounces off the player), `save`
+  (such a deflection off the goalkeeper defending the goal the ball is at, in
+  its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
+  area in play, even a slow ball from a teammate). There are no headers:
+  outfield players play the ball only up to 0.9 m high.
 - `action`: the engine command the player is carrying out: `hold`, `move` or
   `kick`. The decision model's own choice is in `decision` messages.
+- `dive`: on a player, `true` while it is a goalkeeper diving across its goal
+  at a ball heading in (docs/decisions.md, section 2); absent otherwise.
 - `players`: only players on the pitch; a substituted or sent-off player
   disappears from it, and a substitute appears in it once it comes on.
 

@@ -447,12 +447,19 @@ second, so nothing cuts away at one. It never cuts away during open play.
 behind the newest snapshot instead of chasing the last two. A timeline module
 maps the server's `t` to the page's clock with an offset that absorbs uneven
 arrival, keeps a short buffer of snapshots and samples the pair that brackets
-the render time. It never interpolates across a change of phase or period or a
+the render time. The offset follows the least-delayed arrivals of the last
+half second and the server's measured drift, so a server running slower than
+real time, as a loaded laptop with a local model may, is followed without
+held frames. It never interpolates across a change of phase or period or a
 clock that goes back, so restarts that place players still do not sweep them
-across the pitch; it holds the last state when the buffer runs dry and drops
-the backlog after a stall. Events carry `t` and are released on the same
+across the pitch; the one exception is a restart kicked into play, where the
+engine places no one, and a player who still jumps more than 8 m is drawn
+there at once. It holds the last state when the buffer runs dry and drops the
+backlog after a stall. Events carry `t` and are released on the same
 timeline, so a goal banner, a celebration or a contact pose appears when the
 drawn ball gets there. `decision` and `manager` messages stay immediate.
+Animation runs on the browser's frame timestamp, and the draw loop allocates
+nothing per frame.
 
 **The ball and contact.** While a player has the ball, the page draws it at
 that player's drawn feet, where the engine carries it, so it cannot slide or
@@ -465,9 +472,18 @@ touch keeps a kick that is blocked within the same snapshot interval from
 losing its swing. The page plays the matching pose at that moment: a leg swing
 for a kick, first touch or tackle, a throw, and a dive or reach for a
 goalkeeper's save or catch, without restarting a pose when two close players
-trade the ball. Only kinds the engine can tell apart are sent. Headers are not
-implemented: the engine lets outfield players play the ball only up to 0.9 m,
-so there is no header to show yet.
+trade the ball. Seeing a touch in the buffer before it is drawn gives each
+pose a short wind-up. Only kinds the engine can tell apart are sent: a pass
+and a shot are both a kick, and a goalkeeper taking a teammate's slow ball in
+its area is a catch. Headers are not implemented: the engine lets outfield
+players play the ball only up to 0.9 m, so there is no header to show yet.
+
+Two engine properties are handled in the drawing only. A kick leaves in any
+direction relative to the kicker's heading (a median 84 degrees off it in bot
+matches, and backwards almost half the time), so the kicker turns into the
+kick during the wind-up and a carried ball turns with it. A goalkeeper diving
+or saving often faces away from the ball, so it turns to face the ball and
+leans and reaches across that facing.
 
 The delay costs a tenth of a second of latency, which nobody watching can see,
 and buys motion that stays even when the connection does not. Drawing from the
