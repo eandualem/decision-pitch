@@ -455,11 +455,16 @@ drawn ball gets there. `decision` and `manager` messages stay immediate.
 that player's drawn feet, where the engine carries it, so it cannot slide or
 jump against them. The ball spins with the distance it travels and keeps its
 height from the engine, so it sits on the grass and arcs as sent. The snapshot
-carries the latest touch of the ball, with who made it, what kind it was and
-when, read from state the engine records where the touch happens; it changes
-no rule or physics. The page plays the matching pose at that moment: a leg
-swing for a kick, first touch or tackle, a nod for a header and a dive or
-reach for a goalkeeper's save. Only kinds the engine can tell apart are sent.
+carries the touches of the ball in the last moment, with who made each, what
+kind it was and when, read from state the engine records where the touch
+happens; it changes no rule or physics. A list rather than only the latest
+touch keeps a kick that is blocked within the same snapshot interval from
+losing its swing. The page plays the matching pose at that moment: a leg swing
+for a kick, first touch or tackle, a throw, and a dive or reach for a
+goalkeeper's save or catch, without restarting a pose when two close players
+trade the ball. Only kinds the engine can tell apart are sent. Headers are not
+implemented: the engine lets outfield players play the ball only up to 0.9 m,
+so there is no header to show yet.
 
 The delay costs a tenth of a second of latency, which nobody watching can see,
 and buys motion that stays even when the connection does not. Drawing from the
