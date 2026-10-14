@@ -372,6 +372,57 @@ def test_a_goal_cannot_be_scored_directly_from_an_indirect_free_kick(indirect, r
     assert kinds(m.drain_events()) == [restart] and m.score == score
 
 
+# -- saves and deflections --------------------------------------------------------------------
+
+
+def shot_at_keeper(keeper_y, ball_y, speed):
+    """A ball rolling at the away goalkeeper (player 12), 1.5 m off its line at +x."""
+    m = in_play()
+    keeper = m.player(12)
+    keeper.x, keeper.y = 51.0, keeper_y
+    m.ball.place(45.0, ball_y)
+    m.ball.vx = speed
+    return m, keeper
+
+
+def test_the_goalkeeper_catches_a_shot_at_its_body():
+    m, keeper = shot_at_keeper(0.0, 0.0, 15.0)
+    run(m, 0.5)
+    assert m.owner == keeper.id
+
+
+def test_the_goalkeeper_parries_a_shot_too_fast_to_hold():
+    m, keeper = shot_at_keeper(0.0, 0.0, 20.0)
+    run(m, 0.5)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1
+
+
+def test_a_shot_parried_at_full_stretch_over_the_goal_line_is_a_corner():
+    m, keeper = shot_at_keeper(2.0, 3.2, 17.0)  # it would go in just inside the post
+    run(m, 2.0)
+    events = m.drain_events()
+    assert kinds(events) == ["corner"] and events[0]["team"] == 0 and m.score == [0, 0]
+
+
+def test_a_hard_ball_bounces_off_an_outfield_player_who_cannot_play_it_at_once():
+    m = in_play()
+    blocker = m.player(15)
+    blocker.x, blocker.y = 30.0, 0.0
+    m.ball.place(28.0, 0.0)
+    m.ball.vx = 24.0
+    run(m, 0.15)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1 and blocker.id in m.recovering
+
+
+def test_a_deflection_off_an_opponent_leaves_an_offside_position_as_it_was():
+    m = through_ball((30.0, 10.0))
+    blocker = m.player(13)
+    m.ball.place(blocker.x - 0.6, blocker.y)
+    m.ball.vx, m.ball.vy = 24.0, 0.0
+    m.step()
+    assert m.owner is None and m.offside == {10}
+
+
 # -- substitutions ----------------------------------------------------------------------------
 
 

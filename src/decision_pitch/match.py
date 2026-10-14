@@ -51,6 +51,10 @@ CONTROL = 0.75  # m from a player's centre to the ball's within which it plays t
 CONTROL_HEIGHT = 0.9  # m, the highest ball a player can play
 KEEPER_CONTROL = 1.3  # a goalkeeper's reach in its own penalty area
 KEEPER_HEIGHT = 2.6
+CONTROL_SPEED = 18.0  # m/s, relative to a player, above which a loose ball bounces off it
+PARRY_SPEED = 10.0  # m/s above which a goalkeeper at full stretch parries a ball, not catches it
+DEFLECT_PUSH = 0.4  # share of its speed a deflected ball leaves outwards from the player with
+DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected ball keeps
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
 KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
@@ -328,12 +332,48 @@ class Match:
             if nearest.id in self.offside:
                 self._offside(nearest)
                 return
+            if self.owner is None and self._deflects(nearest):
+                self._deflect(nearest)
+                return
             self.offside = set()  # someone onside played it
             self.penalty_live = False
             if nearest.id != self.indirect:
                 self.indirect = None
             self.last_touch = nearest.team
         self.owner = nearest.id
+
+    def _deflects(self, p: Player) -> bool:
+        """Whether the loose ball comes at `p` too fast to control, or reaches a goalkeeper
+        only at full stretch (docs/decisions.md, section 8)."""
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.hypot(vx, vy)
+        if speed > CONTROL_SPEED:
+            return True
+        if p.position != "GK" or speed <= PARRY_SPEED:
+            return False
+        return abs((b.x - p.x) * vy - (b.y - p.y) * vx) / speed > CONTROL  # its path passes beyond
+
+    def _deflect(self, p: Player) -> None:
+        """The ball bounces off `p`: outwards from where it touched, keeping a little of its
+        speed along the body. It counts as `p` playing it, except for the opponents' offside."""
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.hypot(vx, vy)
+        dx, dy = b.x - p.x, b.y - p.y
+        dist = math.hypot(dx, dy)
+        nx, ny = (dx / dist, dy / dist) if dist > 0 else (-vx / speed, -vy / speed)
+        along = vx * nx + vy * ny
+        b.vx = p.vx + nx * speed * DEFLECT_PUSH + (vx - along * nx) * DEFLECT_KEEP
+        b.vy = p.vy + ny * speed * DEFLECT_PUSH + (vy - along * ny) * DEFLECT_KEEP
+        b.vz *= DEFLECT_KEEP
+        self.offside = self._offside_positions(p) | {q for q in self.offside if self.player(q).team != p.team}
+        self.penalty_live = False
+        if p.id != self.indirect:
+            self.indirect = None
+        self.last_touch = p.team
+        self.owner = None
+        self.recovering[p.id] = KICK_RECOVERY
 
     def _may_kick(self, p: Player) -> bool:
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:

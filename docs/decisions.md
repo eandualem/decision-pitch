@@ -418,6 +418,17 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   player's place and position, and is played by the built-in bot until a
   manager chooses its model. A substituted or sent-off player cannot return,
   and a sent-off player cannot be replaced.
+- **Saves and deflections.** A loose ball that comes at a player faster than
+  18 m/s, relative to the player, bounces off it instead of being taken. A
+  goalkeeper that reaches a ball faster than 10 m/s only at full stretch (the
+  ball's path passes more than an outfield player's 0.75 m reach from its
+  centre) parries it instead of catching it. The ball leaves outwards from
+  where it touched the player, at 40% of its speed, keeping 30% of its speed
+  along the body. The player cannot play it again for 0.25 s and is the last to
+  have touched it, so a parry or block over its own goal line is a corner. For
+  offside, a deflection counts as the deflecting player playing the ball for
+  its teammates, and leaves the opponents' offside positions as they were,
+  since a deflection or save is not deliberate play.
 
 **Why.** Geometry the engine already has (positions, headings, speeds and who
 has the ball) is enough for calls that look right on screen and that a test can
