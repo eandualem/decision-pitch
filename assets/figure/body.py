@@ -33,12 +33,14 @@ import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
+import hair as hair_styles
 import rig
 import shapes as S
-from shapes import Box, Cone, Cut, Ellipsoid, Footprint, Layer, Loft, Plane, Shell, Union, Within, frame, mirror
+from meshes import collapse, keep_vertices, material, mesh_object, smooth
+from shapes import Box, Cone, Cut, Ellipsoid, Footprint, Loft, Plane, Shell, Union, Within, frame
+from shapes import both as _both
 
 STEP = 0.0025  # m: the grid the body is sampled on
-HAIR_STEP = 0.002  # m: the grid the hair is sampled on
 # The body's triangles (eyes excluded; a figure adds one hair mesh): the trunk and
 # limbs, the rest of the head with the hands, and the face with the ears.
 BODY_TRIANGLES = (4700, 1500, 2000)
@@ -47,24 +49,7 @@ J = {name: np.array(p, dtype=np.float64) for name, p in rig.JOINTS.items()}
 
 REGIONS = ("skin", "shirt", "sleeve", "hands", "shorts", "legs", "socks", "boots")
 FIXED = ("eyes",)
-HAIR_STYLES = ("hair_bald", "hair_buzz", "hair_short", "hair_curly", "hair_swept", "hair_bun")
 MORPHS = ("build_slim", "build_broad", "face_wide", "face_long", "jaw_strong", "nose_big")
-
-# Default colours in the .blend; the page sets its own per team and per figure.
-COLOURS = {
-    "skin": (0.56, 0.38, 0.28),
-    "shirt": (0.80, 0.80, 0.82),
-    "sleeve": (0.56, 0.38, 0.28),
-    "hands": (0.56, 0.38, 0.28),
-    "shorts": (0.06, 0.08, 0.16),
-    "legs": (0.56, 0.38, 0.28),
-    "socks": (0.80, 0.80, 0.82),
-    "boots": (0.03, 0.03, 0.03),
-    "hair": (0.05, 0.035, 0.025),
-    "number": (0.05, 0.05, 0.08),
-    "coat": (0.10, 0.11, 0.13),
-}
-
 
 class Segment:
     """A limb segment between two joints, with a frame: x out to the side, y to the front."""
@@ -120,11 +105,6 @@ def _below(shape, z):
 
 def _above(shape, z):
     return Within(shape, Plane((0, 0, z), (0, 0, -1), shape.lo - 0.1, shape.hi + 0.1))
-
-
-def _both(shapes):
-    """Left-side shapes and their mirror images."""
-    return list(shapes) + [mirror(s) for s in shapes]
 
 
 # The trunk -------------------------------------------------------------------------
@@ -360,53 +340,6 @@ class Figure:
 
 # Meshing ---------------------------------------------------------------------------
 
-def _keep_vertices(verts, quads, keep):
-    """The mesh made of the faces whose vertices all pass `keep`, without loose vertices."""
-    quads = quads[np.all(keep[quads], axis=1)]
-    used = np.zeros(len(verts), dtype=bool)
-    used[quads.ravel()] = True
-    index = np.full(len(verts), -1)
-    index[used] = np.arange(used.sum())
-    return verts[used], index[quads]
-
-
-def _mesh_object(name, verts, faces, collection):
-    mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata([tuple(v) for v in verts], [], [tuple(int(i) for i in f) for f in faces])
-    mesh.validate(clean_customdata=False)
-    obj = bpy.data.objects.new(name, mesh)
-    collection.objects.link(obj)
-    return obj
-
-
-def _collapse(obj, triangles, movable=None):
-    """Collapse `obj` towards `triangles`; only vertices where `movable` is true may move."""
-    current = sum(len(p.vertices) - 2 for p in obj.data.polygons)
-    if current <= triangles:
-        return
-    mod = obj.modifiers.new("decimate", "DECIMATE")
-    mod.decimate_type = "COLLAPSE"
-    # Symmetric collapse folds triangles over along the centre line; plain collapse does not.
-    mod.use_symmetry = False
-    mod.use_collapse_triangulate = True
-    if movable is not None:
-        # Blender's decimation never collapses a vertex of weight 0 in its group.
-        group = obj.vertex_groups.new(name="movable")
-        group.add(np.flatnonzero(movable).tolist(), 1.0, "REPLACE")
-        mod.vertex_group = group.name
-    mod.ratio = triangles / current
-    bpy.context.view_layer.update()
-    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-    mesh = bpy.data.meshes.new_from_object(evaluated)
-    old = obj.data
-    obj.modifiers.remove(mod)
-    obj.data = mesh
-    bpy.data.meshes.remove(old)
-    if movable is not None:
-        obj.vertex_groups.remove(obj.vertex_groups["movable"])
-    mesh.name = obj.name
-
-
 def _decimate(obj, budgets, tier_of):
     """Bring `obj` to sum(`budgets`) triangles, `budgets[k]` of them in tier k.
 
@@ -425,23 +358,7 @@ def _decimate(obj, budgets, tier_of):
         for poly in obj.data.polygons:
             if min(tier[i] for i in poly.vertices) > k:
                 finer += len(poly.vertices) - 2
-        _collapse(obj, sum(budgets[:k + 1]) + finer, tier == k)
-
-
-def _smooth(verts, faces, iterations=2, factor=0.5):
-    """Laplacian smoothing that keeps the volume (alternating shrink and inflate)."""
-    n = len(verts)
-    edges = np.concatenate([faces[:, [i, (i + 1) % 4]] for i in range(4)])
-    edges = np.unique(np.sort(edges, axis=1), axis=0)
-    deg = np.maximum(np.bincount(edges.ravel(), minlength=n), 1).astype(np.float64)
-    v = verts.copy()
-    for _ in range(iterations):
-        for f in (factor, -factor * 1.04):
-            acc = np.zeros_like(v)
-            np.add.at(acc, edges[:, 0], v[edges[:, 1]])
-            np.add.at(acc, edges[:, 1], v[edges[:, 0]])
-            v = v + f * (acc / deg[:, None] - v)
-    return v
+        collapse(obj, sum(budgets[:k + 1]) + finer, tier == k)
 
 
 def _tier(verts):
@@ -507,9 +424,11 @@ def _cut_edges(bm):
     """Cut the mesh along the kit's edges so each region ends on a clean loop."""
     def cut(point, normal, keep):
         geom = [f for f in bm.faces if keep(np.array(f.calc_center_median()))]
-        verts = {v for f in geom for v in f.verts}
-        edges = {e for f in geom for e in f.edges}
-        bmesh.ops.bisect_plane(bm, geom=list(verts) + list(edges) + geom, dist=1e-5,
+        chosen = set(geom)
+        # Lists in mesh order, not sets: a set's order changes from run to run.
+        verts = [v for v in bm.verts if any(f in chosen for f in v.link_faces)]
+        edges = [e for e in bm.edges if any(f in chosen for f in e.link_faces)]
+        bmesh.ops.bisect_plane(bm, geom=verts + edges + geom, dist=1e-5,
                                plane_co=Vector(point), plane_no=Vector(normal))
 
     for sign in (1, -1):
@@ -537,30 +456,6 @@ def _cut_edges(bm):
     cut(COLLAR[0], COLLAR[1], lambda c: _distance_to_segment(c[None, :], neck_a, neck_b)[0] < 0.075)
 
 
-# Materials -------------------------------------------------------------------------
-
-def material(name):
-    mat = bpy.data.materials.get(name)
-    if mat is not None:
-        return mat
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
-    colour = COLOURS.get(name, (0.8, 0.8, 0.8))
-    bsdf.inputs["Base Color"].default_value = (*colour, 1.0)
-    bsdf.inputs["Roughness"].default_value = {"boots": 0.4, "eyes": 0.55}.get(name, 0.75)
-    mat.diffuse_color = (*colour, 1.0)
-    if name == "eyes":
-        attr = mat.node_tree.nodes.new("ShaderNodeVertexColor")
-        attr.layer_name = "eye_colour"
-        mat.node_tree.links.new(attr.outputs["Color"], bsdf.inputs["Base Color"])
-    if name in ("coat", "number"):
-        mat.use_backface_culling = False
-    if name == "number":
-        mat.blend_method = "HASHED" if hasattr(mat, "blend_method") else None
-    return mat
-
-
 def _assign(obj, names, per_face):
     for name in names:
         obj.data.materials.append(material(name))
@@ -573,144 +468,63 @@ def _assign(obj, names, per_face):
 def build_eyes(collection):
     """Two eyeballs, white with a brown iris and a dark pupil, looking ahead.
 
-    Only the front of each eyeball is modelled; the back is inside the head. They
-    are their own mesh so that only they carry vertex colours.
+    Only the front of each eyeball is modelled (rings out from the pupil to a
+    little past the side); the back is inside the head. They are their own mesh
+    so that only they carry vertex colours.
     """
-    bm = bmesh.new()
-    colour = bm.loops.layers.color.new("eye_colour")
+    segments, rings, reach = 12, 6, math.radians(105)
+    verts, faces, colours = [], [], []
     for sign in (1, -1):
-        centre = Vector((EYE[0] * sign, EYE[1], EYE[2]))
-        made = bmesh.ops.create_uvsphere(bm, u_segments=12, v_segments=8, radius=EYE_RADIUS)
-        for v in made["verts"]:
-            # Turn the sphere's pole to face the front (-y).
-            v.co = Vector((v.co.x, -v.co.z, v.co.y)) + centre
-        faces = {f for v in made["verts"] for f in v.link_faces}
-        back = [f for f in faces if (f.calc_center_median() - centre).y > 0.004]
-        bmesh.ops.delete(bm, geom=back, context="FACES")
-    for f in bm.faces:
-        centre = Vector((EYE[0] * (1 if f.calc_center_median().x > 0 else -1), EYE[1], EYE[2]))
-        for loop in f.loops:
-            d = (loop.vert.co - centre).normalized()
-            ahead = -d.y
-            if d.z > 0.45:
-                loop[colour] = (0.05, 0.035, 0.03, 1.0)  # the lash line under the upper lid
-            elif ahead > 0.93:
-                loop[colour] = (0.02, 0.015, 0.012, 1.0)
-            elif ahead > 0.80:
-                loop[colour] = (0.16, 0.09, 0.05, 1.0)
-            else:
-                loop[colour] = (0.80, 0.78, 0.74, 1.0)
+        centre = np.array([EYE[0] * sign, EYE[1], EYE[2]])
+        first = len(verts)
+        verts.append(centre + (0.0, -EYE_RADIUS, 0.0))
+        for r in range(1, rings + 1):
+            polar = reach * r / rings
+            for k in range(segments):
+                around = 2 * math.pi * k / segments
+                d = np.array([math.sin(polar) * math.cos(around), -math.cos(polar), math.sin(polar) * math.sin(around)])
+                verts.append(centre + d * EYE_RADIUS)
+
+        def ring(r, k):
+            return first + 1 + (r - 1) * segments + k % segments
+
+        # Wound out from the pupil and then around, so the faces look outwards.
+        for k in range(segments):
+            faces.append((first, ring(1, k), ring(1, k + 1)))
+        for r in range(1, rings):
+            for k in range(segments):
+                faces.append((ring(r, k), ring(r + 1, k), ring(r + 1, k + 1), ring(r, k + 1)))
     mesh = bpy.data.meshes.new("eyes")
-    bm.to_mesh(mesh)
-    bm.free()
+    mesh.from_pydata([tuple(v) for v in verts], [], faces)
+    layer = mesh.color_attributes.new("eye_colour", "BYTE_COLOR", "CORNER")
+    for poly in mesh.polygons:
+        side = 1 if mesh.vertices[poly.vertices[0]].co.x > 0 else -1
+        centre = Vector((EYE[0] * side, EYE[1], EYE[2]))
+        for loop in poly.loop_indices:
+            d = (mesh.vertices[mesh.loops[loop].vertex_index].co - centre).normalized()
+            if d.z > 0.45:
+                colour = (0.05, 0.035, 0.03, 1.0)  # the lash line under the upper lid
+            elif -d.y > 0.93:
+                colour = (0.02, 0.015, 0.012, 1.0)
+            elif -d.y > 0.80:
+                colour = (0.16, 0.09, 0.05, 1.0)
+            else:
+                colour = (0.80, 0.78, 0.74, 1.0)
+            layer.data[loop].color = colour
+        poly.use_smooth = True
     obj = bpy.data.objects.new("eyes", mesh)
     collection.objects.link(obj)
     obj.data.materials.append(material("eyes"))
-    for poly in mesh.polygons:
-        poly.use_smooth = True
     return obj
 
 
 # Building --------------------------------------------------------------------------
 
-def _shape_mesh(shape, step, name, collection, smooth=2, lo=None, hi=None):
+def _shape_mesh(shape, step, name, collection, passes=2, lo=None, hi=None):
     verts, quads = S.mesh_field(shape, step, lo, hi)
-    if smooth:
-        verts = _smooth(verts, quads, smooth)
-    return _mesh_object(name, verts, quads, collection), verts
-
-
-# Hair ------------------------------------------------------------------------------
-
-class Hairline(S.Shape):
-    """Above the hairline: 1.733 m at the middle of the forehead, rising towards the
-    temples, then down the sides to 1.595 m at the nape (inside is negative)."""
-
-    lo = np.array([-0.15, -0.16, 1.50])
-    hi = np.array([0.15, 0.17, 1.86])
-
-    def field(self, X, Y, Z):
-        temples = 7.0 * X * X * np.clip((0.02 - Y) / 0.08, 0.0, 1.0)
-        line = 1.733 - 0.70 * (Y + 0.09) + temples
-        return (line - Z) * 0.82
-
-
-def _hair_region():
-    """Where hair grows: above the hairline, around the ears, with sideburns."""
-    top = Hairline()
-    sideburn = Cone((0.076, -0.004, 1.705), (0.074, -0.010, 1.658), 0.0075)
-    region = Union([top] + _both([sideburn]), k=0.01)
-    ear = Ellipsoid((0.080, 0.012, 1.664), (0.030, 0.034, 0.040))
-    return Cut(region, Union(_both([ear])), k=0.008)
-
-
-def _brows(head):
-    """Two brows, a few millimetres proud of the skin above the eyes."""
-    inner = Ellipsoid((0.021, -0.093, 1.7005), (0.013, 0.02, 0.0044), S.rotation(ry=0.10))
-    outer = Ellipsoid((0.043, -0.085, 1.7035), (0.015, 0.02, 0.0034), S.rotation(ry=-0.10))
-    return Within(Shell(head, 0.0024), Union(_both([inner, outer]), k=0.004))
-
-
-def _hair_styles(head):
-    """Each style as a shape: a layer over the scalp, thicker where the style has volume."""
-    region = _hair_region()
-
-    def layer(thickness):
-        return Layer(head, region, thickness, edge=0.03, edge_min=0.0022)
-
-    def ramp(v, lo, hi):
-        return np.clip((v - lo) / (hi - lo), 0.0, 1.0)
-
-    def strands(X, Y, Z, depth):
-        """Clumps combed front to back: ridges across the head that wander a little."""
-        return depth * np.sin(X * 330.0 + 2.0 * np.sin(Y * 45.0)) * ramp(Z, 1.70, 1.74)
-
-    rng = np.random.default_rng(51)
-    curls = []
-    for _ in range(170):
-        # Points over the scalp, pushed out to the curls' layer.
-        theta = rng.uniform(0, 2 * np.pi)
-        phi = rng.uniform(0.0, 1.35)
-        d = np.array([np.sin(phi) * np.cos(theta), np.sin(phi) * np.sin(theta), np.cos(phi)])
-        centre = np.array([0.0, 0.012, 1.705]) + d * np.array([0.098, 0.115, 0.112])
-        curls.append(Ellipsoid(centre, (rng.uniform(0.012, 0.017),) * 3))
-    curly = Within(Union([Layer(head, region, lambda X, Y, Z: 0.020 + 0 * X, edge=0.03, edge_min=0.003)] + curls,
-                         k=0.006), Shell(region, -0.004))
-    bun = Ellipsoid((0.0, 0.112, 1.735), (0.030, 0.027, 0.028))
-    return {
-        "hair_bald": None,
-        "hair_buzz": layer(lambda X, Y, Z: 0.0025 + 0 * X),
-        "hair_short": layer(lambda X, Y, Z: 0.006 + 0.012 * ramp(Z, 1.70, 1.77) + 0.006 * ramp(-Y, 0.0, 0.08)
-                            * ramp(Z, 1.72, 1.76) + strands(X, Y, Z, 0.0025)),
-        "hair_curly": curly,
-        "hair_swept": layer(lambda X, Y, Z: 0.004 + 0.022 * ramp(Z, 1.71, 1.78) * (1.0 - 0.4 * ramp(Y, 0.0, 0.10))
-                            + 0.006 * ramp(-Y, 0.02, 0.09) * ramp(Z, 1.73, 1.77) + strands(X, Y, Z, 0.0035)),
-        "hair_bun": Union([layer(lambda X, Y, Z: 0.006 + 0.004 * ramp(Z, 1.72, 1.78) + strands(X, Y, Z, 0.0015)), bun],
-                          k=0.012),
-    }
-
-
-HAIR_TRIANGLES = {"hair_bald": 160, "hair_buzz": 520, "hair_short": 900, "hair_curly": 1400,
-                  "hair_swept": 1000, "hair_bun": 1000}
-
-
-def build_hair(figure, collection):
-    """One mesh per hair style, each with the brows; inside of the head removed."""
-    brows = _brows(figure.head)
-    lo, hi = np.array([-0.15, -0.16, 1.55]), np.array([0.15, 0.17, 1.88])
-    made = []
-    for name, style in _hair_styles(figure.head).items():
-        shape = brows if style is None else Union([style, brows])
-        verts, quads = S.mesh_field(shape, HAIR_STEP, lo, hi)
-        # Drop the part of the layer inside the head; its open edge is hidden there.
-        verts, quads = _keep_vertices(verts, quads, figure.head.at(verts) > -0.0012)
-        obj = _mesh_object(name, _smooth(verts, quads, 1), quads, collection)
-        _collapse(obj, HAIR_TRIANGLES[name])
-        obj.data.materials.append(material("hair"))
-        for poly in obj.data.polygons:
-            poly.use_smooth = True
-        made.append(obj)
-    return made
+    if passes:
+        verts = smooth(verts, quads, passes)
+    return mesh_object(name, verts, quads, collection), verts
 
 
 # Shirt number ----------------------------------------------------------------------
@@ -742,7 +556,7 @@ def build_number(body, collection):
              for j in range(rows) for i in range(cols)]
     # Wound to face backwards (+y), the way the panel is seen.
     faces = [f[::-1] for f in faces]
-    obj = _mesh_object("number", np.array(verts), np.array(faces), collection)
+    obj = mesh_object("number", np.array(verts), np.array(faces), collection)
     layer = obj.data.uv_layers.new(name="UVMap")
     for poly in obj.data.polygons:
         for loop in poly.loop_indices:
@@ -788,9 +602,9 @@ def build_coat(figure, collection):
     # Open the coat where its caps cross the body: at the hem, the cuffs and the neck.
     keep = (core.at(verts) > -0.002) | (verts[:, 2] < COAT_HEM - 0.03)
     keep &= NECK.at(verts) > 0.004
-    verts, quads = _keep_vertices(verts, quads, keep)
-    obj = _mesh_object("coat", _smooth(verts, quads, 2), quads, collection)
-    _collapse(obj, COAT_TRIANGLES)
+    verts, quads = keep_vertices(verts, quads, keep)
+    obj = mesh_object("coat", smooth(verts, quads, 2), quads, collection)
+    collapse(obj, COAT_TRIANGLES)
     obj.data.materials.append(material("coat"))
     for poly in obj.data.polygons:
         poly.use_smooth = True
@@ -926,7 +740,7 @@ def build_body(armature):
     _transfer(number, body, armature)
     coat = build_coat(figure, collection)
     _transfer(coat, body, armature)
-    hair = build_hair(figure, collection)
+    hair = hair_styles.build_hair(figure.head, collection)
     for obj in hair:
         _bind(obj, armature, {"head": np.ones(len(obj.data.vertices))})
     parts = [body, eyes, number, coat] + hair

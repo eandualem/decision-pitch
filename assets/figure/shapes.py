@@ -450,6 +450,11 @@ def mirror(shape):
     raise TypeError(f"cannot mirror {type(shape).__name__}")
 
 
+def both(shapes):
+    """Left-side shapes and their mirror images on the right."""
+    return list(shapes) + [mirror(s) for s in shapes]
+
+
 # Surface nets -------------------------------------------------------------------------
 
 _CORNERS = np.array([[i, j, k] for k in (0, 1) for j in (0, 1) for i in (0, 1)])
