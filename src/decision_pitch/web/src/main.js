@@ -180,6 +180,7 @@ function draw(frameTime) {
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
     actors.showNumbers(broadcast.wide); // by this frame's shot, after a cut too
+    touchline.showLabels(broadcast.managers);
     touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }

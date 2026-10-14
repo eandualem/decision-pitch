@@ -651,7 +651,11 @@ line of sight. Across twelve goals in recorded bot matches the scorer stayed
 in frame throughout, the camera never entered a player, a goal or the stands,
 and it filmed the scorer's front most of the time. The numbers above the
 players show on the wide shot only, never in the close-up or a manager shot,
-and the moment banner sits in the lower left, clear of the scorer.
+and the moment banner sits in the lower left, clear of the scorer. The
+managers' name labels are the other way round: they show in the managers'
+shots only, sized for those shots at about a quarter of a manager's height.
+Sized for the wide shot, they hung at its lower edge over managers still out
+of view and stood taller than a manager's head and shoulders in a cutaway.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
 camera and in a close-up in a way that articulated boxes cannot, and stride

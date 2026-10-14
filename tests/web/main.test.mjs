@@ -41,6 +41,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     handleEvent: (...args) => calls.push([`${name}.event`, ...args]),
     handleMessage: (...args) => calls.push([`${name}.message`, ...args]),
     setSnapshot: (...args) => calls.push([`${name}.snapshot`, ...args]),
+    showLabels: (...args) => calls.push([`${name}.labels`, ...args]),
   });
   const context = {
     THREE: {
@@ -60,7 +61,7 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     createCamera: (camera) => {
       calls.push(['camera.create', camera.fov]);
       camera.fov = 20; // a wide shot narrows the lens
-      return { ...component('camera')(), wide: false };
+      return { ...component('camera')(), wide: false, managers: true };
     },
     createMoments: component('moments'),
     createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline, loadFigure,
@@ -312,14 +313,16 @@ test('each match\'s camera starts from the same lens, whatever the last match le
   assert.deepEqual(named(app.calls, 'camera.create').map(([, fov]) => fov), [40, 40]);
 });
 
-test('the numbers above the players follow the shot of this frame, after the camera chooses it', () => {
+test('the numbers above the players and the managers\' labels follow the shot of this frame, after the camera chooses it', () => {
   const app = setup();
   app.send(hello);
   app.send(snapshot(1));
   app.wait(100);
   app.send(snapshot(1.1));
   app.tick(50);
-  const order = app.calls.map(([name]) => name).filter(name => ['actors.update', 'camera.update', 'actors.numbers'].includes(name));
-  assert.deepEqual(order.slice(-3), ['actors.update', 'camera.update', 'actors.numbers']);
+  const shown = ['actors.update', 'camera.update', 'actors.numbers', 'touchline.labels'];
+  const order = app.calls.map(([name]) => name).filter(name => shown.includes(name));
+  assert.deepEqual(order.slice(-4), shown);
   assert.equal(named(app.calls, 'actors.numbers').at(-1)[1], false, 'the camera is not on the wide shot');
+  assert.equal(named(app.calls, 'touchline.labels').at(-1)[1], true, 'but on the managers');
 });
