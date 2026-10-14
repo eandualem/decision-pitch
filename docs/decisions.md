@@ -438,8 +438,9 @@ assistant model, and none when there are none. There is no crowd. The wide
 shot stays on the match, at the same size as before, so the managers are in it
 when play comes near their touchline. While the ball is dead the camera cuts
 briefly to a manager: after the scorer's close-up, at a card, at a
-substitution and, at most about once in 45 seconds, at another restart. It
-never cuts away during open play.
+substitution and, at most about once in 45 seconds, at a goal kick, corner
+or free kick. Throw-ins are taken too quickly for a cut, in about a second.
+It never cuts away during open play.
 
 **Buffered interpolation.** The page renders a fixed delay, about 100 ms,
 behind the newest snapshot instead of chasing the last two. A timeline module
