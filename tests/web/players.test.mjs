@@ -392,6 +392,23 @@ test('a kick blocked within one snapshot shows the swing and the ball meets both
   assert.ok(ui.forward.limbs[1].rotation.x < -0.2, 'the kicker swung');
 });
 
+test('a goalkeeper running along its line turns to face the shot and dives across it', () => {
+  const ui = setup();
+  // The engine has it facing +y, the way it runs along its line; the shot comes from +x.
+  for (let i = 0; i < 12; i++) {
+    const a = snap(1 + i * STEP, [player(1, 0, i * 0.12, { heading: Math.PI / 2, dive: true })], { x: 12 - i, y: 1 });
+    const b = snap(1 + (i + 1) * STEP, [player(1, 0, (i + 1) * 0.12, { heading: Math.PI / 2, dive: true })], { x: 11 - i, y: 1 });
+    ui.actors.update(a, b, 0.5, STEP, 1 + i * STEP);
+  }
+  const facing = ui.keeper.body.rotation.y - Math.PI / 2;
+  assert.ok(Math.abs(facing - Math.atan2(1, 6)) < 0.2, `faces the shot: ${facing}`);
+  // Moving to its left as it faces the shot (+y): it rolls left, negative about its forward axis.
+  assert.ok(ui.keeper.body.rotation.z < -0.3, `dives across: ${ui.keeper.body.rotation.z}`);
+  const rest = snap(2, [player(1, 0, 1.5, { heading: Math.PI / 2 })], { x: 30, y: 0 });
+  for (let i = 0; i < 90; i++) ui.actors.update(rest, rest, 1, 1 / 60, 2 + i / 60);
+  assert.ok(Math.abs(ui.keeper.body.rotation.y - Math.PI) < 0.05, 'and turns back to its run');
+});
+
 test('a touch from before the page joined is not replayed', () => {
   const ui = setup();
   const touch = { player: 2, kind: 'kick', t: 1, x: 0.6, y: 0, z: 0.11 };

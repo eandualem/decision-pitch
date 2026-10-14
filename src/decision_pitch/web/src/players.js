@@ -171,7 +171,7 @@ export function createPlayers(scene, teams) {
       body.rotation.order = 'YXZ'; // turn to face, then lean forwards, then roll sideways
       actors.set(player.id, {
         group, body, limbs, team: teamIndex, stride: index * 0.8, heading: 0, pace: 0,
-        celebrateUntil: -Infinity, pose: null, lean: 0,
+        celebrateUntil: -Infinity, pose: null, lean: 0, facing: 0, faceYaw: 0, guard: 0,
       });
     });
   });
@@ -234,7 +234,8 @@ export function createPlayers(scene, teams) {
       if (!player) return;
       const dx = touch.x - player.x;
       const dy = touch.y - player.y;
-      pose.reach = reach(-dx * Math.sin(player.heading) + dy * Math.cos(player.heading), touch.z, Boolean(player.dive));
+      const face = actor.faceYaw; // across the way the ball came
+      pose.reach = reach(-dx * Math.sin(face) + dy * Math.cos(face), touch.z, Boolean(player.dive));
     }
     actor.pose = pose;
   }
@@ -290,10 +291,19 @@ export function createPlayers(scene, teams) {
       let pitch = 0;
       let lift = celebrating ? Math.abs(Math.sin(now * 7)) * 0.3 : Math.abs(Math.sin(actor.stride)) * actor.pace * 0.06;
 
-      // A goalkeeper diving across its goal leans into the dive as it gathers pace.
+      // A goalkeeper going for the ball faces where it comes from, whichever way the engine
+      // has it running along its line, and leans across into a dive as it gathers pace.
+      const bx = after.ball.x - player.x;
+      const by = after.ball.y - player.y;
+      if (bx * bx + by * by > 6.25) actor.faceYaw = Math.atan2(by, bx);
+      const pose = stopped ? null : actor.pose;
+      if (stopped) actor.pose = null;
+      const guarding = !stopped && (Boolean(player.dive) || Boolean(pose?.reach));
+      actor.guard = stopped ? 0 : mix(actor.guard, guarding ? 1 : 0, 1 - Math.exp(-step * (guarding ? 12 : 3)));
+      actor.facing = angle(actor.heading, actor.faceYaw, actor.guard);
       let lean = 0;
       if (!stopped && player.dive && !teleport && span > 0) {
-        const lateral = (-(player.x - old.x) * Math.sin(actor.heading) + (player.y - old.y) * Math.cos(actor.heading)) / span;
+        const lateral = (-(player.x - old.x) * Math.sin(actor.facing) + (player.y - old.y) * Math.cos(actor.facing)) / span;
         lean = -Math.sign(lateral) * Math.min(1, Math.abs(lateral) / 5) * 0.9;
       }
       actor.lean = stopped ? 0 : mix(actor.lean, lean, 1 - Math.exp(-step * (player.dive ? 10 : 4)));
@@ -303,17 +313,14 @@ export function createPlayers(scene, teams) {
       armB = mix(armB, -2.9, stretch);
 
       // The body meets the ball at the touch's moment of contact.
-      const pose = stopped ? null : actor.pose;
-      if (stopped) actor.pose = null;
       const u = pose ? time - pose.at : 0;
-      actor.facing = actor.heading;
       if (pose && u > pose.end) actor.pose = null;
       else if (pose) {
         const w = Math.min(clamp((u - pose.from) / 0.06, 0, 1), clamp((pose.end - u) / 0.15, 0, 1));
         if (pose.aim === null && (pose.aim = aim(pose, after) ?? aim(pose, latest)) != null) pose.aimed = u;
         // A turn starts from where the body is, even when the aim is known only late.
         const turning = track(TURN, u) * Math.min(w, clamp((u - pose.aimed) / 0.06, 0, 1));
-        if (pose.aim != null) actor.facing = angle(actor.heading, pose.aim, turning);
+        if (pose.aim != null) actor.facing = angle(actor.facing, pose.aim, turning);
         if (pose.reach) {
           const e = track(KEEPER_POSE.envelope, u) * w;
           roll = mix(roll, pose.reach.roll, e);
