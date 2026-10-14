@@ -96,7 +96,7 @@ while it waits.
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
 | Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
-| Goal kicks | Implemented. Opponents stay 9.15 m away; they are not yet kept out of the penalty area |
+| Goal kicks | Implemented. Opponents stay 9.15 m away and outside the penalty area until the kick is taken |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends. No added time |
 | Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |

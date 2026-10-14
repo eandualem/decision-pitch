@@ -615,12 +615,17 @@ class Match:
     def _allowed_spot(self, p: Player, margin: float = 0.0) -> tuple[float, float]:
         """The nearest spot to `p` where the laws let it stand for this restart, `margin` m
         clear of the line: in its own half at a kick-off, and as far from the ball as the
-        restart requires if it is an opponent of the restarting team."""
+        restart requires if it is an opponent of the restarting team; at a goal kick, also
+        outside the penalty area."""
         if self.phase == "penalty":
             return self._penalty_spot(p, margin)
         x, y = p.x, p.y
         if self.phase == "kickoff" and x * -self.attack(p.team) < 0:
             x = -self.attack(p.team) * margin  # back over halfway
+        goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
+        if (self.phase == "goal_kick" and p.team != self.restart_team
+                and abs(x - goal) <= pitch.PENALTY_DEPTH and abs(y) <= pitch.PENALTY_HALF_WIDTH):
+            x = goal - math.copysign(pitch.PENALTY_DEPTH + 0.01 + margin, goal)  # just outside
         if p.team != self.restart_team and self.phase in RESTART_DISTANCE:
             x, y = self._away(p, x, y, RESTART_DISTANCE[self.phase] + margin)
         return x, y
