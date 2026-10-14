@@ -512,6 +512,22 @@ test('a figure turning on the spot steps round with the turn; at a run it cuts, 
   made.dispose();
 });
 
+test('moving slowly to the side or back, a figure side-steps in the jockey shuffle; on the ball or standing, it does not', () => {
+  const made = createFigures(fixtureMore());
+  const shuffled = (speed, travel, sets = null) => {
+    const person = made.create({ seed: 4 });
+    for (let i = 0; i < 60; i++) person.update(1 / 60, speed, travel, sets);
+    return person.state().sets.jockey ?? 0;
+  };
+  assert.ok(shuffled(0.8, 3 * Math.PI / 4) > 0.95, 'back and to the side');
+  assert.ok(shuffled(1, -Math.PI / 2) > 0.95, 'to the right');
+  assert.ok(shuffled(0.8, 0.5) < 0.01, 'not going forwards');
+  assert.ok(shuffled(3, Math.PI / 2) < 0.01, 'not at a jog');
+  assert.ok(shuffled(0, Math.PI / 2) < 0.01, 'not standing');
+  assert.ok(shuffled(0.8, Math.PI / 2, { dribble: 1, jockey: 0, shield: 0 }) < 0.01, 'not with the ball');
+  made.dispose();
+});
+
 test('a brake follows the stop by the figure\'s speed, a cut plays at the run\'s pace, and a turn gives way to setting off', () => {
   const speeds = [[0, 6], [0.25, 6], [0.41, 4.5], [0.75, 4.5]];
   assert.equal(speedAt(speeds, 0.1), 6);

@@ -19,6 +19,12 @@ const STILL = 0.4; // m/s below which a one-shot plays with its whole body
 // slow drift takes fewer, lifted steps rather than skimming the grass at a walk's cadence.
 const LEAST_STEP = 0.35;
 const SET_BLEND = 0.18; // s over which a set (dribble, jockey, shield) comes in or goes
+// Moving slowly to the side or back, a figure side-steps (the jockey set's shuffle) rather
+// than crossing its feet in a part-blended walk: by the angle of travel off its facing,
+// while moving, and below a jog. Not on the ball.
+const SHUFFLE_SIDE = [55 * Math.PI / 180, 80 * Math.PI / 180];
+const SHUFFLE_MOVING = [0.15, 0.4]; // m/s
+const SHUFFLE_SLOW = [1.4, 2.2]; // m/s
 export const TOUCH_PHASE = 0.4; // where a loop without a `touch` meets a carried ball
 // How much faster or slower than its own pace a stride may go to meet the ball on time.
 const STEER = [0.75, 1.3];
@@ -993,6 +999,7 @@ export function createFigures(template, { footLock = true } = {}) {
     });
     const weights = new Float32Array(loops.length);
     const setShares = new Float32Array(steps.sets.length); // each set's share, as it comes and goes
+    const jockeySet = steps.set.jockey ?? -1;
     // Idle variants: idle's own action and one for each other, the one stood in, the one
     // being changed to and how far.
     const idles = steps.idles.map(({ name }) => {
@@ -1357,8 +1364,12 @@ export function createFigures(template, { footLock = true } = {}) {
         lastTravel = travel;
         const step = Math.max(0, dt);
         const follow = 1 - Math.exp(-step / SET_BLEND);
+        const onBall = sets ? Math.max(sets.dribble || 0, sets.shield || 0) : 0;
+        const shuffle = jockeySet > 0 ? ramp(Math.abs(wrap(travel)), ...SHUFFLE_SIDE) * ramp(speed, ...SHUFFLE_MOVING)
+          * (1 - ramp(speed, ...SHUFFLE_SLOW)) * (1 - onBall) : 0;
         for (let s = 1; s < setShares.length; s++) {
-          const target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
+          let target = sets ? clamp(sets[steps.sets[s].name] || 0, 0, 1) : 0;
+          if (s === jockeySet) target = Math.max(target, shuffle);
           setShares[s] += (target - setShares[s]) * follow;
         }
         // The acceleration over the ground, from the velocity drawn, in the figure's space.
