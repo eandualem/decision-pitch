@@ -90,7 +90,15 @@ a test or from the command line without a browser.
   goal that holds or supports does the same. Over the same 16 matches, this
   cut the share of shots scored from 35% to 16% (goals from 2.8 to 1.1 a
   match), and from 41% to 9% (11 to 3.6 goals) with every outfield player
-  answering `shoot`, as Laya mostly does.
+  answering `shoot`, as Laya mostly does. A keeper in its own area with a
+  loose ball heading into its goal (within 0.5 m of a post) dives: it goes
+  straight across without turning first, still facing the play, and
+  accelerates at 8 m/s² instead of 4. Running and turning, it was beaten by
+  a shot from 18 m before it got across: over 32 matches with models
+  answering as Laya does, 28% of shots from 16-20 m and 15% from 20-24 m
+  scored, now 11% and 3.5% (goals from 3.1 to 1.6 a match). A larger reach
+  gave similar numbers but would show the ball stopping short of the keeper;
+  12 m/s² saved nearly every shot from outside 12 m.
 - **Fairness.** Both teams run through the same code with the same physics.
   Each player's state is built by one function, mirrored for the team
   attacking the other way, so neither side gets a different view.

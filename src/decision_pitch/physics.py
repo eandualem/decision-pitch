@@ -25,6 +25,7 @@ MAX_TRAVEL = 0.08  # m a ball may move in one substep: under half the ball-to-fr
 PLAYER_RADIUS = 0.4
 TOP_SPEED = 7.5  # m/s
 ACCELERATION = 4.0  # m/s²
+DIVE_ACCELERATION = 8.0  # m/s², a goalkeeper diving across its goal
 TURN_RATE = 9.0  # rad/s standing still; a running player turns more slowly
 
 
@@ -144,23 +145,32 @@ def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, floa
     return True
 
 
-def step_player(player: Player, tx: float, ty: float, speed: float, dt: float = STEP) -> None:
+def step_player(
+    player: Player, tx: float, ty: float, speed: float, dt: float = STEP, dive: bool = False
+) -> None:
     """Run towards (tx, ty) at up to `speed`, slowing to arrive, turning at a limited
-    rate and accelerating at a limited rate. A speed of 0 stops the player."""
+    rate and accelerating at a limited rate. A speed of 0 stops the player. A diving
+    goalkeeper goes straight at (tx, ty) without turning, still facing the play, and
+    accelerates faster."""
+    accel = DIVE_ACCELERATION if dive else ACCELERATION
     dx, dy = tx - player.x, ty - player.y
     dist = math.hypot(dx, dy)
-    want = 0.0
+    want, way = 0.0, player.heading
     if speed > 0 and dist > 0.05:
-        want = min(speed, TOP_SPEED, math.sqrt(2 * ACCELERATION * dist))
-        turn = (math.atan2(dy, dx) - player.heading + math.pi) % (2 * math.pi) - math.pi
-        most = TURN_RATE / (1 + player.speed / 3) * dt
-        player.heading = (player.heading + max(-most, min(most, turn)) + math.pi) % (2 * math.pi) - math.pi
-        want *= max(0.0, math.cos(turn))  # slow down to turn
-    ax = want * math.cos(player.heading) - player.vx
-    ay = want * math.sin(player.heading) - player.vy
+        want = min(speed, TOP_SPEED, math.sqrt(2 * accel * dist))
+        if dive:
+            way = math.atan2(dy, dx)
+        else:
+            turn = (math.atan2(dy, dx) - player.heading + math.pi) % (2 * math.pi) - math.pi
+            most = TURN_RATE / (1 + player.speed / 3) * dt
+            player.heading = (player.heading + max(-most, min(most, turn)) + math.pi) % (2 * math.pi) - math.pi
+            way = player.heading
+            want *= max(0.0, math.cos(turn))  # slow down to turn
+    ax = want * math.cos(way) - player.vx
+    ay = want * math.sin(way) - player.vy
     change = math.hypot(ax, ay)
-    if change > ACCELERATION * dt:
-        ax, ay = ax / change * ACCELERATION * dt, ay / change * ACCELERATION * dt
+    if change > accel * dt:
+        ax, ay = ax / change * accel * dt, ay / change * accel * dt
     player.vx += ax
     player.vy += ay
     player.x += player.vx * dt

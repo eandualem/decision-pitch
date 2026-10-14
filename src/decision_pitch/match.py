@@ -53,6 +53,7 @@ KEEPER_CONTROL = 1.3  # a goalkeeper's reach in its own penalty area
 KEEPER_HEIGHT = 2.6
 CONTROL_SPEED = 18.0  # m/s, relative to a player, above which a loose ball bounces off it
 PARRY_SPEED = 10.0  # m/s above which a goalkeeper at full stretch parries a ball, not catches it
+DIVE_MARGIN = 0.5  # m outside a post within which a ball heading for the goal makes its keeper dive
 DEFLECT_PUSH = 0.4  # share of its speed a deflected ball leaves outwards from the player with
 DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected ball keeps
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
@@ -291,7 +292,7 @@ class Match:
             # the laws ask it to retreat, whatever it was told
             step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
         elif isinstance(command, MoveTo):
-            step_player(p, command.x, command.y, command.speed)
+            step_player(p, command.x, command.y, command.speed, dive=self._dives(p))
         elif isinstance(command, KickTo) and self.owner != p.id:
             # run at the ball from behind, so the kick goes the right way
             angle = math.atan2(command.y - self.ball.y, command.x - self.ball.x)
@@ -299,6 +300,18 @@ class Match:
             step_player(p, tx, ty, TOP_SPEED)
         else:
             step_player(p, p.x, p.y, 0.0)
+
+    def _dives(self, p: Player) -> bool:
+        """Whether `p` is a goalkeeper in its own area with a loose ball heading into its
+        goal: it dives across rather than running (docs/decisions.md, section 2)."""
+        if self.phase != "play" or p.position != "GK" or self.owner is not None:
+            return False
+        if not self._in_own_penalty_area(p.x, p.y, p.team):
+            return False
+        b, goal_x = self.ball, -self.attack(p.team) * pitch.HALF_LENGTH
+        if (goal_x - b.x) * b.vx <= 0:
+            return False  # not moving towards the goal
+        return abs(b.y + b.vy * (goal_x - b.x) / b.vx) <= pitch.GOAL_WIDTH / 2 + DIVE_MARGIN
 
     # -- possession and kicks ---------------------------------------------------------------
 

@@ -195,6 +195,21 @@ def test_the_goalkeeper_gets_across_to_a_shot_but_lets_a_wide_one_go():
     assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper))
 
 
+@pytest.mark.parametrize("dives", [True, False])
+def test_a_goalkeeper_dives_to_keep_out_a_shot_it_could_not_reach_running(dives, monkeypatch):
+    m = in_play(ball=(-34.5, 0.0), velocity=(-23.4, 3.9, 0.0), last_touch=1)  # 18 m out, at the corner
+    keeper = m.player(1)
+    keeper.x, keeper.y, keeper.heading = -51.0, 0.0, 0.0
+    if not dives:
+        monkeypatch.setattr(Match, "_dives", lambda self, p: False)
+    events = []
+    for _ in range(round(1.5 / STEP)):
+        m.command(keeper.id, bots.command(m, keeper))
+        m.step()
+        events += [e["kind"] for e in m.drain_events()]
+    assert ("goal" in events) is not dives
+
+
 def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
     m = in_play(ball=(0.5, 0.0))
     carrier, opponent = m.player(7), m.player(18)
