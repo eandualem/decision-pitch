@@ -21,14 +21,18 @@ BONES = ["root", "hips", "spine", "chest", "neck", "head"] + [
     for bone in ("shoulder", "upper_arm", "forearm", "hand", "thigh", "shin", "foot", "toe")
 ]
 REGIONS = ["skin", "shirt", "sleeve", "hands", "shorts", "legs", "socks", "boots"]
-LOOPS = ["idle", "walk", "jog", "sprint", "backpedal", "strafe_L", "strafe_R"]
+LOOPS = ["idle", "walk", "jog", "sprint", "backpedal", "strafe_L", "strafe_R"] + [
+    f"{pace}_{way}" for pace in ("walk", "jog") for way in ("FL", "FR", "L", "R", "BL", "BR", "B")
+]
+DIRECTIONS = ["forward", "forward_left", "left", "back_left", "back", "back_right", "right", "forward_right"]
+WALK, JOG = (1.2, 1.6), (3.4, 4.5)  # m/s: the paces every direction has a loop at
 PLAYS = ["pass", "shot", "control", "tackle", "header", "throw_in", "celebrate"]
 KEEPER = ["keeper_dive_L", "keeper_dive_R", "keeper_catch", "keeper_catch_high"]
 TOUCHLINE = ["instruct", "change", "clap", "protest", "cheer", "despair"]
 TOUCHES = ["pass", "shot", "control", "tackle", "header", "throw_in"] + KEEPER
 
 FIGURE_TRIANGLES = 11_000  # body, eyes and the largest hair style: about 10k as a guide
-GLB_BYTES = 4_000_000  # a few MB at most
+GLB_BYTES = 2_000_000  # about 2 MB at most
 
 
 def read_glb(path):
@@ -160,10 +164,30 @@ def test_every_clip_is_an_animation_described_in_figure_json(gltf, info):
         assert info["clips"][clip]["loop"] is True, clip
     for clip in LOOPS[1:]:
         assert info["clips"][clip]["speed"] > 0, clip
-        assert info["clips"][clip]["direction"] in ("forward", "back", "left", "right"), clip
+        assert info["clips"][clip]["direction"] in DIRECTIONS, clip
     for clip in TOUCHES:
         meta = info["clips"][clip]
         assert meta["loop"] is False and 0 < meta["contact"] < meta["duration"], clip
+
+
+def test_every_loop_says_when_its_feet_are_planted(info):
+    # Left planted over [0, duty) of the cycle, right over [0.5, 0.5 + duty).
+    for name, meta in info["clips"].items():
+        if meta["loop"] and "speed" in meta:
+            assert 0 < meta["duty"] < 1, name
+
+
+def test_every_direction_has_a_loop_at_a_walk_and_at_a_jog(info):
+    run = [meta for meta in info["clips"].values()
+           if meta["loop"] and "speed" in meta and meta.get("set", "run") == "run"]
+    for direction in DIRECTIONS:
+        speeds = [meta["speed"] for meta in run if meta["direction"] == direction]
+        assert any(WALK[0] <= speed <= WALK[1] for speed in speeds), direction
+        assert any(JOG[0] <= speed <= JOG[1] for speed in speeds), direction
+
+
+def test_the_side_shuffles_are_jockeying(info):
+    assert info["clips"]["strafe_L"]["set"] == info["clips"]["strafe_R"]["set"] == "jockey"
 
 
 def test_a_figure_stays_within_the_triangle_budget(gltf, info):

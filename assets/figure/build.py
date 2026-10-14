@@ -5,8 +5,8 @@
 
 A full build clears the scene, makes the skeleton (rig.py), the body, kit, hair,
 coat and number panel (body.py) and the clips (clips.py), saves
-assets/figure/figure.blend and exports src/decision_pitch/web/figures/figure.glb
-with figure.json beside it. The scripts are the source of truth: a full build
+assets/figure/figure.blend and exports src/decision_pitch/web/figures/figure.glb,
+made smaller by compact.py, with figure.json beside it. The scripts are the source of truth: a full build
 regenerates the .blend.
 
 `--export-only` opens the saved figure.blend as it is, for instance after
@@ -84,6 +84,8 @@ def check_clean(path):
 
 
 def export(info):
+    import compact
+
     os.makedirs(OUT, exist_ok=True)
     scene = bpy.context.scene
     scene.frame_set(0)
@@ -123,6 +125,7 @@ def export(info):
         use_visible=False,
         use_renderable=False,
     )
+    compact.compact(GLB)
     with open(JSON, "w") as f:
         json.dump(info, f, indent=1, sort_keys=True)
         f.write("\n")

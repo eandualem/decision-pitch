@@ -43,6 +43,7 @@ without Blender.
 | `shapes.py` | Signed distance shapes and the surface mesher the body, hair and coat are modelled with. |
 | `meshes.py` | Mesh helpers and the plain materials. |
 | `build.py` | Runs them in order, saves the `.blend` and exports. |
+| `compact.py` | Makes the exported `.glb` smaller without changing what the page draws: drops tracks that hold a bone at rest and keys that interpolating their neighbours reproduces (within 0.05 degrees or 0.3 mm), and stores rotations as 16-bit integers. |
 | `render.py` | Draws stills for checking by eye. |
 
 The body is modelled as smooth signed-distance shapes around the skeleton's

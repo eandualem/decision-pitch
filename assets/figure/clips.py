@@ -638,7 +638,7 @@ def trunk_cycle(u, duty, hz, bob, run, sway, hyaw, hroll, hpitch, lean, chest_ya
 
 
 class Clip:
-    def __init__(self, name, frames, sample, loop, speed=None, direction=None, contact=None):
+    def __init__(self, name, frames, sample, loop, speed=None, direction=None, contact=None, duty=None, **info):
         self.name = name
         self.direction = direction
         self.frames = frames
@@ -646,6 +646,8 @@ class Clip:
         self.loop = loop
         self.speed = speed
         self.contact = contact
+        self.duty = duty  # a loop's share of the cycle each foot is on the grass
+        self.info = info  # more of figure.json's description
 
     def meta(self):
         out = {"loop": self.loop, "duration": round(self.frames / FPS, 4)}
@@ -654,6 +656,9 @@ class Clip:
             out["direction"] = self.direction
         if self.contact is not None:
             out["contact"] = round(self.contact, 4)
+        if self.duty is not None:
+            out["duty"] = round(self.duty, 4)
+        out.update(self.info)
         return out
 
 
@@ -715,7 +720,7 @@ def walk_clip(solver):
             **arm_swing(u, -2.0, 17.0, 28.0, 10.0, abd=7.0, twist=4.0, pron=10.0),
         },
     )
-    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("walk", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 def jog_clip(solver):
@@ -733,7 +738,7 @@ def jog_clip(solver):
             **arm_swing(u, -5.0, 35.0, 88.0, 14.0, abd=13.0, twist=-2.0),
         },
     )
-    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("jog", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 def sprint_clip(solver):
@@ -753,7 +758,7 @@ def sprint_clip(solver):
             **arm_swing(u, -2.0, 50.0, 90.0, 16.0, abd=12.0, twist=-4.0),
         },
     )
-    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward")
+    return Clip("sprint", gait.frames, gait, loop=True, speed=gait.speed, direction="forward", duty=gait.duty)
 
 
 
@@ -772,7 +777,7 @@ def backpedal_clip(solver):
             **arm_swing(u, 8.0, 20.0, 78.0, 8.0, abd=16.0, twist=4.0),
         },
     )
-    return Clip("backpedal", gait.frames, gait, loop=True, speed=gait.speed, direction="back")
+    return Clip("backpedal", gait.frames, gait, loop=True, speed=gait.speed, direction="back", duty=gait.duty)
 
 
 def strafe_clip(solver, side):
@@ -815,8 +820,9 @@ def strafe_clip(solver, side):
         swing_path=paths,
         body=body,
     )
+    # A side shuffle is the footwork of a defender jockeying; running to the side opens the hips.
     return Clip(f"strafe_{side}", gait.frames, gait, loop=True, speed=gait.speed,
-                direction="left" if side == "L" else "right")
+                direction="left" if side == "L" else "right", duty=gait.duty, set="jockey")
 
 
 def strafe_L_clip(solver):
@@ -825,6 +831,192 @@ def strafe_L_clip(solver):
 
 def strafe_R_clip(solver):
     return strafe_clip(solver, "R")
+
+
+# --------------------------------------------------------------------------
+# Loops in every direction. The page blends the loops of the two directions either
+# side of the way a player travels against the way it faces, so each direction
+# has a loop at a walk and at a jog. Off to the side and back on a diagonal the
+# player opens its hips towards the travel and steps across, the chest turned
+# half as far and the head still on the play, as a player keeping its shape while
+# watching the ball does: every direction but straight back then steps alike and
+# blends with its neighbours. Straight back is a backward walk or a backpedal.
+# Each is made for the figure's left and mirrored for its right.
+
+ANGLES = {"forward": 0.0, "forward_left": 45.0, "left": 90.0, "back_left": 135.0,
+          "back": 180.0, "back_right": -135.0, "right": -90.0, "forward_right": -45.0}
+NAMES = {0.0: "forward", 45.0: "forward_left", 90.0: "left", 135.0: "back_left", 180.0: "back"}
+MIRRORED = {"forward_left": "forward_right", "left": "right", "back_left": "back_right"}
+HIPS = {45.0: 22.0, 90.0: 55.0, 135.0: 80.0}  # how far the pelvis opens towards the travel
+
+
+def heading(angle):
+    """The unit vector `angle` degrees anticlockwise from the way the figure faces."""
+    a = math.radians(angle)
+    return Vector((math.sin(a), -math.cos(a), 0.0))
+
+
+def steps(angle, speed, frames, duty, ahead, width, hips=0.0, spread=0.0, swing=(), out=0.0):
+    """Where both feet land and how they swing, for a loop travelling at `angle`.
+
+    Each foot keeps to its own side of the pelvis, turned `hips` degrees: `width`
+    out along the pelvis's side-to-side axis, then `spread` further across the
+    travel, so feet passing on a diagonal clear each other. A foot lands `ahead`
+    of that point along the travel and is carried back `speed * duty * T` on the
+    grass. `swing` lists (k, along, z): at fraction k of the swing the ankle is
+    `along` of the way from where it lifted to where it lands (more than 1
+    reaches past it) and `z` high; `out` takes it that much wider of the other
+    foot. Returns `land` and `swing_path` for Gait, in root space.
+    """
+    d = heading(angle)
+    n = heading(angle + 90.0)  # across the travel, to its left
+    side = rot(Z, hips) @ X
+    across = math.copysign(1.0, side.dot(n))
+    stance = speed * duty * frames / FPS
+    land, paths = {}, {}
+    for s, sign in (("L", 1.0), ("R", -1.0)):
+        base = side * (width * sign) + n * (spread * across * sign)
+        on = base + d * ahead
+        off = on - d * stance
+        land[s] = (on.x, on.y)
+        paths[s] = []
+        for k, along, z in swing:
+            point = off.lerp(on, along) + n * (out * across * sign)
+            paths[s].append((k, (point.x, point.y, z)))
+    return land, paths
+
+
+def turned(p, hips, chest):
+    """Turn the pelvis `hips` degrees and the chest to `chest` degrees from the way the
+    figure faces (towards its left is positive), the head still looking that way. The
+    pelvis's sway and surge turn with it."""
+    p["hyaw"] += hips
+    twist = chest - hips
+    p["stwist"] += 0.4 * twist
+    p["ctwist"] += 0.6 * twist
+    shift = rot(Z, hips) @ Vector((p["hx"], p["hy"], 0.0))
+    p["hx"], p["hy"] = shift.x, shift.y
+    return p
+
+
+def mirrored(clip, name, direction):
+    """A loop mirrored left to right, half a cycle on so that its left foot still lands first."""
+    shift = clip.frames / FPS / 2.0
+    return Clip(name, clip.frames, lambda t: mirror(clip.sample(t + shift)), loop=True, speed=clip.speed,
+                direction=direction, duty=clip.duty, **clip.info)
+
+
+def walk_turned_clip(solver, angle, name):
+    """A walk on a diagonal or to the side: the pelvis and feet turn towards the travel,
+    the shoulders half as far and the head not at all."""
+    frames, duty, speed = 32, 0.62, 1.4
+    hips = HIPS[angle]
+    across = angle - hips  # the travel against the pelvis
+    land, paths = steps(angle, speed, frames, duty, ahead=0.34, width=0.075, hips=hips, spread=0.04,
+                        swing=[(0.3, 0.35, 0.20), (0.6, 0.71, 0.125), (0.85, 1.03, 0.12)], out=0.012)
+    toes = hips + 0.65 * across  # the feet point nearly along the travel
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.045 - 0.03 * hips / 80.0, bob=0.016, run=False, sway=0.022, hyaw=6.0, hroll=4.0,
+                        hpitch=2.0, lean=3.0, chest_yaw=8.0, look_down=6.0, flex_bob=0.7)
+        p.update(arm_swing(u, -2.0, 17.0, 28.0, 10.0, abd=7.0, twist=4.0, pron=10.0))
+        return turned(p, hips, 0.5 * hips)
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+        yaw={"L": 7.0 + toes, "R": -7.0 + toes},
+        stance_pitch=[(0.0, 14.0), (0.12, 0.0), (0.45, 0.0), (0.65, -8.0), (0.85, -26.0), (1.0, -52.0)],
+        swing_pitch=[(0.15, -38.0), (0.45, -6.0), (0.75, 6.0), (0.95, 12.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty)
+
+
+def jog_turned_clip(solver, angle, name):
+    """A jog on a diagonal or to the side, turned like the walk and leaning into the travel."""
+    frames, duty, speed = 21, 0.30, 4.0
+    hips = HIPS[angle]
+    across = angle - hips
+    land, paths = steps(angle, speed, frames, duty, ahead=0.27, width=0.06, hips=hips, spread=0.035,
+                        swing=[(0.25, 0.13, 0.33), (0.5, 0.545, 0.42), (0.78, 1.14, 0.26)], out=0.02)
+    toes = hips + 0.65 * across
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.07 - 0.03 * hips / 80.0, bob=0.024, run=True, sway=0.012, hyaw=7.0, hroll=4.0,
+                        hpitch=4.0, lean=9.0, chest_yaw=9.0, look_down=2.0)
+        p["sside"] += 0.4 * 9.0 * math.sin(math.radians(across))
+        p.update(arm_swing(u, -5.0, 36.0 - 0.1 * hips, 88.0, 14.0, abd=13.0, twist=-2.0))
+        return turned(p, hips, 0.5 * hips)
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(angle), duty=duty, land=land,
+        yaw={"L": 5.0 + toes, "R": -5.0 + toes},
+        stance_pitch=[(0.0, 4.0), (0.12, 0.0), (0.45, 0.0), (0.75, -25.0), (1.0, -62.0)],
+        swing_pitch=[(0.2, -60.0), (0.5, -30.0), (0.8, 0.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip(name, frames, gait, loop=True, speed=speed, direction=NAMES[angle], duty=duty)
+
+
+def walk_B_clip(solver):
+    """A walk backwards: the foot reaches back and lands on the ball, rolls flat and
+    leaves from the heel."""
+    frames, duty, speed = 24, 0.58, 1.4
+    land, paths = steps(180.0, speed, frames, duty, ahead=0.40, width=0.085,
+                        swing=[(0.3, 0.22, 0.14), (0.6, 0.66, 0.16), (0.85, 1.03, 0.13)], out=0.01)
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.07, bob=0.012, run=False, sway=0.02, hyaw=-4.0, hroll=3.0,
+                        hpitch=3.0, lean=4.0, chest_yaw=-5.0, look_down=4.0, flex_bob=0.6)
+        p.update(arm_swing(u, 2.0, -12.0, 30.0, 8.0, abd=9.0, twist=4.0, pron=10.0))
+        return p
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(180.0), duty=duty, land=land,
+        yaw={"L": 8.0, "R": -8.0},
+        stance_pitch=[(0.0, -16.0), (0.2, 0.0), (0.75, 0.0), (1.0, 10.0)],
+        swing_pitch=[(0.25, 6.0), (0.6, -8.0), (0.9, -16.0)],
+        swing_path=paths, body=body, drop=0.3,
+    )
+    return Clip("walk_B", frames, gait, loop=True, speed=speed, direction="back", duty=duty)
+
+
+def jog_B_clip(solver):
+    """A quick backpedal at a jog, low, on the balls of the feet, leaning over them."""
+    frames, duty, speed = 12, 0.36, 3.6
+    land, paths = steps(180.0, speed, frames, duty, ahead=0.22, width=0.09,
+                        swing=[(0.3, 0.18, 0.21), (0.6, 0.68, 0.26), (0.85, 1.04, 0.19)], out=0.008)
+
+    def body(u):
+        p = trunk_cycle(u, duty, hz=-0.10, bob=0.016, run=True, sway=0.012, hyaw=4.0, hroll=3.0,
+                        hpitch=7.0, lean=12.0, chest_yaw=5.0, look_down=-6.0, flex_bob=1.0)
+        p.update(arm_swing(u, 10.0, 24.0, 82.0, 8.0, abd=16.0, twist=4.0))
+        return p
+
+    gait = Gait(
+        solver, frames=frames, speed=speed, direction=heading(180.0), duty=duty, land=land,
+        yaw={"L": 8.0, "R": -8.0},
+        stance_pitch=[(0.0, -16.0), (0.3, -4.0), (0.7, -4.0), (1.0, -18.0)],
+        swing_pitch=[(0.3, -22.0), (0.6, -30.0), (0.85, -22.0)],
+        swing_path=paths, body=body,
+    )
+    return Clip("jog_B", frames, gait, loop=True, speed=speed, direction="back", duty=duty)
+
+
+def _both_sides(make):
+    """A clip builder for the figure's left and its mirror image for the right."""
+    def builder(solver):
+        clip = make(solver)
+        return [clip, mirrored(clip, clip.name[:-1] + "R", MIRRORED[clip.direction])]
+    return builder
+
+
+walk_FL_clips = _both_sides(lambda solver: walk_turned_clip(solver, 45.0, "walk_FL"))
+jog_FL_clips = _both_sides(lambda solver: jog_turned_clip(solver, 45.0, "jog_FL"))
+walk_L_clips = _both_sides(lambda solver: walk_turned_clip(solver, 90.0, "walk_L"))
+jog_L_clips = _both_sides(lambda solver: jog_turned_clip(solver, 90.0, "jog_L"))
+walk_BL_clips = _both_sides(lambda solver: walk_turned_clip(solver, 135.0, "walk_BL"))
+jog_BL_clips = _both_sides(lambda solver: jog_turned_clip(solver, 135.0, "jog_BL"))
 
 
 
@@ -1454,6 +1646,7 @@ def despair_clip(solver):
 
 CLIP_BUILDERS = [
     idle_clip, walk_clip, jog_clip, sprint_clip, backpedal_clip, strafe_L_clip, strafe_R_clip,
+    walk_FL_clips, jog_FL_clips, walk_L_clips, jog_L_clips, walk_BL_clips, jog_BL_clips, walk_B_clip, jog_B_clip,
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
@@ -1526,8 +1719,11 @@ def build_clips(armature):
         armature.animation_data_create()
     solver = Solver(armature)
     meta = {}
+    made = []
     for builder in CLIP_BUILDERS:
         clip = builder(solver)
+        made.extend(clip if isinstance(clip, list) else [clip])
+    for clip in made:
         frames = sample_clip(solver, clip)
         action = _key_action(armature, clip.name, frames, clip.loop)
         track = armature.animation_data.nla_tracks.new()

@@ -29,6 +29,7 @@
   "backpedal": {
    "direction": "back",
    "duration": 0.5333,
+   "duty": 0.42,
    "loop": true,
    "speed": 2.5
   },
@@ -73,8 +74,58 @@
   "jog": {
    "direction": "forward",
    "duration": 0.7333,
+   "duty": 0.3,
    "loop": true,
    "speed": 3.5
+  },
+  "jog_B": {
+   "direction": "back",
+   "duration": 0.4,
+   "duty": 0.36,
+   "loop": true,
+   "speed": 3.6
+  },
+  "jog_BL": {
+   "direction": "back_left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_BR": {
+   "direction": "back_right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_FL": {
+   "direction": "forward_left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_FR": {
+   "direction": "forward_right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_L": {
+   "direction": "left",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
+  },
+  "jog_R": {
+   "direction": "right",
+   "duration": 0.7,
+   "duty": 0.3,
+   "loop": true,
+   "speed": 4.0
   },
   "keeper_catch": {
    "contact": 0.32,
@@ -113,19 +164,24 @@
   "sprint": {
    "direction": "forward",
    "duration": 0.4667,
+   "duty": 0.22,
    "loop": true,
    "speed": 7.2
   },
   "strafe_L": {
    "direction": "left",
    "duration": 0.5333,
+   "duty": 0.3,
    "loop": true,
+   "set": "jockey",
    "speed": 2.5
   },
   "strafe_R": {
    "direction": "right",
    "duration": 0.5333,
+   "duty": 0.3,
    "loop": true,
+   "set": "jockey",
    "speed": 2.5
   },
   "tackle": {
@@ -141,6 +197,56 @@
   "walk": {
    "direction": "forward",
    "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_B": {
+   "direction": "back",
+   "duration": 0.8,
+   "duty": 0.58,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_BL": {
+   "direction": "back_left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_BR": {
+   "direction": "back_right",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_FL": {
+   "direction": "forward_left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_FR": {
+   "direction": "forward_right",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_L": {
+   "direction": "left",
+   "duration": 1.0667,
+   "duty": 0.62,
+   "loop": true,
+   "speed": 1.4
+  },
+  "walk_R": {
+   "direction": "right",
+   "duration": 1.0667,
+   "duty": 0.62,
    "loop": true,
    "speed": 1.4
   }
