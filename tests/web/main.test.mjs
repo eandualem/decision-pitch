@@ -96,7 +96,7 @@ test('draws snapshots a fixed delay behind, never blending across a restart', ()
   const touchline = named(app.calls, 'touchline.update').at(-1);
   assert.deepEqual(touchline.slice(1, 4), camera.slice(1, 4), 'the managers follow the drawn ball');
   assert.equal(camera[4], 'kickoff', 'the camera knows the drawn phase');
-  app.send(snapshot(1.3));
+  app.send(snapshot(1.3, 'goal_kick'));
   app.tick(16);
   assert.equal(named(app.calls, 'camera.update').at(-1)[4], 'kickoff', 'not the newest phase');
   assert.equal(touchline[4].ballPosition, touchline[1], 'and are given the players');

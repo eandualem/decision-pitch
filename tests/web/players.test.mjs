@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
+import { continuous } from '../../src/decision_pitch/web/src/timeline.js';
 
 const source = readFileSync(new URL('../../src/decision_pitch/web/src/players.js', import.meta.url), 'utf8')
   .replace(/^import .*;$/gm, '').replace(/^export /gm, '');
@@ -10,7 +11,7 @@ const STEP = 1 / 30;
 
 function setup() {
   const document = { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
-  const context = { THREE, document };
+  const context = { THREE, document, continuous };
   vm.createContext(context);
   vm.runInContext(source, context);
   const scene = new THREE.Scene();

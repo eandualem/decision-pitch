@@ -1,9 +1,11 @@
 import * as THREE from 'three';
+import { continuous } from './timeline.js';
 
 // Bodies face local +z. Match headings turn anticlockwise from match +x.
 const mix = (a, b, t) => a + (b - a) * t;
 const angle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+const NONE = [];
 const smooth = (t) => t * t * (3 - 2 * t);
 
 export const DRIBBLE = 0.6; // m ahead of a player's centre that the engine carries the ball
@@ -203,13 +205,14 @@ export function createPlayers(scene, teams) {
   const up = new THREE.Vector3(0, 1, 0);
   const turn = new THREE.Quaternion();
   let spinRate = 0; // rad/s
-  const seen = new Map(); // touches already posed, by key, with their time
+  const seen = new Map(); // touches already posed, by time and player, with their time
 
   // Start the pose for each touch the engine reports, timed to its moment of contact. A
   // touch in a snapshot still ahead of the render time gets its wind-up.
   function notice(snapshot, time) {
-    for (const touch of snapshot?.ball?.touches ?? []) {
-      const key = `${touch.t}:${touch.player}:${touch.kind}`;
+    for (const touch of snapshot?.ball?.touches ?? NONE) {
+      // The engine records at most one touch per player per step.
+      const key = Math.round(touch.t * 1000) * 4096 + touch.player;
       if (seen.has(key)) continue;
       seen.set(key, touch.t);
       if (seen.size > 32) for (const [old, t] of seen) if (t < time - 2) seen.delete(old);
@@ -236,16 +239,13 @@ export function createPlayers(scene, teams) {
     actor.pose = pose;
   }
 
-  // Which way a kick sends the ball: from the touch to where the ball is in the snapshot
-  // that reports it, or a later one.
-  function aim(pose, snapshots) {
-    for (const snapshot of snapshots) {
-      if (!snapshot || snapshot.t < pose.touch.t) continue;
-      const dx = snapshot.ball.x - pose.touch.x;
-      const dy = snapshot.ball.y - pose.touch.y;
-      if (Math.hypot(dx, dy) > 0.15) return Math.atan2(dy, dx);
-    }
-    return null;
+  // Which way a kick sends the ball: from the touch to where `snapshot` has it, once the
+  // snapshot is the one that reports the touch or a later one.
+  function aim(pose, snapshot) {
+    if (!snapshot || snapshot.t < pose.touch.t) return null;
+    const dx = snapshot.ball.x - pose.touch.x;
+    const dy = snapshot.ball.y - pose.touch.y;
+    return Math.hypot(dx, dy) > 0.15 ? Math.atan2(dy, dx) : null;
   }
 
   function update(before, after, alpha, dt, now, latest = after) {
@@ -256,7 +256,7 @@ export function createPlayers(scene, teams) {
       for (const player of from.players) previous.set(player.id, player);
       previousSnapshot = from;
     }
-    const reset = from.period !== after.period || from.phase !== after.phase || after.t < from.t;
+    const reset = from !== after && !continuous(from, after);
     const blend = reset ? 1 : clamp(alpha, 0, 1);
     const time = mix(from.t, after.t, blend); // where the drawn match is on the server's clock
     const span = after.t - from.t;
@@ -283,8 +283,10 @@ export function createPlayers(scene, teams) {
       actor.stride += speed * step * 2.7;
       const swing = Math.sin(actor.stride) * actor.pace * 0.7;
       const celebrating = now < actor.celebrateUntil;
-      let legs = [swing, -swing];
-      let arms = [-swing * 0.7, swing * 0.7];
+      const legA = swing;
+      let legB = -swing;
+      let armA = -swing * 0.7;
+      let armB = swing * 0.7;
       let pitch = 0;
       let lift = celebrating ? Math.abs(Math.sin(now * 7)) * 0.3 : Math.abs(Math.sin(actor.stride)) * actor.pace * 0.06;
 
@@ -297,7 +299,8 @@ export function createPlayers(scene, teams) {
       actor.lean = stopped ? 0 : mix(actor.lean, lean, 1 - Math.exp(-step * (player.dive ? 10 : 4)));
       let roll = actor.lean;
       const stretch = Math.abs(actor.lean) / 0.9;
-      arms = arms.map(arm => mix(arm, -2.9, stretch));
+      armA = mix(armA, -2.9, stretch);
+      armB = mix(armB, -2.9, stretch);
 
       // The body meets the ball at the touch's moment of contact.
       const pose = stopped ? null : actor.pose;
@@ -307,30 +310,34 @@ export function createPlayers(scene, teams) {
       if (pose && u > pose.end) actor.pose = null;
       else if (pose) {
         const w = Math.min(clamp((u - pose.from) / 0.06, 0, 1), clamp((pose.end - u) / 0.15, 0, 1));
-        if (pose.aim === null && (pose.aim = aim(pose, [after, latest])) != null) pose.aimed = u;
+        if (pose.aim === null && (pose.aim = aim(pose, after) ?? aim(pose, latest)) != null) pose.aimed = u;
         // A turn starts from where the body is, even when the aim is known only late.
         const turning = track(TURN, u) * Math.min(w, clamp((u - pose.aimed) / 0.06, 0, 1));
         if (pose.aim != null) actor.facing = angle(actor.heading, pose.aim, turning);
         if (pose.reach) {
           const e = track(KEEPER_POSE.envelope, u) * w;
           roll = mix(roll, pose.reach.roll, e);
-          arms = arms.map(arm => mix(arm, pose.reach.arms, e));
+          armA = mix(armA, pose.reach.arms, e);
+          armB = mix(armB, pose.reach.arms, e);
           pitch = mix(pitch, pose.reach.pitch, e);
           lift += pose.reach.lift * e;
         } else {
           const shape = POSES[pose.kind];
-          if (shape.leg) legs[1] = mix(legs[1], track(shape.leg, u), w);
-          if (shape.arm) arms[0] = mix(arms[0], track(shape.arm, u), w);
-          if (shape.arms) arms = arms.map(arm => mix(arm, track(shape.arms, u), w));
+          if (shape.leg) legB = mix(legB, track(shape.leg, u), w);
+          if (shape.arm) armA = mix(armA, track(shape.arm, u), w);
+          if (shape.arms) {
+            armA = mix(armA, track(shape.arms, u), w);
+            armB = mix(armB, track(shape.arms, u), w);
+          }
           if (shape.pitch) pitch = mix(pitch, track(shape.pitch, u), w);
           if (shape.lift) lift += track(shape.lift, u) * w;
         }
       }
       body.rotation.y = actor.facing + Math.PI / 2;
-      limbs[0].rotation.x = legs[0];
-      limbs[1].rotation.x = legs[1];
-      limbs[2].rotation.x = arms[0];
-      limbs[3].rotation.x = arms[1];
+      limbs[0].rotation.x = legA;
+      limbs[1].rotation.x = legB;
+      limbs[2].rotation.x = armA;
+      limbs[3].rotation.x = armB;
       limbs[2].rotation.z = celebrating ? -2.55 : -0.13;
       limbs[3].rotation.z = celebrating ? 2.55 : 0.13;
       body.rotation.x = pitch;
@@ -347,7 +354,7 @@ export function createPlayers(scene, teams) {
     let f = ballTeleport ? 1 : blend;
     if (!reset && !ballTeleport) {
       let startT = from.t;
-      for (const touch of newBall.touches ?? []) {
+      for (const touch of newBall.touches ?? NONE) {
         const contact = touch.t - STEP;
         if (contact <= startT || contact >= after.t) continue;
         if (time <= contact) {
@@ -355,7 +362,8 @@ export function createPlayers(scene, teams) {
           f = (time - startT) / (contact - startT);
           break;
         }
-        [start, startT] = [touch, contact];
+        start = touch;
+        startT = contact;
         f = (time - startT) / (after.t - startT);
       }
     }
@@ -366,7 +374,8 @@ export function createPlayers(scene, teams) {
     // until the moment its carrier kicks it.
     const holder = oldBall.owner != null ? actors.get(oldBall.owner) : null;
     const kicking = holder?.pose?.kind === 'kick' && time < holder.pose.at;
-    const carrier = after.phase === 'play' && !reset && holder && (newBall.owner === oldBall.owner || kicking) ? holder : null;
+    const carrier = !reset && from.phase === 'play' && after.phase === 'play' && holder
+      && (newBall.owner === oldBall.owner || kicking) ? holder : null;
     let carrying = false;
     if (carrier?.group.visible) {
       const feet = carrier.group.position;

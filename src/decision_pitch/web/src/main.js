@@ -138,7 +138,7 @@ function draw() {
       moments.setSnapshot(shown);
       overlay.setSnapshot(shown);
     }
-    for (const { event, late } of timeline.release()) show(event, now, late);
+    for (const event of timeline.release()) show(event, now, timeline.late(event));
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now, frame.after.phase);
     touchline.update(actors.ballPosition, dt, now, actors);

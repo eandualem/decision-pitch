@@ -36,9 +36,14 @@ function play(timeline, { seconds, jitter = 0.06, latency = 0.02, seed = 7, unti
   return frames;
 }
 
-test('continuous blends only within one phase and period, going forward', () => {
+test('continuous blends within one phase and period, or a restart into play, going forward', () => {
   assert.equal(continuous(snapshot(1), snapshot(1.1)), true);
   assert.equal(continuous(snapshot(1), snapshot(1.1, 'corner')), false);
+  for (const restart of ['kickoff', 'throw_in', 'goal_kick', 'corner', 'free_kick', 'penalty']) {
+    assert.equal(continuous(snapshot(1, restart), snapshot(1.1)), true, `${restart} kicked into play`);
+  }
+  assert.equal(continuous(snapshot(1, 'half_time'), snapshot(1.1)), false);
+  assert.equal(continuous(snapshot(1, 'corner', 1), snapshot(1.1, 'play', 2)), false);
   assert.equal(continuous(snapshot(1, 'kickoff', 1), snapshot(1.1, 'kickoff', 2)), false);
   assert.equal(continuous(snapshot(1.1), snapshot(1)), false);
 });
@@ -101,28 +106,59 @@ test('the same arrivals interpolated by the last two snapshots stutter; the buff
   assert.ok(worst(buffered) < 0.003, `buffered motion is even, worst ${worst(buffered)}`);
 });
 
-test('a server running a tenth slower than real time is still drawn without holds', () => {
-  const timeline = createTimeline();
-  const next = random(11);
-  let a = 0;
-  const arrivals = [];
-  for (let k = 0, at = 0; k < 30 * 30; k++) {
-    at = Math.max(at, 500 + k * STEP / 0.9 + 0.01 + next() * 0.03);
-    arrivals.push({ at, message: snapshot(10 + k * STEP) });
-  }
-  let previous = null;
-  let held = 0;
-  let frames = 0;
-  for (let now = 500; now < 529; now += 1 / 60) {
-    while (a < arrivals.length && arrivals[a].at <= now) timeline.push(arrivals[a].message, arrivals[a++].at);
-    const frame = timeline.sample(now);
-    if (now > 505) {
-      frames++;
-      if (frame.time - previous < 0.25 / 60) held++;
+test('a server slower than real time is drawn as slowly, evenly and without holds', () => {
+  for (const rate of [0.95, 0.9, 0.8, 0.7]) {
+    for (const jitter of [0.01, 0.06]) {
+      const timeline = createTimeline();
+      const next = random(11);
+      let a = 0;
+      const arrivals = [];
+      for (let k = 0, at = 0; k < 30 * 40; k++) {
+        at = Math.max(at, 500 + k * STEP / rate + 0.01 + next() * jitter);
+        arrivals.push({ at, message: snapshot(10 + k * STEP) });
+      }
+      let previous = null;
+      let held = 0;
+      let frames = 0;
+      let squares = 0;
+      for (let now = 500; now < 535; now += 1 / 60) {
+        while (a < arrivals.length && arrivals[a].at <= now) timeline.push(arrivals[a].message, arrivals[a++].at);
+        const frame = timeline.sample(now);
+        if (now > 505) {
+          const pace = (frame.time - previous) * 60 / rate;
+          frames++;
+          if (pace < 0.25) held++;
+          squares += (pace - 1) ** 2;
+        }
+        previous = frame?.time;
+      }
+      assert.ok(held / frames < 0.005, `${rate}x, ${jitter} s jitter: ${held} of ${frames} frames held`);
+      assert.ok(Math.sqrt(squares / frames) < 0.12, `${rate}x, ${jitter} s jitter: even pace`);
     }
-    previous = frame?.time;
   }
-  assert.ok(held / frames < 0.01, `${held} of ${frames} frames held`);
+});
+
+test('a restart kicked into play is blended, so the ball leaves the spot smoothly', () => {
+  const timeline = createTimeline({ delay: 0 });
+  timeline.push(snapshot(1, 'corner'), 1);
+  timeline.push(snapshot(1 + STEP), 1 + STEP);
+  const frame = timeline.sample(1 + STEP / 2);
+  assert.equal(frame.before.phase, 'corner');
+  assert.equal(frame.after.phase, 'play');
+  assert.ok(Math.abs(frame.alpha - 0.5) < 1e-9);
+});
+
+test('sampling and releasing reuse their results', () => {
+  const timeline = createTimeline({ delay: 0 });
+  timeline.push(snapshot(1), 1);
+  timeline.push(snapshot(1 + STEP), 1 + STEP);
+  timeline.pushEvent({ kind: 'corner', t: 1 }, 1);
+  const frame = timeline.sample(1.01);
+  const due = timeline.release();
+  assert.equal(due.length, 1);
+  assert.equal(timeline.sample(1.02), frame);
+  assert.equal(timeline.release(), due);
+  assert.equal(due.length, 0);
 });
 
 test('a change of phase or period is held, never blended', () => {
@@ -204,11 +240,11 @@ test('events are released in order when the render time reaches them', () => {
   timeline.sample(500.55);
   assert.deepEqual(timeline.release(), [], 'the drawn ball has not got there yet');
   timeline.sample(500.601);
-  assert.deepEqual(timeline.release().map(({ event, late }) => [event.kind, late]), [['foul', false], ['yellow', false]]);
+  assert.deepEqual(timeline.release().map(event => [event.kind, timeline.late(event)]), [['foul', false], ['yellow', false]]);
   timeline.sample(500.69);
   assert.deepEqual(timeline.release(), []);
   timeline.sample(500.701);
-  assert.deepEqual(timeline.release().map(({ event }) => event.kind), ['free_kick']);
+  assert.deepEqual(timeline.release().map(event => event.kind), ['free_kick']);
 });
 
 test('events behind a stall are released at once and marked late', () => {
@@ -219,5 +255,5 @@ test('events behind a stall are released at once and marked late', () => {
   timeline.pushEvent({ kind: 'goal', t: 20 }, 510);
   for (let k = 1; k <= 330; k++) timeline.push(snapshot(10 + k * STEP), 500 + k * STEP);
   timeline.sample(500 + 330 * STEP);
-  assert.deepEqual(timeline.release().map(({ event, late }) => [event.kind, late]), [['substitution', true], ['goal', false]]);
+  assert.deepEqual(timeline.release().map(event => [event.kind, timeline.late(event)]), [['substitution', true], ['goal', false]]);
 });
