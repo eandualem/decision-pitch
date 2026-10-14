@@ -599,7 +599,9 @@ ball; a `save` or `catch` then times the dive's full stretch to the touch, and
 a catch with no dive plays `keeper_catch` or `keeper_catch_high` by the ball's
 height. Goals play `celebrate`; managers play their gesture clips on the upper
 body over their walk. The ball keeps its contrast and its shadow to stay
-readable on the broadcast camera at its real size.
+readable on the broadcast camera at its real size. The engine is unchanged:
+headers stay unplayed until the engine has them, and the `header` clip is ready
+for that.
 
 **A closer wide shot.** The broadcast wide shot comes about a third closer to
 play, showing roughly a third to half of the pitch like a real main camera,
@@ -609,8 +611,7 @@ two or three pixels, so the figures and the ball this section adds could not
 be read. The frame still follows the ball and leads a little the way play is
 going, so a long pass's receiver comes into view early, and it pans no faster
 relative to the frame than before; the cuts to the scorer and the managers are
-unchanged. The engine is unchanged: headers stay unplayed until
-the engine has them, and the `header` clip is ready for that.
+unchanged.
 
 **Why.** A modelled and animated human reads as a person on a broadcast
 camera and in a close-up in a way that articulated boxes cannot, and stride
