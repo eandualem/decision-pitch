@@ -769,5 +769,11 @@ test('the number above a player fades out as the camera comes close, and its fac
   assert.ok(badge.material.opacity > 0 && badge.material.opacity < 1, `fading: ${badge.material.opacity}`);
   assert.ok(Math.abs(actors.getPlayerFacing(2) - (0.5 + Math.PI / 2)) < 1e-9, 'facing its heading');
   assert.equal(actors.getPlayerFacing(99), null);
+  const a = snap(2, [player(2, 0, 0)], { x: 5, y: 0 });
+  const b = snap(2 + STEP, [player(2, 0.1, 0.2)], { x: 5, y: 0 });
+  for (let i = 0; i < 30; i++) actors.update(a, b, 0.5, 1 / 60, 2 + i / 60);
+  const velocity = actors.getPlayerVelocity(2, new THREE.Vector3());
+  assert.ok(velocity.distanceTo(new THREE.Vector3(3, 0, -6)) < 0.05, `along its drawn path, match +y as scene -z: ${velocity.toArray()}`);
+  assert.equal(actors.getPlayerVelocity(99, new THREE.Vector3()), null);
   actors.dispose();
 });

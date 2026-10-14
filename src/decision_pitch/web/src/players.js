@@ -571,6 +571,12 @@ export function createPlayers(scene, teams, figure, camera = null) {
       const actor = actors.get(id);
       return actor?.group.visible ? actor.group.position : null;
     },
+    // Writes a drawn player's ground velocity in the scene (m/s along x and z, y 0) into
+    // `out` and returns it, or returns null when the player is not drawn.
+    getPlayerVelocity(id, out) {
+      const actor = actors.get(id);
+      return actor?.group.visible ? out.set(actor.vx, 0, -actor.vy) : null;
+    },
     // Fades each drawn player's number by its distance from the camera. Called once the
     // camera has moved for this frame, so a cut to a close-up never shows them for a frame.
     fadeNumbers() {
