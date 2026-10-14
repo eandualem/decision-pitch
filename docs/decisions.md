@@ -737,6 +737,45 @@ rather than baking textures keeps kits a run-time choice and the download small.
 and its licence and style would not be ours. Procedural limbs with better
 curves: they still slide without clips made for a stride.
 
+### Natural, individual movement
+
+**Choice.** Players move in more ways than one stride, and each in a way of
+their own. The engine sends a player's facing separately from where it goes,
+so a player keeping its shape walks or jogs while it faces the ball, and can
+move sideways, backwards or diagonally against that facing. The figure gets
+the clips to show it, made with the same rig and build scripts as the rest,
+and the page chooses and blends them from what each player is doing, still
+from the snapshot alone.
+
+- **More directions.** Locomotion loops may travel in eight named directions
+  (the four diagonals added to forward, left, back and right) or at any stated
+  angle, at a walk and at a jog, so travel at any angle to the facing up to a
+  jog plays at a natural cadence. The page blends the loops either side of the
+  travel as it blends forward and sideways today, so the blended stride still
+  points along the travel and the planted foot stays put.
+- **Sets of loops for situations.** A loop may belong to a set that replaces
+  the ordinary run when its situation holds, on the same shared phase: a
+  dribbling run, shorter strides with the body over the ball, whose right boot
+  meets the ball at the phase where the page puts the carried ball; a
+  defender's side-on jockeying shuffle; and shielding, back to the opponent
+  with arms out over the ball. The page infers the situation from motion,
+  possession and the nearest opponent, since built-in bots send no decisions,
+  and a model player's decision refines it.
+- **Changes of pace and direction.** A turn on the spot, a cut at speed that
+  plants and pushes off, and a braking stride are one-shots the page times to
+  what it sees the player do; leaning into a curve and leaning forward to
+  accelerate are drawn by the page over the stride.
+- **More of the game.** A standing tackle beside the slide, a cross and a
+  lofted pass, chosen from the touch and the ball's flight after it, and
+  idles that shift weight, rest hands on hips or look over a shoulder.
+- **Style.** Each player's stride length and cadence, arm carriage and
+  posture lean, and its place in the cycle, are picked from its id like its
+  looks, so a player moves the same in every browser and neighbours are never
+  in step.
+
+The figure keeps its triangles, and the download stays close to its size.
+The page still never changes match state.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules
