@@ -154,6 +154,16 @@ def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
     assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
 
 
+def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():
+    m = in_play(ball=(40.5, 0.0))
+    m.owner = 10  # a home forward has the ball in the opponents' half
+    keeper = m.player(1)
+    assert keeper.position == "GK"
+    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), bots.JOG)
+    m.phase, m.restart_team = "throw_in", 0
+    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), bots.JOG)
+
+
 def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
     m = in_play(ball=(0.5, 0.0))
     carrier, opponent = m.player(7), m.player(18)

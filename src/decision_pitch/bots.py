@@ -238,10 +238,12 @@ def _taker(m: Match, team: int) -> Player:
 
 
 def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
-    """The player's formation spot, shifted with the ball."""
+    """The player's formation spot, shifted with the ball; a goalkeeper's is on its line."""
     direction = m.attack(p.team)
     if m.phase == "kickoff":
         return direction * p.home[0], direction * p.home[1]
+    if p.position == "GK":
+        return _goal_line_spot(m, p)
     bx, by = m.ball.x * direction, m.ball.y * direction  # the ball in the team's frame
     x = p.home[0] + 0.5 * bx + (8 if attacking else 0) + 15
     y = p.home[1] * 0.85 + 0.25 * by
