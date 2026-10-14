@@ -87,10 +87,11 @@ const CHASE = 4;
 const CATCH = 0.75; // m between a chaser and the ball it knocked when it plays it again (the engine's reach)
 // Neighbours (within NEAR m) running alike (velocities within ALIKE m/s) whose strides are
 // within IN_STEP of a cycle of each other do not stay so: the later of the two quickens
-// its stride (figures.js) until they part.
+// its stride (figures.js) for PARTING frames, which takes it about a fifth of a stride on.
 const NEAR = 4;
 const ALIKE = 0.8;
 const IN_STEP = 0.08;
+const PARTING = 70;
 
 // What a goalkeeper does to reach the ball at `lateral` m to its left and `height` m up:
 // a dive to that side if it is diving or the ball is beyond its reach, else a catch.
@@ -169,6 +170,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
         celebrateAt: -Infinity,
         // The loop sets the figure shows (figures.js) and the model's latest decision.
         sets: { dribble: 0, jockey: 0, shield: 0, touchIn: 0, hurry: 0 }, decision: null, decidedAt: -Infinity, id: player.id,
+        parting: 0, // frames it goes on quickening its stride to fall out of step
         strideAt: -Infinity, // when its boot is to meet the ball it knocked on or catches up
         chasing: false, // the ball it knocked ahead
       });
@@ -458,8 +460,9 @@ export function createPlayers(scene, teams, figure, options = {}) {
   function unstep() {
     running.length = 0;
     for (const actor of actors.values()) {
-      actor.sets.hurry = 0;
+      if (actor.parting > 0) actor.parting--;
       if (actor.group.visible && actor.speed > ALIKE) running.push(actor);
+      else actor.parting = 0;
     }
     for (let i = 0; i < running.length; i++) {
       const a = running[i];
@@ -470,9 +473,11 @@ export function createPlayers(scene, teams, figure, options = {}) {
         if ((pa.x - pb.x) ** 2 + (pa.z - pb.z) ** 2 > NEAR * NEAR) continue;
         if ((a.vx - b.vx) ** 2 + (a.vy - b.vy) ** 2 > ALIKE * ALIKE) continue;
         const apart = Math.abs(((a.person.phase - b.person.phase) % 1 + 1.5) % 1 - 0.5);
-        if (apart < IN_STEP) (a.id > b.id ? a : b).sets.hurry = 1;
+        const later = a.id > b.id ? a : b;
+        if (apart < IN_STEP && !((a.id > b.id ? b : a).parting > 0)) later.parting = PARTING;
       }
     }
+    for (const actor of actors.values()) actor.sets.hurry = actor.parting > 0 ? 1 : 0;
   }
 
   function update(before, after, alpha, dt, now, latest = after) {

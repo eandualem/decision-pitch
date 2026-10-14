@@ -786,14 +786,17 @@ const ELBOWS = [0, 0.3]; // rad more the elbows bend, least to most
 const COUNTER = { chest: 0.5, neck: 0.3 }; // of the hips' turn the chest and neck turn back
 // Moves the figure makes of itself from how it moves (one-shots in figure.json, when it
 // has them). A turn on the spot (turn_L, turn_R) when it turns faster than TURNING_FAST
-// below TURNING_SLOW m/s, its clip time following the turn; a cut (cut_L, cut_R) when its
-// run turns faster than CUTTING above CUTTING_SPEED; a braking
+// below TURNING_SLOW m/s, its clip time following the turn; a cut (cut_L, cut_R) when,
+// above CUTTING_SPEED, its body turns faster than TURNING_FAST and its run follows, the
+// clip's `turning` window following the body's turn as for a turn on the spot; a braking
 // step (brake) when it slows harder than BRAKING from above BRAKING_SPEED without turning.
 const TURNING_FAST = 2.5; // rad/s
 const TURNING_SLOW = 1;
 const TURNING_DONE = 0.6; // rad/s below which a turn has finished
 const CUTTING = 2; // rad/s
 const CUTTING_SPEED = 2.5;
+const CUT_FOLLOWS = 0.4; // rad/s the run turns at, at least, as the body turns into a cut
+const CUT_SHORT = 0.6; // of a cut clip's turn, short of which a turn is no cut
 const BRAKING = 2.5; // m/s2 (the engine slows a player at 4 at most)
 const BRAKING_SPEED = 3;
 const BRAKING_AHEAD = 0.6; // rad: a brake is a run stopping, travelling the way it faces
@@ -1038,6 +1041,7 @@ export function createFigures(template, { footLock = true } = {}) {
     let clock = 0;
     let lastYaw = null;
     let lastWay = null;
+    let swung = 0; // rad the body has turned since it began to turn fast
     // `planted`: a move whose feet plant (a turn, cut or brake), which the foot lock holds.
     const slots = Array.from({ length: SLOTS }, () => ({ name: null, time: 0, share: 0, layer: 'play', planted: false }));
     let acting = 0;
@@ -1205,18 +1209,25 @@ export function createFigures(template, { footLock = true } = {}) {
       lastYaw = yaw;
       lastWay = way;
       const slowing = -(ax * Math.sin(way) + az * Math.cos(way));
-      // A cut: the run itself turning sharply. A body turning while it runs (to face the
-      // ball, say) is no cut: the stride and the foot lock carry it.
-      const cutting = Math.abs(running) > CUTTING;
-      const cutWay = running;
+      // How far the body has turned since it began to turn fast, one way.
+      if (Math.abs(turning) > TURNING_DONE * 2 && Math.sign(turning) === Math.sign(swung)) swung += turning * step;
+      else swung = Math.abs(turning) > TURNING_DONE * 2 ? turning * step : 0;
+      // A cut: at a run, the body turning fast and the run beginning to follow it (a body
+      // turning over a run that keeps its way, to face the ball, say, is no cut: the stride
+      // and the foot lock carry it); or, for a cut that does not say how it turns, the run
+      // itself turning sharply.
+      const cutting = Math.abs(turning) > TURNING_FAST && Math.abs(running) > CUT_FOLLOWS && Math.sign(running) === Math.sign(turning);
+      const sharply = Math.abs(running) > CUTTING;
       // Another one-shot (a kick, a gesture) takes the body: no move begins under it.
       let others = 0;
       for (let i = 0; i < acting; i++) if (!slots[i].planted) others = Math.max(others, slots[i].share);
       // A brake gives way to a cut, and ends when the figure runs on instead of stopping.
-      if (move.kind === 'brake' && ((cutting && speed > CUTTING_SPEED) || (slowing < BRAKING / 3 && speed > STOPPED))) fade();
+      const cutName = cutting ? (turning > 0 ? 'cut_L' : 'cut_R') : running > 0 ? 'cut_L' : 'cut_R';
+      const cut = (cutting && template.described[cutName]?.turning) || (sharply && !template.described[cutName]?.turning);
+      if (move.kind === 'brake' && ((cut && speed > CUTTING_SPEED) || (slowing < BRAKING / 3 && speed > STOPPED))) fade();
       if (!move.kind && others === 0) {
         if (speed < TURNING_SLOW && Math.abs(turning) > TURNING_FAST) begin('turn', turning > 0 ? 'turn_L' : 'turn_R', speed);
-        else if (speed > CUTTING_SPEED && cutting) begin('cut', cutWay > 0 ? 'cut_L' : 'cut_R', speed);
+        else if (speed > CUTTING_SPEED && cut) begin('cut', cutName, speed);
         else if (speed > BRAKING_SPEED && slowing > BRAKING && Math.abs(turning) < TURNING_DONE * 2
           && Math.abs(wrap(travel)) < BRAKING_AHEAD) begin('brake', 'brake', speed);
       }
@@ -1233,7 +1244,23 @@ export function createFigures(template, { footLock = true } = {}) {
 
     function playMove(step, speed, turning, others) {
       const clip = template.described[move.name];
-      if (move.kind === 'turn') {
+      if (move.kind === 'cut' && clip.turning) {
+        // Through its turning window as far as the body has turned, then on at its own pace;
+        // a turn that stops well short of the clip's is no cut: it fades out.
+        const along = Math.sign(move.total) * turning * step;
+        if (!move.ending && (Math.abs(turning) < TURNING_DONE || along < 0)) {
+          if (move.turned < Math.abs(move.total) * CUT_SHORT) {
+            fade();
+            return;
+          }
+          move.ending = true;
+        }
+        if (!move.ending) {
+          move.turned += Math.max(0, along);
+          if (move.turned >= Math.abs(move.total)) move.ending = true;
+          move.time = Math.max(move.time, move.from + (move.to - move.from) * Math.min(1, move.turned / Math.abs(move.total)));
+        } else move.time = Math.max(move.time, move.to) + step;
+      } else if (move.kind === 'turn') {
         // The clip turns as far as the figure does, then steps out of the turn at its own
         // pace; a longer turn begins another.
         const along = Math.sign(move.total) * turning * step;
@@ -1294,7 +1321,11 @@ export function createFigures(template, { footLock = true } = {}) {
       move.from = window[0];
       move.to = window[1];
       if (kind === 'turn') move.time = move.from;
-      else if (kind === 'brake' && clip.speeds) move.time = timeAt(clip.speeds, speed / scale);
+      else if (kind === 'cut' && clip.turning) {
+        // Picked up where the body has got to in its turn.
+        move.turned = Math.min(Math.abs(swung), Math.abs(move.total));
+        move.time = move.from + (move.to - move.from) * move.turned / Math.abs(move.total);
+      } else if (kind === 'brake' && clip.speeds) move.time = timeAt(clip.speeds, speed / scale);
       else if (clip.speeds) move.time = Math.max(0, (clip.contact ?? 0) - PLANT);
       else move.time = 0;
       lastMove[kind] = clock;

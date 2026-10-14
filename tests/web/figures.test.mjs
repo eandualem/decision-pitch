@@ -567,22 +567,40 @@ test('a brake follows the stop by the figure\'s speed, a cut plays at the run\'s
     sideways.update(1 / 60, 5 - i * 4 / 60, Math.PI / 2);
     assert.notEqual(sideways.state().move?.name, 'brake');
   }
-  // A cut at 3 m/s plays at half the pace of its own 6.
+  // A cut: its run turning with its body at 3.9 rad/s (the engine's rate at 4 m/s), the
+  // clip goes through its turning window as far as the body has turned, then plays on.
   const cutter = made.create({ seed: 9 });
-  for (let i = 0; i < 30; i++) cutter.update(1 / 60, 3, 0);
-  let before = null;
-  for (let i = 0; i < 8; i++) {
-    cutter.object.rotation.y = 3 * (i + 1) / 60;
-    cutter.update(1 / 60, 3, 0);
+  for (let i = 0; i < 30; i++) cutter.update(1 / 60, 4, 0);
+  const window = [0.22, 0.4783];
+  let yaw = 0;
+  let began = null;
+  let last = 0;
+  for (let i = 0; i < 40; i++) {
+    yaw = Math.min(Math.PI / 3, yaw + 3.9 / 60);
+    cutter.object.rotation.y = yaw;
+    cutter.update(1 / 60, 4, 0);
     const { move } = cutter.state();
-    if (move?.name === 'cut_L' && before !== null) {
-      const rate = Math.min(1.5, Math.max(0.4, 3 / cutter.scale / speedAt(speeds, before)));
-      assert.ok(near(move.time - before, rate / 60, 1e-9), `at its speed: ${(move.time - before) * 60} of its pace, not ${rate}`);
-      assert.ok(rate < 0.6, 'about half');
-    }
-    if (move?.name === 'cut_L') before = move.time;
+    if (move?.name !== 'cut_L') continue;
+    began ??= yaw;
+    assert.ok(move.time >= last - 1e-9, 'never back');
+    if (yaw < Math.PI / 3 - 1e-9) {
+      const expected = window[0] + (window[1] - window[0]) * yaw / (Math.PI / 3);
+      assert.ok(Math.abs(move.time - expected) < 0.03, `${(yaw * 180 / Math.PI).toFixed(0)} degrees round: ${move.time}, not ${expected}`);
+    } else assert.ok(move.time >= window[1] - 1e-9, 'past its window once the turn is done');
+    last = move.time;
   }
-  assert.ok(before !== null, 'it cuts');
+  assert.ok(began !== null && began < 0.5, `it cuts early in the turn: ${began}`);
+  // A turn of the body that stops at 20 degrees is no cut.
+  const short = made.create({ seed: 12 });
+  for (let i = 0; i < 30; i++) short.update(1 / 60, 4, 0);
+  let cut = false;
+  for (let i = 0; i < 30; i++) {
+    short.object.rotation.y = Math.min(0.35, 3.9 * (i + 1) / 60);
+    short.update(1 / 60, 4, 0);
+    cut ||= short.state().move?.name === 'cut_L';
+  }
+  assert.ok(cut, 'it begins as a cut');
+  assert.equal(short.state().move, null, 'and fades once the turn stops short');
   // Setting off as it comes round, a turn on the spot fades out.
   const turner = made.create({ seed: 10 });
   for (let i = 0; i < 6; i++) {
