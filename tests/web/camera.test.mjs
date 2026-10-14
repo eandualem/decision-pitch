@@ -472,3 +472,35 @@ test('the close-up cuts in once and holds: no second cut as the scorer drifts ne
   }
   }
 });
+
+test('a fast clearance stays in the wide shot on wide, square and portrait screens', () => {
+  for (const aspect of [16 / 9, 4 / 3, 1, 0.6]) {
+    for (const heading of [Math.PI / 2, Math.PI * 0.75, Math.PI, Math.PI * 1.25]) {
+      const t = setup(aspect);
+      t.ball.set(35, 0.11, 30);
+      t.run(4);
+      // Cleared at 26 m/s with a 0.5 rad loft, bouncing on.
+      let vx = 26 * Math.cos(0.5) * Math.cos(heading);
+      let vz = -26 * Math.cos(0.5) * Math.sin(heading);
+      let vy = 26 * Math.sin(0.5);
+      let worst = 0;
+      for (let i = 0; i < 6 * 60; i++) {
+        t.ball.x += vx / 60;
+        t.ball.z += vz / 60;
+        t.ball.y += vy / 60;
+        vy -= 9.81 / 60;
+        if (t.ball.y < 0.11) {
+          t.ball.y = 0.11;
+          vy = -vy * 0.55;
+          vx *= 0.85;
+          vz *= 0.85;
+        }
+        if (Math.abs(t.ball.x) > 52 || Math.abs(t.ball.z) > 34) break;
+        t.run(1 / 60);
+        const p = t.screen(t.ball.x, t.ball.y, t.ball.z);
+        worst = Math.max(worst, Math.abs(p.x), Math.abs(p.y));
+      }
+      assert.ok(worst <= 0.91, `aspect ${aspect.toFixed(2)}, heading ${Math.round(heading * 57.3)}: ball reached ${worst.toFixed(2)} of the half-frame`);
+    }
+  }
+});

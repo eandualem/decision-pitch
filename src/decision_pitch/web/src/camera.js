@@ -37,7 +37,10 @@ const PULL = { from: 12, to: 25, by: 0.3 }; // m/s of ball speed, and how much f
 // ground: m to either side, towards the camera and away from it. The frame narrows towards
 // the camera, so the side margin shrinks by `narrow` m for each metre the ball is nearer.
 const SAFE = { side: 15, narrow: 0.3, near: 12, far: 30 };
+const SAFE_ASPECT = 16 / 9; // the side margin is for a frame this wide; narrower frames shrink it
 const TELEPORT = 50; // m/s: faster than any kick, so the ball was placed, not moved
+const PLACED_EASE = 1.5; // s the wide shot eases to a placed ball before holding it in frame
+const EDGE = 0.9; // the share of the half-frame the ball in play is held within
 // The scorer's close-up: near and a little low, through a longer lens, so the scorer stands
 // about half the frame's height while it celebrates. Like a broadcast's cut to a close
 // camera, it cuts in a little further out and eases in, follows the scorer, and cuts away
@@ -77,6 +80,10 @@ export function createCamera(camera, pitch) {
   const lead = new THREE.Vector3();
   const aim = new THREE.Vector3(); // the wide shot's look point, smoothed once before the camera follows it
   let pull = 0;
+  let placedAt = -Infinity; // when the drawn ball was last placed rather than played
+  const onScreen = new THREE.Vector3();
+  const across = new THREE.Vector3();
+  const upward = new THREE.Vector3();
   let closeUntil = -Infinity;
   let scorer = null;
   let closeActors = null;
@@ -170,6 +177,36 @@ export function createCamera(camera, pitch) {
       if (Math.hypot(other.x - (ax + vx * along), other.z - (az + vz * along)) < CLEAR.sight) score -= 2;
     }
     return score;
+  }
+
+  // However the smoothing lags behind a ball in play, it never leaves the wide shot: if it
+  // nears the frame's edge, the camera and its aim slide across together, parallel to the
+  // picture, just enough to hold it there. (A ball placed for a restart is eased to instead,
+  // as the frame glides over to it.)
+  function holdInFrame(ball) {
+    camera.updateMatrixWorld();
+    onScreen.copy(ball).project(camera);
+    const x = Math.abs(onScreen.x) > EDGE ? onScreen.x - Math.sign(onScreen.x) * EDGE : 0;
+    const y = Math.abs(onScreen.y) > EDGE ? onScreen.y - Math.sign(onScreen.y) * EDGE : 0;
+    if (x === 0 && y === 0) return;
+    const depth = -onScreen.copy(ball).applyMatrix4(camera.matrixWorldInverse).z;
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * depth;
+    across.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(x * halfHeight * camera.aspect);
+    upward.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(y * halfHeight);
+    across.add(upward);
+    camera.position.add(across);
+    target.add(across);
+    camera.lookAt(target);
+  }
+
+  // Moves the ground point the wide shot looks at, `point`, just enough that `ball` lies
+  // within the frame's safe margins. The side margin shrinks with the frame's visible width
+  // on a squarer or portrait screen.
+  function keepInFrame(point, ball, portrait) {
+    const narrower = Math.min(1, (camera.aspect * portrait) / SAFE_ASPECT);
+    point.z = THREE.MathUtils.clamp(point.z, ball.z - SAFE.near * portrait, ball.z + SAFE.far * portrait);
+    const side = (SAFE.side - SAFE.narrow * Math.max(0, ball.z - point.z)) * narrower;
+    point.x = THREE.MathUtils.clamp(point.x, ball.x - side, ball.x + side);
   }
 
   // Where player `id` faces, over the ground, into `out`: the drawn figure's facing when the
@@ -319,7 +356,10 @@ export function createCamera(camera, pitch) {
       const step = Math.min(dt, 0.1);
       if (initialized && step > 0) {
         moved.subVectors(ballPosition, lastBall).setY(0).divideScalar(step);
-        if (moved.length() > TELEPORT) velocity.set(0, 0, 0);
+        if (moved.length() > TELEPORT) {
+          velocity.set(0, 0, 0);
+          placedAt = now;
+        }
         else velocity.lerp(moved, 1 - Math.exp(-step * 3));
       }
       lastBall.copy(ballPosition);
@@ -439,9 +479,7 @@ export function createCamera(camera, pitch) {
           0,
           THREE.MathUtils.clamp(ballPosition.z * WIDE.follow[1], -pitch.width * WIDE.reach[1], pitch.width * WIDE.reach[1]) + lead.z,
         );
-        look.z = THREE.MathUtils.clamp(look.z, ballPosition.z - SAFE.near * portrait, ballPosition.z + SAFE.far * portrait);
-        const side = SAFE.side - SAFE.narrow * Math.max(0, ballPosition.z - look.z);
-        look.x = THREE.MathUtils.clamp(look.x, ballPosition.x - side, ballPosition.x + side);
+        keepInFrame(look, ballPosition, portrait);
         // Smoothed twice over (here and by the camera's own follow), the frame eases into a
         // pan and out of it rather than starting at full speed.
         if (!initialized || !wasWide) aim.copy(look);
@@ -459,12 +497,14 @@ export function createCamera(camera, pitch) {
       const blend = cut || mode === 'close' ? 1 : 1 - Math.exp(-step * (mode === 'managers' ? 4 : WIDE.rate));
       camera.position.lerp(desired, blend);
       target.lerp(look, blend);
+
       const fov = camera.fov + ((wide ? WIDE.fov : mode === 'close' ? CLOSE_UP.fov : LENS) - camera.fov) * blend;
       if (Math.abs(fov - camera.fov) > 1e-4) {
         camera.fov = fov;
         camera.updateProjectionMatrix();
       }
       camera.lookAt(target);
+      if (wide && now - placedAt > PLACED_EASE) holdInFrame(ballPosition);
       initialized = true;
     },
     dispose() {
