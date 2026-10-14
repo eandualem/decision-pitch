@@ -1,0 +1,173 @@
+{
+ "armature": "rig",
+ "body": "body",
+ "bones": [
+  "root",
+  "hips",
+  "spine",
+  "chest",
+  "neck",
+  "head",
+  "shoulder_L",
+  "upper_arm_L",
+  "forearm_L",
+  "hand_L",
+  "thigh_L",
+  "shin_L",
+  "foot_L",
+  "toe_L",
+  "shoulder_R",
+  "upper_arm_R",
+  "forearm_R",
+  "hand_R",
+  "thigh_R",
+  "shin_R",
+  "foot_R",
+  "toe_R"
+ ],
+ "clips": {
+  "backpedal": {
+   "direction": "back",
+   "duration": 0.5333,
+   "loop": true,
+   "speed": 2.5
+  },
+  "celebrate": {
+   "duration": 4.0,
+   "loop": false
+  },
+  "change": {
+   "duration": 2.6,
+   "loop": false
+  },
+  "cheer": {
+   "duration": 6.5,
+   "loop": false
+  },
+  "clap": {
+   "duration": 2.6,
+   "loop": false
+  },
+  "control": {
+   "contact": 0.3,
+   "duration": 0.9,
+   "loop": false
+  },
+  "despair": {
+   "duration": 5.5,
+   "loop": false
+  },
+  "header": {
+   "contact": 0.56,
+   "duration": 1.2667,
+   "loop": false
+  },
+  "idle": {
+   "duration": 3.0,
+   "loop": true
+  },
+  "instruct": {
+   "duration": 2.8,
+   "loop": false
+  },
+  "jog": {
+   "direction": "forward",
+   "duration": 0.7333,
+   "loop": true,
+   "speed": 3.5
+  },
+  "keeper_catch": {
+   "contact": 0.32,
+   "duration": 1.1,
+   "loop": false
+  },
+  "keeper_catch_high": {
+   "contact": 0.5,
+   "duration": 1.3,
+   "loop": false
+  },
+  "keeper_dive_L": {
+   "contact": 0.46,
+   "duration": 2.3,
+   "loop": false
+  },
+  "keeper_dive_R": {
+   "contact": 0.46,
+   "duration": 2.3,
+   "loop": false
+  },
+  "pass": {
+   "contact": 0.4,
+   "duration": 1.1,
+   "loop": false
+  },
+  "protest": {
+   "duration": 2.6,
+   "loop": false
+  },
+  "shot": {
+   "contact": 0.45,
+   "duration": 1.3,
+   "loop": false
+  },
+  "sprint": {
+   "direction": "forward",
+   "duration": 0.4667,
+   "loop": true,
+   "speed": 7.2
+  },
+  "strafe_L": {
+   "direction": "left",
+   "duration": 0.5333,
+   "loop": true,
+   "speed": 2.5
+  },
+  "strafe_R": {
+   "direction": "right",
+   "duration": 0.5333,
+   "loop": true,
+   "speed": 2.5
+  },
+  "tackle": {
+   "contact": 0.4,
+   "duration": 1.5,
+   "loop": false
+  },
+  "throw_in": {
+   "contact": 0.74,
+   "duration": 1.4,
+   "loop": false
+  },
+  "walk": {
+   "direction": "forward",
+   "duration": 1.0667,
+   "loop": true,
+   "speed": 1.4
+  }
+ },
+ "coat": null,
+ "eyes": "eyes",
+ "hair": [],
+ "height": 1.8,
+ "materials": {
+  "fixed": [
+   "eyes"
+  ],
+  "regions": [
+   "skin",
+   "shirt",
+   "sleeve",
+   "hands",
+   "shorts",
+   "legs",
+   "socks",
+   "boots"
+  ]
+ },
+ "morphs": {},
+ "number": null,
+ "triangles": {
+  "body": 9100,
+  "eyes": 216
+ }
+}
