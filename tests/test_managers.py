@@ -218,6 +218,6 @@ def test_a_language_model_manager_without_its_key_says_which_key(capsys):
 
 
 def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys):
-    main(["--headless", "--half-length", "60", "--seed", "1"])
+    main(["--headless", "--half-length", "60", "--seed", "3"])
     out = capsys.readouterr().out
     assert "manager: " in out and "substitution Harbour" in out
