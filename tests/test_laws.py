@@ -4,7 +4,7 @@ import pytest
 
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
-from decision_pitch.match import DRIBBLE, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
 from decision_pitch.physics import STEP, TOP_SPEED
 
 
@@ -114,11 +114,30 @@ def test_a_free_kick_waits_before_it_can_be_taken():
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
+    m.player(15).x = -30.0  # out of the way, so only the wait holds the kick
     m.command(10, KickTo(20.0, 0.0, 15.0))
     run(m, SET_PIECE_WAIT - 0.1)
     assert m.phase == "free_kick"
     run(m, 0.2)
     assert m.phase == "play" and m.ball.vx > 0
+
+
+def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
+    m = in_play()
+    on_the_ball(m, 10, 0.0, 0.0)
+    offender = challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
+    m.step()
+    assert m.phase == "free_kick"
+    m.command(10, KickTo(20.0, 0.0, 15.0))
+    m.command(15, MoveTo(m.ball.x, m.ball.y))  # told to stay at the ball
+    while m.phase == "free_kick":
+        x, y = offender.x, offender.y
+        m.step()
+        assert math.hypot(offender.x - x, offender.y - y) <= TOP_SPEED * STEP + OUT_OF_PLACE  # no jump
+        if m.phase == "free_kick":
+            assert m.since_restart < RETREAT_WAIT
+    assert math.hypot(offender.x - m.ball.x, offender.y - m.ball.y) >= 9.15 - 0.5  # kicked as it got there
+    assert m.since_restart > SET_PIECE_WAIT
 
 
 def test_a_free_kick_near_goal_gets_a_wall_of_three_beyond_the_required_distance():

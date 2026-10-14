@@ -52,11 +52,15 @@ a test or from the command line without a browser.
   carries it as it runs. A goalkeeper reaches further and higher in its own
   penalty area. Kicks get a small aim error that grows with their power,
   from a seeded random generator, so a match can be replayed exactly.
-- **Restarts.** The engine holds opponents at the required distance from the
-  ball until it is played, and only the restarting team can play it. After
-  a goal the players walk back for the kick-off; anyone not in place after
-  5 s is moved there, so a model that never walks back cannot stall the
-  match.
+- **Restarts.** Only the restarting team can play the ball, and opponents
+  keep the required distance from it until it is played. A player out of
+  place (inside that distance, or at a kick-off in the wrong half) runs back
+  at full speed whatever its command, as the laws ask, and the restart waits
+  for it; one only a few centimetres out, as when it walks up to the line,
+  is put right at once. Anyone still out of place after 10 s at a kick-off,
+  or 5 s at another restart, is moved there, so nothing can stall the match.
+  Moving players straight to their place, as the engine first did, showed as
+  jumps of up to 40 m on screen.
 - **Built-in bot.** Simple rules (keep shape, chase the ball, dribble, pass
   to an open teammate, shoot in range) that play any position, so a full
   match runs with no model at all. A loose ball is chased by the one player

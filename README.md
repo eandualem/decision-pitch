@@ -92,7 +92,7 @@ while it waits.
 
 | Law | Status |
 |---|---|
-| Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players who are not in their own half after 5 s are moved there |
+| Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players out of place run back and the kick-off waits for them, for up to 10 s |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
 | Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
