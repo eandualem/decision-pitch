@@ -533,9 +533,12 @@ and neck), `shirt` (torso and upper arms), `sleeve` (forearms), `hands`,
 `shorts`, `legs` (between shorts and socks), `socks` and `boots`, plus `hair`
 and fixed face materials. A short-sleeved outfield kit paints `sleeve` and
 `legs` with the skin tone; a goalkeeper's long sleeves and gloves paint
-`sleeve` with the keeper colour and `hands` with a glove colour; a manager wears
-a separate `coat` mesh over the same body, with `shorts`, `legs` and `socks`
-painted as trousers. Socks take the shirt colour, since the snapshot sends
+`sleeve` with the keeper colour and `hands` with a glove colour. A manager wears
+a separate mesh over the same body, a hip-length zip-up track jacket with a
+stand collar over straight track trousers, whose `coat`, `trousers` and `trim`
+(collar and zip) materials the page paints in the team's colour, a dark neutral
+and a light contrast; an assistant wears a tracksuit painted on the body's
+regions. Socks take the shirt colour, since the snapshot sends
 shirt, shorts and keeper colours. The shirt number is a small skinned panel on
 the back, with its own material, that the page maps with the number's canvas
 texture. In Blender each region is an ordinary material, so restyling a kit or
