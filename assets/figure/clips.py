@@ -1291,18 +1291,20 @@ def keeper_catch_high_clip(solver):
 
 def instruct_clip(solver):
     end = 2.8
-    point = {"aRflex": 82.0, "aRabd": 16.0, "aRelbow": 6.0, "aRpron": 70.0, "aRwrist": 0.0, "aRtwist": 0.0}
+    # The right arm points about 26 degrees right of the way the figure faces, nearly level;
+    # the touchline turns a manager that much left of the player it instructs.
+    point = {"aRflex": 90.0, "aRabd": 16.0, "aRelbow": 6.0, "aRpron": 70.0, "aRwrist": 0.0, "aRtwist": 0.0}
     hand_on_hip = {"aLik": 1.0, "aLix": 0.215, "aLiy": 0.03, "aLiz": 1.00, "aLpole": 75.0,
                    "aLpron": 40.0, "aLwrist": 25.0}
     keys = [
         (0.28, {**point, **hand_on_hip, "sflex": 4.0, "cflex": 2.0, "stwist": -4.0, "ctwist": -6.0,
                 "hz": -0.04, "look_down": 0.0, "look_yaw": -6.0}),
-        (0.55, {"aRflex": 74.0, "aRelbow": 28.0, "cflex": 0.0}),
-        (0.75, {"aRflex": 86.0, "aRelbow": 4.0, "cflex": 4.0}),
-        (1.05, {"aRflex": 74.0, "aRelbow": 26.0, "cflex": 1.0}),
-        (1.25, {"aRflex": 86.0, "aRelbow": 4.0, "cflex": 4.0}),
-        (1.60, {"aRflex": 80.0, "aRelbow": 10.0}),
-        (2.20, {**point, **hand_on_hip, "aRflex": 78.0, "sflex": 4.0, "cflex": 2.0, "stwist": -4.0, "ctwist": -6.0,
+        (0.55, {"aRflex": 82.0, "aRelbow": 28.0, "cflex": 0.0}),
+        (0.75, {"aRflex": 94.0, "aRelbow": 4.0, "cflex": 4.0}),
+        (1.05, {"aRflex": 82.0, "aRelbow": 26.0, "cflex": 1.0}),
+        (1.25, {"aRflex": 94.0, "aRelbow": 4.0, "cflex": 4.0}),
+        (1.60, {"aRflex": 90.0, "aRelbow": 10.0}),
+        (2.20, {**point, **hand_on_hip, "aRflex": 90.0, "sflex": 4.0, "cflex": 2.0, "stwist": -4.0, "ctwist": -6.0,
                 "look_yaw": -6.0}),
     ]
     shot = Shot(READY, end, keys, lag={"aL": 0.05, "look": -0.04})
