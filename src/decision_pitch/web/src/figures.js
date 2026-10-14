@@ -49,7 +49,7 @@ const UNDERSHIRT = '#eef1f4';
 // Weyl sequences: consecutive ids land far apart in each, so a team does not repeat itself.
 const SPREAD = [0.6180339887, 0.4142135624, 0.7320508076, 0.2360679775, 0.6457513111, 0.3166247904, 0.6055512755, 0.1231056256, 0.3588989435];
 
-const DEFAULT_REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots', 'hair', 'number', 'coat'];
+const DEFAULT_REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots', 'hair', 'number', 'coat', 'trousers'];
 const SHADOWLESS = new Set(['number', 'eyes']);
 
 // Fetches the figure and its description once. `loader` and `load` are replaceable for tests.
@@ -235,7 +235,10 @@ export function outfit(role, colours, look) {
     return { skin, hair, shirt: keeper, sleeve: keeper, hands: gloves(keeper), shorts, legs: skin, socks: keeper, boots: BOOTS };
   }
   if (role === 'manager') {
-    return { skin, hair, shirt: UNDERSHIRT, sleeve: shirt, hands: skin, shorts: TROUSERS, legs: TROUSERS, socks: TROUSERS, boots: SHOES, coat: shirt };
+    return {
+      skin, hair, shirt: UNDERSHIRT, sleeve: shirt, hands: skin, shorts: TROUSERS, legs: TROUSERS, socks: TROUSERS,
+      boots: SHOES, coat: shirt, trousers: TROUSERS,
+    };
   }
   if (role === 'assistant') {
     const trousers = shade(shirt, 0.42);
@@ -283,7 +286,7 @@ function meshesOf(object) {
 export function prepareFigure(scene, animations, info = {}) {
   const described = info.clips ?? {};
   // The contract's regions, and any more figure.json names.
-  const regions = new Set([...DEFAULT_REGIONS, ...(info.materials?.regions ?? [])]);
+  const regions = new Set([...DEFAULT_REGIONS, ...(info.materials?.regions ?? []), ...(info.materials?.coat ?? [])]);
   const hairs = info.hair ?? [];
   const morphs = Object.keys(info.morphs ?? {});
   scene.updateMatrixWorld(true);
@@ -309,13 +312,48 @@ export function prepareFigure(scene, animations, info = {}) {
   });
   const clips = new Map();
   for (const clip of animations) if (described[clip.name]) clips.set(clip.name, clip);
+  const steps = gait(described);
+  measureReach(scene, clips, steps);
   return {
     scene, info, clips, described, hairs, morphs,
-    gait: gait(described),
+    gait: steps,
     layered: { play: new Map(), gesture: new Map() }, // clips with only that layer's tracks
     twins: new Map(),
     parts: { body: info.body ?? 'body', coat: info.coat ?? 'coat', number: info.number ?? 'number' },
   };
+}
+
+export const REACH = 0.6; // m: the toe's reach when a clip cannot tell, at scale 1
+const TOE = 0.07; // m from the ball of the foot to the tip of the toes
+const REACH_LIMITS = [0.3, 0.8];
+
+// How far ahead of the root each loop's right toe reaches as it swings through, before it
+// plants at half the cycle (where a dribbler meets the ball), at scale 1. Measured on a
+// copy of the figure, so the template keeps its rest pose. Idle reaches as the slowest
+// forward loop does.
+function measureReach(scene, clips, steps) {
+  const copy = cloneScene(scene);
+  const toe = copy.getObjectByName('toe_R');
+  const mixer = new THREE.AnimationMixer(copy);
+  const tip = new THREE.Vector3();
+  for (const loop of steps.loops) {
+    loop.reach = REACH;
+    const clip = clips.get(loop.name);
+    if (!toe || !clip || loop.name === 'idle') continue;
+    const action = mixer.clipAction(clip);
+    action.play();
+    let most = -Infinity;
+    for (let phase = 0.25; phase <= 0.5 + 1e-9; phase += 0.01) {
+      action.time = phase * clip.duration;
+      mixer.update(0);
+      copy.updateMatrixWorld(true);
+      most = Math.max(most, toe.localToWorld(tip.set(0, TOE, 0)).z);
+    }
+    action.stop();
+    if (Number.isFinite(most)) loop.reach = clamp(most, ...REACH_LIMITS);
+  }
+  const slowest = steps.groups[0][0];
+  if (slowest !== undefined) steps.loops[0].reach = steps.loops[slowest].reach;
 }
 
 // The clip `name` with only the tracks of `layer`'s bones, made once per figure.
@@ -474,6 +512,13 @@ export function createFigures(template) {
       get phase() { return phase; },
       set phase(value) { phase = fract(value); },
       get rate() { return rate; },
+      // How far ahead of the feet the right toe reaches through the ball in the stride
+      // shown, in metres: each loop's reach by its weight, at this figure's scale.
+      reach() {
+        let sum = 0;
+        for (let i = 0; i < weights.length; i++) sum += weights[i] * steps.loops[i].reach;
+        return sum * scale;
+      },
       // Clip `name`'s description from figure.json: duration, contact, loop, speed.
       clip: (name) => template.described[name] ?? null,
       // Writes into `target` the point between the palms, in world space, as last posed.
@@ -545,7 +590,7 @@ export function createFigures(template) {
         const blend = {};
         steps.loops.forEach((loop, i) => { if (weights[i] > 0) blend[loop.name] = weights[i]; });
         const acts = shown.map(({ action: a }) => ({ name: a.getClip().name, time: a.time, weight: a.weight }));
-        return { speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, acts };
+        return { speed: lastSpeed, travel: lastTravel, rate, phase, loops: blend, acts, reach: person.reach() };
       },
     };
     return person;

@@ -115,8 +115,9 @@ test('track eases between keys and runs straight into a linear key', () => {
 
 test('a carried ball stays at the drawn feet between snapshots', () => {
   const ui = setup();
-  // The boot's reach at the touch, and the ball's radius: its back meets the toe.
-  const dribble = 0.62 * ui.forward.state().scale + 0.11;
+  // The boot's reach at the touch in the stride shown, and the ball's radius: its back
+  // meets the toe.
+  const reachAt = () => ui.forward.state().reach + 0.11;
   // The engine's ball is a little off where it should be: the drawn one still never slides.
   const a = snap(1, [player(2, 0, 0, { speed: 6 })], { x: 0.6, y: 0, owner: 2 });
   const b = snap(1 + STEP, [player(2, 0.2, 0.05, { speed: 6, heading: 0.3 })], { x: 0.78, y: 0.27, owner: 2 });
@@ -128,6 +129,7 @@ test('a carried ball stays at the drawn feet between snapshots', () => {
     const dz = ui.ball.position.z - feet.z;
     const ahead = dx * Math.cos(heading) - dz * Math.sin(heading);
     const side = dx * Math.sin(heading) + dz * Math.cos(heading);
+    const dribble = reachAt();
     assert.ok(ahead >= dribble - 1e-9 && ahead <= dribble + 0.15, `just ahead of the feet: ${ahead}`);
     assert.ok(Math.abs(side) < 1e-9, `straight ahead: ${side}`);
   }

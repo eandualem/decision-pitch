@@ -31,9 +31,6 @@ const FADE = 0.12; // s a pose cut short by the next one takes to fade out
 // it plants at 0.5: the ball runs ahead from there and the runner catches it up.
 const TOUCH_PHASE = 0.4;
 const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper leaves its feet
-// m ahead of the root that the right toe reaches as it swings through the carried ball, at
-// scale 1 (0.58 walking to 0.62 sprinting in the clips). The boot meets the ball's back.
-const TOE_REACH = 0.62;
 const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
 const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
 const CELEBRATION = 4.2; // s a looping celebration lasts
@@ -497,10 +494,10 @@ export function createPlayers(scene, teams, figure) {
       // The goal frame can stop a carried ball short of the feet: then draw it as sent.
       const sent = Math.hypot(feet.x + Math.cos(carrier.heading) * DRIBBLE - x, feet.z - Math.sin(carrier.heading) * DRIBBLE - z);
       if (sent < LOOSE) {
-        // The boot meets the back of the ball at the touch, and it runs on from there.
-        const { scale, phase } = carrier.person;
-        let ahead = TOE_REACH * scale + BALL_RADIUS
-          + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * (phase - TOUCH_PHASE)));
+        // The boot meets the back of the ball at the touch, at the toe's reach in the stride
+        // shown, and it runs on from there.
+        let ahead = carrier.person.reach() + BALL_RADIUS
+          + 0.14 * carrier.pace * (0.5 - 0.5 * Math.cos(2 * Math.PI * (carrier.person.phase - TOUCH_PHASE)));
         if (kicking) {
           // Winding up a kick, it comes back to where the engine kicks it from, which is
           // where the kick clips meet it.

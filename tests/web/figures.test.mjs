@@ -192,6 +192,8 @@ test('kits are painted by region for players, keepers, managers and assistants',
   const manager = outfit('manager', colours, look);
   assert.equal(manager.coat, '#1f5fbf');
   assert.equal(manager.shorts, manager.legs, 'trousers');
+  assert.equal(manager.trousers, manager.legs, 'the jacket\'s trousers match');
+  assert.notEqual(manager.trousers, manager.coat, 'a jacket in the team colour over dark trousers');
   assert.equal(manager.legs, manager.socks);
   const assistant = outfit('assistant', colours, look);
   assert.equal(assistant.sleeve, '#1f5fbf', 'a tracksuit top');
@@ -419,4 +421,17 @@ test('hair, number and coat are painted even when figure.json lists only the kit
   assert.equal(person.object.getObjectByName('coat').material.color.getHexString(), '1f5fbf');
   const hair = person.object.getObjectByName(HAIRS[person.look.hair]);
   assert.equal(`#${hair.material.color.getHexString()}`, figures.HAIRS[person.look.hairColour]);
+});
+
+test('built figure: the toe reaches through the carried ball as far as each loop takes it', { skip: !hasFigure && 'figure.glb is not built yet' }, async () => {
+  const template = await builtFigure();
+  const reach = Object.fromEntries(template.gait.loops.map(loop => [loop.name, loop.reach]));
+  for (const name of ['walk', 'jog', 'sprint']) assert.ok(reach[name] > 0.45 && reach[name] < 0.75, `${name} reaches ${reach[name]}`);
+  const made = createFigures(template);
+  const person = made.create({ seed: 7 });
+  person.update(1 / 60, template.described.sprint.speed * person.scale, 0);
+  assert.ok(Math.abs(person.reach() - reach.sprint * person.scale) < 1e-9, 'a sprint reaches as the sprint does');
+  person.update(1 / 60, (template.described.walk.speed + template.described.jog.speed) / 2 * person.scale, 0);
+  const between = person.reach() / person.scale;
+  assert.ok(between > Math.min(reach.walk, reach.jog) - 1e-9 && between < Math.max(reach.walk, reach.jog) + 1e-9, 'between a walk and a jog');
 });
