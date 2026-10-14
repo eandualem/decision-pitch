@@ -80,7 +80,9 @@ export function createCamera(camera, pitch) {
     handleMessage(message, now, touchline) {
       if (message.type === 'manager' && LONG.has(drawnPhase)) ask('manager', now, touchline, { team: message.team });
     },
-    update(ballPosition, dt, now, phase) {
+    // `drawn` is the drawn snapshot's phase, or the snapshot itself.
+    update(ballPosition, dt, now, drawn) {
+      const phase = typeof drawn === 'string' ? drawn : drawn?.phase;
       drawnPhase = phase;
       if (shot && (now >= shot.until || !DEAD.has(phase))) shot = null;
       if (request && now >= request.from) {

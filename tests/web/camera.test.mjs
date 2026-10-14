@@ -261,6 +261,12 @@ test('one shot at a time, and none without the touchline or the drawn phase', ()
   old.run(0.5, 'goal_kick');
   assert.ok(old.wide(), 'no touchline: no cut');
 
+  const snapshot = setup();
+  snapshot.run(1);
+  snapshot.event('substitution', { team: 1 });
+  for (let i = 1; i <= 30; i++) snapshot.broadcast.update(snapshot.ball, 1 / 60, snapshot.now + i / 60, { phase: 'goal_kick' });
+  assert.equal(snapshot.on(), 1, 'the drawn snapshot serves as well as its phase');
+
   const unknown = setup();
   unknown.run(1);
   unknown.event('substitution', { team: 0 });
