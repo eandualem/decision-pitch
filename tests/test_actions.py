@@ -123,6 +123,16 @@ def test_a_sprint_knocks_the_ball_ahead_and_leaves_it_loose_for_an_opponent():
     assert any(t["player"] == opponent.id for t in m.touches)  # it took the ball
 
 
+def test_a_sprint_covers_more_ground_than_a_dribble():
+    gained = {}
+    for action in ("sprint", "dribble"):
+        m = in_play()
+        p = on_the_ball(m, m.player(7), x=-40.0)
+        play(m, 5.0, {p.id: action})
+        gained[action] = p.x + 40.0
+    assert gained["sprint"] > gained["dribble"] + 3
+
+
 def test_a_take_on_runs_at_the_defender_then_cuts_past_it_and_can_lose_the_ball():
     m = in_play()
     p = on_the_ball(m, m.player(7))

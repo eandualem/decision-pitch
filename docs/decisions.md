@@ -211,7 +211,7 @@ plays out, the same for both teams.
 | Action | Asked | What the player does until the next answer | Its downside |
 |---|---|---|---|
 | `dribble` | on the ball | carries the ball at 6 m/s towards their goal, in the lane with the most room (section 2) | slower than a pass |
-| `sprint` | on the ball | knocks the ball ahead and runs on to it at full speed, 7.5 m/s | between touches the ball is loose, and a nearby opponent can take it |
+| `sprint` | on the ball | knocks the ball ahead and runs on to it at full speed, 7.5 m/s, aiming 8 m beyond the rolling ball so it does not brake (in 5 s from a standstill it covers 30 m, a dribble 26 m) | between touches the ball is loose, and a nearby opponent can take it |
 | `take_on` | on the ball, an opponent ahead within 10 m | runs at the nearest opponent ahead, then cuts past it diagonally on the side with more room | the defender can take the ball, and running into it is a foul only if it came from behind |
 | `shield` | on the ball, an opponent within 5 m | turns its back on the nearest opponent, keeping the ball on the far side, at walking pace, and lays it off to a teammate open within 12 m | slow, and a second opponent can get round |
 | `pass` | on the ball, and the taker | passes to the best-placed open teammate, or clears if none is open | |
@@ -289,9 +289,9 @@ free-kick phase from 10% of the match to 2%.
 With the fifteen actions, over 32 headless matches of two 180 s halves with
 models on the live server's positions answering as Laya does (in range on
 the ball mostly `shoot`, otherwise mostly `take_on`), against develop's eight
-actions answered as Laya did there: shots 12.6 a match (develop 12.0), goals
-0.81 (1.28), the ball loose 54% of play (66%), fouls 2.7 (0.5), offsides 1.6
-(0.4), throw-ins 2.9 (4.0), corners 1.3 (1.0). Without the loose-ball rule
+actions answered as Laya did there: shots 14.2 a match (develop 12.0), goals
+1.00 (1.28), the ball loose 52% of play (66%), fouls 2.8 (0.5), offsides 1.4
+(0.4), throw-ins 2.7 (4.0), corners 1.4 (1.0). Without the loose-ball rule
 above, shots fell to 8.5 and the ball was loose 65% of play. Fouls rise
 because `take_on` runs at a defender, which fouls when it cannot reach the
 ball; offsides because `run_behind` goes beyond the line before the pass.

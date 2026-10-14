@@ -238,6 +238,7 @@ test('each touch plays its clip', () => {
   assert.equal(touchClip('kick'), 'pass', 'a kick whose speed is not known yet');
   assert.equal(touchClip('control'), 'control');
   assert.equal(touchClip('deflect'), 'control');
+  assert.equal(touchClip('knock'), 'control', 'a sprint knocks the ball on with a light touch');
   assert.equal(touchClip('tackle'), 'tackle');
   assert.equal(touchClip('throw'), 'throw_in');
   assert.equal(touchClip('save', { lateral: 1.2, height: 0.6 }), 'keeper_dive_L', 'beyond its reach to its left');

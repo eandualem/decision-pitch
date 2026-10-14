@@ -84,6 +84,7 @@ TAKE_ON_BEYOND = 4.0  # m beyond it that the dribbler aims
 SHIELD_RANGE = 5.0  # m: an opponent this close can be shielded from
 LAY_OFF = 12.0  # m within which a shielding player lays the ball off to an open teammate
 KNOCK = 3.5  # m/s faster than the player that a sprint knocks the ball ahead
+SPRINT_THROUGH = 8.0  # m beyond a ball running away that a sprinting player aims, so it keeps its speed
 THROUGH_RANGE = 40.0  # m: the furthest teammate a through ball is played to
 THROUGH_LEAD = 6.0  # m ahead of the teammate's run that a through ball goes into space
 THROUGH_ROOM = 2.0  # m of room from every opponent that its spot needs
@@ -205,7 +206,20 @@ def command(m: Match, p: Player, action: str) -> Command:
     if action == "tackle" and m.owner is not None:
         c = m.player(m.owner)
         return MoveTo(m.ball.x + c.vx * 0.2, m.ball.y + c.vy * 0.2)  # straight in, from any side
-    return MoveTo(*_press_spot(m, p))  # press or sprint, without the ball
+    if action == "sprint" and m.owner is None:
+        return MoveTo(*_run_on(m, p))  # on to its knock, flat out
+    return MoveTo(*_press_spot(m, p))  # press, or sprint at an opponent on the ball
+
+
+def _run_on(m: Match, p: Player) -> tuple[float, float]:
+    """Where a sprinting player runs for a loose ball running away from it: SPRINT_THROUGH
+    beyond the ball along its path, so it keeps its speed instead of braking to arrive
+    beside it. For any other loose ball, where a presser runs."""
+    b = m.ball
+    speed = math.hypot(b.vx, b.vy)
+    if speed < 1 or b.vx * (b.x - p.x) + b.vy * (b.y - p.y) <= 0:
+        return _press_spot(m, p)
+    return b.x + b.vx / speed * SPRINT_THROUGH, b.y + b.vy / speed * SPRINT_THROUGH
 
 
 def _ahead(m: Match, p: Player) -> Player | None:
