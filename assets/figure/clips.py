@@ -1027,7 +1027,7 @@ def tackle_clip(solver):
     slide = {
         "hx": 0.07, "hy": 0.34, "hz": -0.74, "hroll": 28.0, "hpitch": -28.0, "hyaw": 10.0,
         "sflex": 9.0, "cflex": 5.0, "sside": -14.0, "cside": -6.0, "look_down": 24.0,
-        "fLx": 0.26, "fLy": 0.46, "fLz": 0.045, "fLpitch": -55.0, "fLyaw": 40.0, "fLflat": 0.0, "kLout": 55.0,
+        "fLx": 0.26, "fLy": 0.46, "fLz": 0.045, "fLpitch": -55.0, "fLyaw": 40.0, "fLflat": 0.0, "kLout": 33.0,
         "aLik": 1.0, "aLix": 0.47, "aLiy": 0.48, "aLiz": 0.12, "aLpole": 20.0, "aLwrist": 50.0, "aLpron": 30.0,
         "aRflex": 55.0, "aRabd": 55.0, "aRelbow": 35.0, "aRtwist": -10.0,
     }
