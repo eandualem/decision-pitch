@@ -37,7 +37,7 @@ KITS = {
                "sleeve": (0.95, 0.75, 0.05), "hands": (0.15, 0.55, 0.20)},
     "manager": {"shirt": (0.85, 0.85, 0.88), "sleeve": (0.85, 0.85, 0.88), "shorts": (0.08, 0.08, 0.10),
                 "legs": (0.08, 0.08, 0.10), "socks": (0.08, 0.08, 0.10), "coat": (0.10, 0.25, 0.65),
-                "trousers": (0.07, 0.07, 0.08)},
+                "trousers": (0.07, 0.07, 0.08), "trim": (0.92, 0.92, 0.92)},
 }
 LINEUP = [
     {"kit": "home", "skin": 1, "hair": "hair_short", "hair_colour": 0, "height": 1.78, "morphs": {}},

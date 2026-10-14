@@ -622,16 +622,20 @@ JACKET = [
     (1.52, 0.075, 0.047, 0.057, 0.032),
 ]
 JACKET_HEM = 0.90
+ZIP = 0.0045  # m: half the width of the trim stripe down the zip
 COAT_TRIANGLES = 3800
+COAT_MATERIALS = ["coat", "trousers", "trim"]
 
 
 def build_coat(figure, collection):
     """A track jacket with a stand collar, a zip, a waistband and cuffs, over trousers."""
     arm = figure.arm
     sleeves = _both([_keep_before(arm, "wrist", -0.03)])
+    # A straight line from the collar to the shoulder's point, as a jacket's shoulder seam holds it.
+    seam = Cone((0.045, 0.035, 1.505), (0.212, 0.030, 1.472), 0.034, 0.034)
     core = Union([Loft(JACKET, power=2.4, cap=0.02), figure.trunk, figure.shorts, Loft(DRAPE, power=2.4)]
-                 + _both(shoulders()) + sleeves, k=0.03)
-    jacket = _above(Shell(core, 0.020), JACKET_HEM)
+                 + _both(shoulders() + [seam]) + sleeves, k=0.02)
+    jacket = _above(Shell(core, 0.017), JACKET_HEM)
     waistband = Within(_above(Shell(core, 0.024), JACKET_HEM), Plane((0, 0, JACKET_HEM + 0.035), (0, 0, 1),
                                                                       core.lo - 0.1, core.hi + 0.1))
     cuffs = _both([Shell(_keep_after(_keep_before(arm, "wrist", -0.03), "wrist", -0.065), 0.024)])
@@ -659,19 +663,32 @@ def build_coat(figure, collection):
     collapse(obj, COAT_TRIANGLES)
     # The jacket and the trousers are separate materials, so the page can colour them apart,
     # split along a clean cut just under the jacket's hem.
+    # and the collar and a stripe down the zip in a trim colour; each split along a clean cut.
     bm = bmesh.new()
     bm.from_mesh(obj.data)
-    near = [f for f in bm.faces if abs(f.calc_center_median().z - JACKET_HEM) < 0.03]
-    chosen = set(near)
-    bmesh.ops.bisect_plane(bm, geom=[v for v in bm.verts if any(f in chosen for f in v.link_faces)]
-                           + [e for e in bm.edges if any(f in chosen for f in e.link_faces)] + near,
-                           dist=1e-5, plane_co=Vector((0.0, 0.0, JACKET_HEM - 0.003)), plane_no=Vector((0.0, 0.0, 1.0)))
+
+    def cut(point, normal, keep):
+        geom = [f for f in bm.faces if keep(f.calc_center_median())]
+        chosen = set(geom)
+        bmesh.ops.bisect_plane(bm, geom=[v for v in bm.verts if any(f in chosen for f in v.link_faces)]
+                               + [e for e in bm.edges if any(f in chosen for f in e.link_faces)] + geom,
+                               dist=1e-5, plane_co=Vector(point), plane_no=Vector(normal))
+
+    cut((0.0, 0.0, JACKET_HEM - 0.003), (0.0, 0.0, 1.0), lambda c: abs(c.z - JACKET_HEM) < 0.03)
+    for side in (1, -1):
+        cut((side * ZIP, 0.0, 0.0), (1.0, 0.0, 0.0), lambda c: c.y < -0.03 and abs(c.x) < 0.03 and c.z > JACKET_HEM)
+    collar_point = COLLAR[0] - COLLAR[1] * 0.012
+    cut(collar_point, COLLAR[1], lambda c: c.z > 1.38 and np.hypot(c.x, c.y - 0.03) < 0.12)
     bmesh.ops.triangulate(bm, faces=bm.faces[:])
     bm.to_mesh(obj.data)
     bm.free()
     centres = np.array([p.center for p in obj.data.polygons])
-    legs = centres[:, 2] < JACKET_HEM - 0.003  # the jacket ends at its hem; below it are the trousers
-    _assign(obj, ["coat", "trousers"], np.where(legs, "trousers", "coat"))
+    part = np.full(len(centres), "coat", dtype=object)
+    part[centres[:, 2] < JACKET_HEM - 0.003] = "trousers"  # the jacket ends at its hem
+    zip_line = (np.abs(centres[:, 0]) < ZIP) & (centres[:, 1] < -0.03) & (centres[:, 2] > JACKET_HEM + 0.04)
+    collar_band = ((centres - collar_point) @ COLLAR[1] > 0) & (NECK.at(centres) < 0.028)
+    part[zip_line | collar_band] = "trim"
+    _assign(obj, COAT_MATERIALS, part)
     for poly in obj.data.polygons:
         poly.use_smooth = True
     return obj
@@ -826,7 +843,7 @@ def build_body(armature):
         "coat": coat.name,
         "number": number.name,
         "hair": [obj.name for obj in hair],
-        "materials": {"regions": list(REGIONS), "fixed": list(FIXED), "coat": ["coat", "trousers"]},
+        "materials": {"regions": list(REGIONS), "fixed": list(FIXED), "coat": COAT_MATERIALS},
         "morphs": {name: morphs[name] for name in MORPHS if name in morphs},
         "triangles": {p.name: sum(len(f.vertices) - 2 for f in p.data.polygons) for p in parts},
     }

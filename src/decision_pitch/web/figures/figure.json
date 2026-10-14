@@ -159,7 +159,8 @@
  "materials": {
   "coat": [
    "coat",
-   "trousers"
+   "trousers",
+   "trim"
   ],
   "fixed": [
    "eyes"
@@ -219,7 +220,7 @@
  "number": "number",
  "triangles": {
   "body": 9018,
-  "coat": 3951,
+  "coat": 4177,
   "eyes": 280,
   "hair_bald": 160,
   "hair_bun": 1000,

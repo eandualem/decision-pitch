@@ -121,7 +121,7 @@ def test_hair_styles_coat_and_number_use_their_materials(gltf, info):
     for name in info["hair"]:
         assert material_names(gltf, name) == ["hair"], name
     if info["coat"]:
-        assert material_names(gltf, info["coat"]) == ["coat", "trousers"] == info["materials"]["coat"]
+        assert material_names(gltf, info["coat"]) == ["coat", "trousers", "trim"] == info["materials"]["coat"]
     if info["number"]:
         assert material_names(gltf, info["number"]) == ["number"]
         (primitive,) = mesh_of(gltf, info["number"])["primitives"]
