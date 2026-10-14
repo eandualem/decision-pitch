@@ -49,7 +49,7 @@ const UNDERSHIRT = '#eef1f4';
 // Weyl sequences: consecutive ids land far apart in each, so a team does not repeat itself.
 const SPREAD = [0.6180339887, 0.4142135624, 0.7320508076, 0.2360679775, 0.6457513111, 0.3166247904, 0.6055512755, 0.1231056256, 0.3588989435];
 
-const DEFAULT_REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots', 'hair', 'number', 'coat', 'trousers'];
+const DEFAULT_REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots', 'hair', 'number', 'coat', 'trousers', 'trim'];
 const SHADOWLESS = new Set(['number', 'eyes']);
 
 // Fetches the figure and its description once. `loader` and `load` are replaceable for tests.
@@ -237,7 +237,7 @@ export function outfit(role, colours, look) {
   if (role === 'manager') {
     return {
       skin, hair, shirt: UNDERSHIRT, sleeve: shirt, hands: skin, shorts: TROUSERS, legs: TROUSERS, socks: TROUSERS,
-      boots: SHOES, coat: shirt, trousers: TROUSERS,
+      boots: SHOES, coat: shirt, trousers: TROUSERS, trim: UNDERSHIRT,
     };
   }
   if (role === 'assistant') {

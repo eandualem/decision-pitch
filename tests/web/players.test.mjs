@@ -744,3 +744,25 @@ test('every drawn player\'s position can be read, and only theirs', () => {
   ui.actors.forEachPlayerPosition((id, position) => seen.push([id, position.x, position.z]));
   assert.deepEqual(seen, [[2, 3, -4]], 'the goalkeeper is not in this snapshot');
 });
+
+test('the number above a player fades out as the camera comes close, and its facing can be read', () => {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.2, 600);
+  const actors = createPlayers(scene, [{ colours: { shirt: '#123456', shorts: '#ffffff', keeper: '#ffcc00' },
+    players: [{ id: 2, number: 9, position: 'FW' }] }], figure, camera);
+  const badge = scene.children[0].children[0].children.find(child => child.isSprite);
+  const s = snap(1, [player(2, 0, 0, { heading: 0.5 })], { x: 5, y: 0 });
+  camera.position.set(0, 35, 60); // the wide shot, far off
+  actors.update(s, s, 1, 1 / 60, 1);
+  assert.equal(badge.visible, true);
+  assert.equal(badge.material.opacity, 1);
+  camera.position.set(4, 2, 5); // a close-up, 7 m away
+  actors.update(s, s, 1, 1 / 60, 1.02);
+  assert.equal(badge.visible, false, 'gone in the close-up');
+  camera.position.set(0, 10, 16); // in between
+  actors.update(s, s, 1, 1 / 60, 1.04);
+  assert.ok(badge.material.opacity > 0 && badge.material.opacity < 1, `fading: ${badge.material.opacity}`);
+  assert.ok(Math.abs(actors.getPlayerFacing(2) - (0.5 + Math.PI / 2)) < 1e-9, 'facing its heading');
+  assert.equal(actors.getPlayerFacing(99), null);
+  actors.dispose();
+});

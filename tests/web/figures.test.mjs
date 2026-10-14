@@ -194,6 +194,7 @@ test('kits are painted by region for players, keepers, managers and assistants',
   assert.equal(manager.shorts, manager.legs, 'trousers');
   assert.equal(manager.trousers, manager.legs, 'the jacket\'s trousers match');
   assert.notEqual(manager.trousers, manager.coat, 'a jacket in the team colour over dark trousers');
+  assert.notEqual(manager.trim, manager.coat, 'a light collar and zip on the jacket');
   assert.equal(manager.legs, manager.socks);
   const assistant = outfit('assistant', colours, look);
   assert.equal(assistant.sleeve, '#1f5fbf', 'a tracksuit top');

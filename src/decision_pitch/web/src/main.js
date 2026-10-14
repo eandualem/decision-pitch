@@ -54,7 +54,7 @@ function resetMatch(message) {
   timeline.reset();
   shown = null;
   stadium = createStadium(scene, renderer, message.pitch);
-  actors = createPlayers(scene, message.teams, figure);
+  actors = createPlayers(scene, message.teams, figure, camera);
   touchline = createTouchline(scene, message.teams, message.pitch, figure);
   // The camera is kept between matches; the last one's shots may have changed its lens.
   camera.fov = LENS;

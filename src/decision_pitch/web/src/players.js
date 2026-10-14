@@ -34,6 +34,9 @@ const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper l
 const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
 const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
 const CELEBRATION = 4.2; // s a looping celebration lasts
+// m from the camera over which a player's number above its head fades in: gone in the
+// close-up and the cutaways, where it would loom over the faces, there on the wide shot.
+const BADGE = [14, 22];
 // m: the dark spot under the ball, a little wider than it, so the white ball on its own
 // shadow keeps a contrasting edge on the broadcast camera at its real size.
 const BALL_SHADOW = 0.19;
@@ -80,7 +83,7 @@ export function touchClip(kind, { speed = 0, lateral = 0, height = 0, diving = f
   return CLIPS[kind] ?? null;
 }
 
-export function createPlayers(scene, teams, figure) {
+export function createPlayers(scene, teams, figure, camera = null) {
   const root = new THREE.Group();
   scene.add(root);
   const made = createFigures(figure);
@@ -125,7 +128,7 @@ export function createPlayers(scene, teams, figure) {
       badge.scale.set(0.88, 0.88, 1);
       group.add(badge);
       actors.set(player.id, {
-        group, person, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
+        group, person, badge, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
         vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
         celebrateAt: -Infinity,
@@ -454,6 +457,11 @@ export function createPlayers(scene, teams, figure) {
       }
       person.object.rotation.y = actor.facing + Math.PI / 2;
       person.update(step, actor.speed, actor.way - actor.facing);
+      if (camera) {
+        const seen = smooth(clamp((camera.position.distanceTo(group.position) - BADGE[0]) / (BADGE[1] - BADGE[0]), 0, 1));
+        actor.badge.material.opacity = seen;
+        actor.badge.visible = seen > 0.01;
+      }
     }
 
     // The ball as the engine sends it, through the point of each touch at its moment.
@@ -567,6 +575,12 @@ export function createPlayers(scene, teams, figure) {
     getPlayerPosition(id) {
       const actor = actors.get(id);
       return actor?.group.visible ? actor.group.position : null;
+    },
+    // The way a drawn player's figure faces, as its yaw in the scene (0 faces +z, so its
+    // direction is (sin y, 0, cos y)), or null when it is not drawn.
+    getPlayerFacing(id) {
+      const actor = actors.get(id);
+      return actor?.group.visible ? actor.person.object.rotation.y : null;
     },
     // Calls `visit(id, position)` for every player drawn this frame, with its drawn feet
     // (read-only, and reused: copy it to keep it).

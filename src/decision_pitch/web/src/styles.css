@@ -13,10 +13,12 @@ body { -webkit-user-select: none; user-select: none; }
 .score { font-size: 23px; letter-spacing: .08em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .match-clock { border-left: 1px solid #ffffff24; padding: 0 15px; font-size: 15px; font-variant-numeric: tabular-nums; }
 .match-phase { padding: 0 16px 0 0; color: #b5c6be; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
-.moment { position: absolute; bottom: 12%; left: 50%; transform: translateX(-50%); min-width: 290px; max-width: 90vw; display: flex; flex-direction: column; align-items: center; padding: 20px 40px; background: #101d21ee; border-top: 3px solid #d6ff63; box-shadow: 0 16px 60px #0005; text-align: center; }
+/* A lower third at the bottom left: clear of the play in the middle of the wide shot and of
+   the scorer framed in the close-up after a goal. */
+.moment { position: absolute; bottom: 4%; left: 3%; max-width: min(460px, 60vw); display: flex; flex-direction: column; align-items: flex-start; padding: 10px 22px 12px; background: #101d21ee; border-left: 3px solid #d6ff63; box-shadow: 0 12px 40px #0005; text-align: left; }
 .moment-eyebrow { font-size: 9px; letter-spacing: .25em; color: #d6ff63; }
-.moment-title { font-size: 34px; line-height: 1.3; letter-spacing: -.035em; }
-.moment[data-kind="goal"] .moment-title { font-size: 60px; letter-spacing: .1em; }
+.moment-title { font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
+.moment[data-kind="goal"] .moment-title { font-size: 36px; letter-spacing: .1em; }
 .moment-detail { color: #c7d4cf; font-size: 12px; margin-top: 4px; }
 .player-card { position: absolute; width: 15px; height: 22px; border: 1px solid #ffffffb0; border-radius: 2px; box-shadow: 0 3px 8px #0009; transform: translate(-50%, -100%) rotate(-8deg); }
 .player-card.yellow { background: #ffe140; }
@@ -57,5 +59,5 @@ h1, h2, h3, p { margin: 0; }
   .roster-columns { grid-template-columns: 1fr; }
   .overlay-header { display: block; }
   .overlay-header p { margin-top: 6px; }
-  .moment { bottom: 14%; padding: 16px 24px; }
+  .moment { bottom: 3%; left: 16px; padding: 8px 16px 10px; }
 }
