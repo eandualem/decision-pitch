@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { createTimeline } from '../../src/decision_pitch/web/src/timeline.js';
 
 const source = readFileSync(new URL('../../src/decision_pitch/web/src/main.js', import.meta.url), 'utf8')
   .replace(/^import .*;$/gm, '');
@@ -43,7 +44,7 @@ function setup(protocol = 'http:') {
     },
     createStadium: component('stadium'), createPlayers: actors,
     createCamera: component('camera'), createMoments: component('moments'),
-    createOverlay: component('overlay'),
+    createOverlay: component('overlay'), createTouchline: component('touchline'), createTimeline,
     document: { getElementById: (id) => id === 'status' ? status : { appendChild() {} } },
     performance: { now: () => time }, devicePixelRatio: 2,
     innerWidth: 1440, innerHeight: 900, location: { protocol, host: 'localhost:8791' },
@@ -59,6 +60,7 @@ function setup(protocol = 'http:') {
   return {
     calls, handlers, sockets, timers, status,
     tick: (ms) => { time += ms; renderLoop?.(); },
+    wait: (ms) => { time += ms; },
     send: (message) => sockets.at(-1).onmessage({ data: JSON.stringify(message) }),
     loop: () => renderLoop,
   };
@@ -66,27 +68,75 @@ function setup(protocol = 'http:') {
 const hello = { type: 'hello', pitch: {}, teams: [] };
 const snapshot = (t, phase = 'play') => ({ type: 'snapshot', t, phase, players: [], ball: {} });
 
-test('routes stream messages and interpolates snapshots without crossing restart boundaries', () => {
+const named = (calls, name) => calls.filter(([called]) => called === name);
+
+test('draws snapshots a fixed delay behind, never blending across a restart', () => {
   const app = setup();
   app.send(hello);
-  app.send(snapshot(1));
+  app.send(snapshot(1)); // arrives at page time 1 s: the clocks are level
+  app.wait(100);
   app.send(snapshot(1.1));
-  app.tick(50);
-  const update = app.calls.findLast(([name]) => name === 'actors.update');
+  app.tick(50); // 1.15 s on the page draws 1.05 s of match
+  let update = named(app.calls, 'actors.update').at(-1);
   assert.equal(update[1].t, 1);
   assert.equal(update[2].t, 1.1);
   assert.ok(Math.abs(update[3] - 0.5) < 1e-9);
+  assert.equal(update[6].t, 1.1, 'the newest snapshot is passed on for wind-ups');
+  assert.equal(named(app.calls, 'moments.snapshot').at(-1)[1].t, 1.1, 'the score bar shows the drawn snapshot');
+  app.wait(50);
   app.send(snapshot(1.2, 'kickoff'));
-  app.tick(10);
-  const restart = app.calls.findLast(([name]) => name === 'actors.update');
-  assert.equal(restart[1], restart[2]);
-  const event = { type: 'event', kind: 'goal', player: 9 };
-  app.send(event);
-  for (const name of ['actors.event', 'camera.event', 'moments.event', 'overlay.message']) {
-    assert.ok(app.calls.some(([called, message]) => called === name && message.kind === 'goal'));
+  app.tick(50); // 1.25 s draws 1.15 s: between a play and a kick-off snapshot
+  update = named(app.calls, 'actors.update').at(-1);
+  assert.equal(update[1].t, 1.1, 'held at the last snapshot of play');
+  assert.equal(update[1], update[2]);
+  app.tick(60);
+  update = named(app.calls, 'actors.update').at(-1);
+  assert.equal(update[1].phase, 'kickoff');
+  const camera = named(app.calls, 'camera.update').at(-1);
+  const touchline = named(app.calls, 'touchline.update').at(-1);
+  assert.deepEqual(touchline.slice(1, 4), camera.slice(1, 4), 'the managers follow the drawn ball');
+  assert.equal(touchline[4].ballPosition, touchline[1], 'and are given the players');
+});
+
+test('events wait for the drawn match to reach them; decisions and managers do not', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.tick(16);
+  const goal = { type: 'event', kind: 'goal', t: 1.05, team: 0, player: 9 };
+  app.send(goal);
+  app.tick(16);
+  for (const name of ['actors.event', 'camera.event', 'moments.event', 'touchline.event', 'overlay.message']) {
+    assert.equal(named(app.calls, name).length, 0, `${name} waits`);
   }
-  for (const type of ['decision', 'manager', 'substitution']) app.send({ type });
-  assert.equal(app.calls.filter(([name]) => name === 'overlay.message').length, 4);
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.tick(60); // the drawn match reaches 1.05 s
+  for (const name of ['actors.event', 'camera.event', 'moments.event', 'touchline.event', 'overlay.message']) {
+    assert.ok(named(app.calls, name).some(([, message]) => message.kind === 'goal'), name);
+  }
+  const before = app.calls.length;
+  app.send({ type: 'decision', player: 9, action: 'pass' });
+  app.send({ type: 'manager', team: 0, kind: 'instruction', player: 9, text: 'Press' });
+  const routed = app.calls.slice(before).map(([name, message]) => [name, message.type]);
+  assert.deepEqual(routed, [
+    ['overlay.message', 'decision'], ['overlay.message', 'manager'], ['touchline.message', 'manager'],
+  ]);
+  assert.equal(named(app.calls, 'touchline.message')[0][2], 1.192, 'with the page time');
+});
+
+test('events left behind by a stall only update the overlay', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.tick(16);
+  app.send({ type: 'event', kind: 'substitution', t: 1.2, team: 0, off: 9, on: 23 });
+  app.send({ type: 'event', kind: 'corner', t: 5.95, team: 1 });
+  for (let k = 1; k <= 180; k++) { app.wait(1000 / 30); app.send(snapshot(1 + k / 30)); }
+  app.tick(0);
+  assert.deepEqual(named(app.calls, 'overlay.message').map(([, m]) => m.kind), ['substitution', 'corner']);
+  assert.deepEqual(named(app.calls, 'moments.event').map(([, m]) => m.kind), ['corner']);
+  assert.deepEqual(named(app.calls, 'touchline.event').map(([, m]) => m.kind), ['corner']);
 });
 
 test('a new hello disposes every old module and clears interpolation state', () => {
@@ -95,7 +145,7 @@ test('a new hello disposes every old module and clears interpolation state', () 
   app.send(snapshot(1));
   app.tick(16);
   app.send(hello);
-  for (const name of ['stadium', 'actors', 'camera', 'moments', 'overlay']) {
+  for (const name of ['stadium', 'actors', 'camera', 'moments', 'overlay', 'touchline']) {
     assert.equal(app.calls.filter(([called]) => called === `${name}.dispose`).length, 1);
   }
   const before = app.calls.length;

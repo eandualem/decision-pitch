@@ -5,6 +5,8 @@ import { createPlayers } from './players.js';
 import { createCamera } from './camera.js';
 import { createMoments } from './moments.js';
 import { createOverlay } from './overlay.js';
+import { createTouchline } from './touchline.js';
+import { createTimeline } from './timeline.js';
 
 const status = document.getElementById('status');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -25,9 +27,11 @@ let actors;
 let broadcast;
 let moments;
 let overlay;
-let before = null;
-let after = null;
-let arrived = 0;
+let touchline;
+// Snapshots and events are drawn a short, fixed delay behind the newest, so uneven
+// arrival never shows (docs/decisions.md, section 6).
+const timeline = createTimeline();
+let shown = null; // the snapshot the score bar and overlay last showed
 let lastFrame = performance.now() / 1000;
 let socket;
 let reconnectTimer;
@@ -37,11 +41,14 @@ function resetMatch(message) {
   overlay?.dispose();
   moments?.dispose();
   broadcast?.dispose();
+  touchline?.dispose();
   actors?.dispose();
   stadium?.dispose();
-  before = after = null;
+  timeline.reset();
+  shown = null;
   stadium = createStadium(scene, renderer, message.pitch);
   actors = createPlayers(scene, message.teams);
+  touchline = createTouchline(scene, message.teams, message.pitch);
   broadcast = createCamera(camera, message.pitch);
   moments = createMoments(scene, message.teams);
   overlay = createOverlay(message.teams);
@@ -53,20 +60,27 @@ function receive(message) {
   if (message.type === 'hello') {
     resetMatch(message);
   } else if (message.type === 'snapshot' && actors) {
-    // Restarts may teleport the formation: never sweep players across the field.
-    before = after && after.phase === message.phase && after.t < message.t ? after : null;
-    after = message;
-    arrived = now;
-    moments.setSnapshot(message);
-    overlay.setSnapshot(message);
+    timeline.push(message, now);
   } else if (message.type === 'event' && actors) {
-    actors.handleEvent(message, now);
-    broadcast.handleEvent(message, now, actors);
-    moments.handleEvent(message, now);
+    timeline.pushEvent(message, now);
+  } else if (message.type === 'manager' && touchline) {
     overlay.handleMessage(message);
+    touchline.handleMessage(message, now);
   } else if (overlay) {
     overlay.handleMessage(message);
   }
+}
+
+// An event the drawn match has reached. One left behind by a stall only updates the
+// overlay's records: its moment has passed.
+function show(event, now, late) {
+  if (!late) {
+    actors.handleEvent(event, now);
+    broadcast.handleEvent(event, now, actors);
+    moments.handleEvent(event, now);
+    touchline.handleEvent(event, now);
+  }
+  overlay.handleMessage(event);
 }
 
 function connect() {
@@ -117,11 +131,17 @@ function draw() {
   const now = performance.now() / 1000;
   const dt = Math.min(now - lastFrame, 0.1);
   lastFrame = now;
-  if (after) {
-    const span = before ? after.t - before.t : 0;
-    const alpha = span > 0 ? Math.min(1, (now - arrived) / span) : 1;
-    actors.update(before ?? after, after, alpha, dt, now);
+  const frame = actors && timeline.sample(now);
+  if (frame) {
+    if (frame.after !== shown) {
+      shown = frame.after;
+      moments.setSnapshot(shown);
+      overlay.setSnapshot(shown);
+    }
+    for (const { event, late } of timeline.release()) show(event, now, late);
+    actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);
     broadcast.update(actors.ballPosition, dt, now);
+    touchline.update(actors.ballPosition, dt, now, actors);
     moments.update(camera, actors, now);
   }
   renderer.render(scene, camera);
