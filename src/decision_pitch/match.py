@@ -20,7 +20,6 @@ from decision_pitch.physics import (
     Ball,
     Player,
     brake,
-    _step_ball,
     carry,
     separate,
     step_ball,
@@ -370,6 +369,8 @@ class Match:
         self._take_possession()
         if self.phase == "play" and self.advantage is not None:
             self._check_advantage()  # before a new owner can play the ball on
+            if self.phase == "full_time":
+                return  # its card left a team too short to play on
         owner = self.player(self.owner) if self.owner else None
         command = self.commands[owner.id] if owner else None
         if owner and isinstance(command, KickTo) and self._may_kick(owner):
@@ -753,7 +754,8 @@ class Match:
         self._event("foul", team, offender.id, fouled=fouled.id)
         goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
         red = goal <= GOAL_CHANCE and self._denies_goal(offender, fouled)
-        second = reckless and self.yellows.get(offender.id, 0) > 0  # a second yellow sends it off: no advantage
+        booked = self.yellows.get(offender.id, 0) + self.cards_due.count(offender.id)
+        second = reckless and booked > 0  # a second yellow sends it off: no advantage
         x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
         y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
         advantage = self.advantage is None and not red and not second and not self._in_own_penalty_area(x, y, offender.team)
@@ -856,7 +858,7 @@ class Match:
         ball = replace(self.ball)
         for _ in range(round(GOAL_LOOK / LOOK_STEP)):
             x0 = ball.x
-            _step_ball(ball, LOOK_STEP)
+            step_ball(ball, LOOK_STEP)  # with the goal frame
             if (ball.x - goal_x) * (x0 - goal_x) <= 0:  # it reached the line
                 return abs(ball.y) <= pitch.GOAL_WIDTH / 2 and ball.z < pitch.GOAL_HEIGHT
             if ball.vx == ball.vy == ball.vz == 0:

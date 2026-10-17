@@ -951,3 +951,33 @@ def test_a_booked_players_reckless_slide_sends_it_off_with_no_advantage():
     m.step()
     assert kinds(m.drain_events()) == ["foul", "yellow", "red", "free_kick"]
     assert 15 not in on_pitch(m)
+
+
+def test_a_match_ended_by_coming_back_from_advantage_stays_ended():
+    m = in_play()
+    for q in [q for q in m.players if q.team == 1][7:]:
+        m.players.remove(q)  # seven left
+    offender = next(q for q in m.players if q.team == 1 and q.position != "GK")
+    m.yellows[offender.id] = 1
+    m.advantage = (0, offender.id, 30.0, 0.0, True, m.t + ADVANTAGE)
+    taker = next(q for q in m.players if q.team == 1 and q is not offender and q.position != "GK")
+    taker.x, taker.y = m.ball.x, m.ball.y
+    m.command(taker.id, KickTo(-20.0, 0.0, 20.0))
+    m.step()
+    assert m.phase == "full_time"
+
+
+def test_a_ball_that_would_hit_the_post_is_not_going_in():
+    m = in_play()
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 47.0, 3.64, 1.3, 30.0
+    assert not m._goal_bound(52.5)
+
+
+def test_a_second_reckless_challenge_during_play_on_sends_the_player_off():
+    m = in_play()
+    m.cards_due = [15]  # booked for a reckless challenge while play went on
+    m._plays_on = lambda team: True  # the fouled team could play on again
+    on_the_ball(m, 10, 10.0, 0.0)
+    tackler(m, 15, 8.2, 0.3, slide=True)
+    m.step()
+    assert "red" in kinds(m.drain_events()) and 15 not in on_pitch(m)
