@@ -959,7 +959,7 @@ def test_a_match_ended_by_coming_back_from_advantage_stays_ended():
         m.players.remove(q)  # seven left
     offender = next(q for q in m.players if q.team == 1 and q.position != "GK")
     m.yellows[offender.id] = 1
-    m.advantage = (0, offender.id, 30.0, 0.0, True, m.t + ADVANTAGE)
+    m.advantage = (0, offender.id, 10, 30.0, 0.0, True, m.t + ADVANTAGE)
     taker = next(q for q in m.players if q.team == 1 and q is not offender and q.position != "GK")
     taker.x, taker.y = m.ball.x, m.ball.y
     m.command(taker.id, KickTo(-20.0, 0.0, 20.0))
@@ -981,3 +981,42 @@ def test_a_second_reckless_challenge_during_play_on_sends_the_player_off():
     tackler(m, 15, 8.2, 0.3, slide=True)
     m.step()
     assert "red" in kinds(m.drain_events()) and 15 not in on_pitch(m)
+
+
+def test_an_offside_teammate_cannot_play_on_from_a_foul():
+    m = in_play()
+    m.ball.place(20.0, 0.0)
+    mate, opponent = m.player(9), m.player(16)
+    mate.x, mate.y = 20.5, 0.0
+    opponent.x, opponent.y = 21.5, 0.0
+    assert m._plays_on(0)
+    m.offside = {9}
+    assert not m._plays_on(0)
+
+
+def test_the_offender_can_still_foul_another_player_during_an_advantage():
+    m = no_advantage(in_play())
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t + ADVANTAGE)  # 17 fouled 10
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(8.0, 5.0)
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)  # now into 9's back
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+
+
+def test_a_players_own_rebound_bounces_off_it_and_a_restart_takers_is_a_second_touch():
+    m = in_play()
+    p = m.player(7)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, 0.55, 1.3  # on its arm
+    m.touches.append({"player": 7, "kind": "kick", "t": 0.0, "x": 30.0, "y": 0.0, "z": 0.11})  # back off the frame
+    m.step()
+    assert m.drain_events() == [] and touch(m, 7) == "deflect"
+    m = in_play()
+    p = m.player(7)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, 0.1, 1.3
+    m.restart_kicker = 7
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["second_touch", "free_kick"]

@@ -209,9 +209,9 @@ class Match:
         self.passed: int | None = None  # the team that deliberately kicked or threw the ball last
         self.holder: int | None = None  # the goalkeeper holding the ball in its hands
         self.held_since = 0.0
-        # an advantage being played: the team playing on, the offender, where the foul was, whether
-        # coming back earns a card, and until when it can come back
-        self.advantage: tuple[int, int, float, float, bool, float] | None = None
+        # an advantage being played: the team playing on, the offender, the player fouled, where the
+        # foul was, whether coming back earns a card, and until when it can come back
+        self.advantage: tuple[int, int, int, float, float, bool, float] | None = None
         self.cards_due: list[int] = []  # cautioned during an advantage, shown at the next stoppage
         self.lost = 0.0  # match minutes lost in this half
         self.added: int | None = None  # minutes added to this half, once shown
@@ -736,8 +736,8 @@ class Match:
                 dist = math.hypot(dx, dy)
                 if q.team == r.team or dist == 0 or dist >= 2 * PLAYER_RADIUS:
                     continue
-                if self.advantage is not None and q.id == self.advantage[1]:
-                    continue  # its foul is being played on from
+                if self.advantage is not None and (q.id, r.id) == self.advantage[1:3]:
+                    continue  # the contact being played on from
                 towards = -(q.vx * dx + q.vy * dy) / dist
                 behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
                 if not carrier and (towards <= OFF_BALL_SPEED or not self._near_ball(r)):
@@ -761,7 +761,7 @@ class Match:
         advantage = self.advantage is None and not red and not second and not self._in_own_penalty_area(x, y, offender.team)
         if advantage and self._plays_on(team):
             self._event("advantage", team, fouled.id)
-            self.advantage = (team, offender.id, x, y, goal <= PROMISING_ATTACK or reckless, self.t + ADVANTAGE)
+            self.advantage = (team, offender.id, fouled.id, x, y, goal <= PROMISING_ATTACK or reckless, self.t + ADVANTAGE)
             if reckless:
                 self.cards_due.append(offender.id)
             return
@@ -786,14 +786,14 @@ class Match:
         nearest player able to play it its own."""
         if self.ball.x * self.attack(team) <= 0:
             return False
-        able = [p for p in self.players if p.id not in self.recovering]
+        able = [p for p in self.players if p.id not in self.recovering and p.id not in self.offside]
         b = self.ball
         return bool(able) and min(able, key=lambda p: math.hypot(b.x - p.x, b.y - p.y)).team == team
 
     def _check_advantage(self) -> None:
         """Come back for the free kick if the opponents win the ball while an advantage is
         played; once its time is up, play goes on."""
-        team, offender, x, y, card, until = self.advantage
+        team, offender, _, x, y, card, until = self.advantage
         if self.owner is not None and self.player(self.owner).team != team:
             self.advantage = None
             if offender in self.cards_due:
@@ -817,7 +817,6 @@ class Match:
             p for p in self.players
             if math.hypot(b.x - p.x, b.y - p.y) <= ARM_REACH and p.id not in self.recovering
             and not (p.position == "GK" and self._ball_in_own_penalty_area(p.team))  # it may handle it there
-            and not (last is not None and last["player"] == p.id)  # its own touch
         ]  # fmt: skip
         if not near:
             return
@@ -825,10 +824,14 @@ class Match:
         if p.id in self.offside:
             self._offside(p)
             return
+        if p.id == self.restart_kicker:
+            self._second_touch(p)
+            return
+        own = last is not None and last["player"] == p.id  # its own touch: not handball
         dx, dy = b.x - p.x, b.y - p.y
         side = abs(-dx * math.sin(p.heading) + dy * math.cos(p.heading))
         close = last is not None and math.hypot(last["x"] - p.x, last["y"] - p.y) <= TOO_CLOSE
-        if side > BODY_SIDE and not close:
+        if side > BODY_SIDE and not close and not own:
             self._handball(p)
         else:
             self._deflect(p)

@@ -1210,19 +1210,21 @@ set up in a test and checked.
   0.45 m to the side of the way the player faces, it touches an arm held
   away from the body: handball, a direct free kick or a penalty, unless the
   ball came from within 2 m, too close to react, or from the player's own
-  touch. Otherwise it bounces off the body as any deflection does. Handball
+  touch. Otherwise it bounces off the body as any deflection does. The
+  nearest such player meets the ball, whichever team it is on. Handball
   that stops a ball heading into the goal (between the posts and under the
   bar, as it flies) is a red card; within 27 m of the
   player's own goal it is a yellow card.
 - **Advantage.** After a foul outside the offender's penalty area that is
   not a red-card offence, when the ball is in the fouled team's attacking
   half and the nearest player able to play it is on the fouled team, play
-  goes on: the referee signals advantage. If the opponents win the ball
+  goes on: the referee signals advantage. A teammate in an offside position
+  does not count as able to play it. If the opponents win the ball
   within 3 s, play comes back for the free kick, with the card the foul
   earned. Otherwise play goes on, and only a card for a reckless challenge
   is still given, at the next stoppage. While an advantage is played, the
-  offender's continued contact is not judged again, and any other foul stops
-  play.
+  offender's continued contact with the player it fouled is not judged again,
+  and any other foul stops play.
 - **Added time.** Each half has time added for time lost: a minute for each
   goal and penalty, and half a minute for each substitution and card, in
   match minutes, rounded up to a whole minute; no time is lost, none is
