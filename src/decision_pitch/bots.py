@@ -7,7 +7,7 @@ import math
 from dataclasses import replace
 
 from decision_pitch import pitch
-from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import ROLLING, TOP_SPEED, Player, _step_ball
 
 SHOOTING_RANGE = 24.0  # m from goal
@@ -39,6 +39,7 @@ RUN_THROUGH = 3.0  # m beyond its meeting spot that a chaser close to a moving b
 RUN_THROUGH_NEAR = 6.0  # m from the ball within which it does
 RUN_THROUGH_SPEED = 1.0  # m/s the ball moves at, at least
 SAVE_MARGIN = 1.0  # m outside a post within which a goalkeeper still covers a shot
+LAST_DITCH = 25.0  # m from its own goal within which a carrier is met with a slide tackle
 SHAPE_FOLLOW = 0.9  # how far the team's shape moves with the ball, as a share of the ball's move
 SHAPE_DEEPEST = 8.0  # m from its own goal line that an outfield player's place goes back to at most
 
@@ -80,7 +81,9 @@ def command(m: Match, p: Player) -> Command:
         if p.id == chaser.id:
             return MoveTo(*_run_through(m, p, spot))
     elif p.id == _nearest(m, p.team, outfield=True).id:
-        return MoveTo(*_press_spot(m, p))
+        c = m.player(m.owner)
+        last_ditch = math.hypot(-m.attack(p.team) * pitch.HALF_LENGTH - c.x, c.y) < LAST_DITCH
+        return Tackle(*_press_spot(m, p), slide=last_ditch, from_behind=False)
     return _shape(m, p, _home(m, p))
 
 

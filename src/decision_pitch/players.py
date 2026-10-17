@@ -145,6 +145,7 @@ class Players:
                 await asyncio.sleep(0.1)
                 continue
             question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
+            asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
                 answer = await seat.model.decide(question)
@@ -156,10 +157,12 @@ class Players:
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
             seat.answer = time.perf_counter() - start
-            seat.action, seat.answers = answer.move, seat.answers + 1
+            note = _late(m, p, answer.move, asked, had_ball)
+            seat.action = "hold" if note == "already played" else answer.move
+            seat.answers += 1
             seat.times.append(seat.answer)
             seat.outcomes.append(True)
-            self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000)))
+            self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000), action=answer.move, note=note))
 
 
 def _error(exc: Exception) -> str:
@@ -171,10 +174,26 @@ def _error(exc: Exception) -> str:
     return type(exc).__name__
 
 
-def _decision(player_id: int, seat: Seat, ms: int, error: str | None = None) -> dict:
+def _late(m: Match, p, action: str, asked: float, had_ball: bool) -> str | None:
+    """Whether an answer for the ball came too late for it: "already played" if the player
+    passed, shot or cleared the ball itself since it was asked, "no ball" if it is carried out
+    without the ball (docs/decisions.md, section 4), else None."""
+    if m.phase != "play" or m.owner == p.id or action not in actions.ON_THE_BALL or action == "sprint":
+        return None
+    if had_ball and m.kicked.get(p.id, -1.0) >= asked:
+        return "already played"
+    return "no ball"
+
+
+def _decision(
+    player_id: int, seat: Seat, ms: int, error: str | None = None, action: str | None = None,
+    note: str | None = None,
+) -> dict:
     decision = {"type": "decision", "player": player_id, "model": seat.model.name, "ms": ms}
     if error is None:
-        decision["action"] = seat.action
+        decision["action"] = action or seat.action
+        if note:
+            decision["note"] = note
     else:
         decision["error"] = error
     return decision

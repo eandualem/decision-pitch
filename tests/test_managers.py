@@ -52,7 +52,7 @@ def play(staff):
 
 
 def test_two_built_in_managers_play_a_full_match_with_substitutions():
-    staff = staffed(match=Match(half_length=120.0, seed=2))
+    staff = staffed(match=Match(half_length=120.0, seed=0))
     sent = play(staff)
     assert staff.match.phase == "full_time"
     made = [m for m in sent if m.get("kind") == "substitution" and m["type"] == "event"]

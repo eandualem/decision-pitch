@@ -4,7 +4,7 @@ import pytest
 
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
-from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, AirKick, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import STEP, TOP_SPEED
 
 
@@ -515,3 +515,128 @@ def test_a_sent_off_player_cannot_be_replaced():
     m._card(m.player(15), red=True)
     assert m.pending == []
     assert m.substitute(15, 30) == "that player is not on the pitch"
+
+
+# -- tackles ------------------------------------------------------------------------------------
+
+
+def tackler(m, pid, x, y, vx=0.0, vy=0.0, **kind):
+    """Player `pid` at (x, y), running at (vx, vy) m/s, going in for the ball."""
+    q = m.player(pid)
+    q.x, q.y, q.vx, q.vy, q.heading = x, y, vx, vy, math.atan2(m.ball.y - y, m.ball.x - x)
+    m.command(pid, Tackle(m.ball.x, m.ball.y, **kind))
+    return q
+
+
+def touch(m, pid):
+    return next(t["kind"] for t in reversed(m.touches) if t["player"] == pid)
+
+
+def test_a_standing_tackle_from_the_front_takes_the_ball():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, 1.6, 0.0, vx=-1.0)
+    m.step()
+    assert touch(m, 7) == "tackle" and m.owner is None and 18 in m.recovering
+    assert m.ball.vx > 0  # to the tackler's feet
+    run(m, 0.5)
+    assert m.owner == 7 and touch(m, 7) == "tackle"
+
+
+def test_a_standing_tackle_closing_fast_pokes_the_ball_loose():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, 1.6, 0.0, vx=-5.0)
+    m.step()
+    assert touch(m, 7) == "poke" and m.ball.vx < 0  # on, the way the tackler went in
+
+
+def test_a_standing_tackle_that_misses_leaves_the_tackler_stumbling():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.heading, c.vy = math.pi / 2, 7.0  # running away across the tackler
+    m.ball.place(0.0, 0.6)
+    tackler(m, 7, 1.1, 0.6)
+    m.step()
+    assert m.snapshot()["players"][6]["move"] == "stumble" and 7 in m.recovering
+    assert m.owner == 18 and not m.drain_events()
+
+
+def test_a_standing_tackle_that_takes_the_player_not_the_ball_is_a_foul():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 2.0
+    tackler(m, 7, -0.15, 0.85, vx=0.4, vy=-1.6)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+    assert m.down[18][0] == "side"
+
+
+def test_a_press_does_not_go_in_from_behind_but_a_tackle_does_and_fouls():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, -0.5, 0.2, from_behind=False)
+    m.step()
+    assert m.owner == 18 and not m.drain_events()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, -0.5, 0.2)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+    assert m.down[18][0] == "front"
+
+
+def test_a_slide_tackle_from_the_side_pokes_the_ball_and_leaves_the_slider_down():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 4.0
+    tackler(m, 7, 1.5, 2.0, slide=True)
+    m.step()
+    start = m.t
+    assert touch(m, 7) == "poke" and m.snapshot()["players"][6]["move"] == "slide"
+    run(m, 0.6)
+    way, until = m.down[7]
+    assert way == "side" and math.isclose(until, start + 1.5)
+    assert m.snapshot()["players"][6]["down"] == {"way": "side", "until": round(until, 3)}
+    run(m, 1.0)
+    assert 7 not in m.down and 7 not in m.recovering
+
+
+def test_a_slide_tackle_that_takes_the_player_is_a_foul():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 1.0
+    tackler(m, 7, -0.8, 1.9, slide=True)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+
+
+def test_a_slide_tackle_from_behind_is_a_foul_and_a_yellow_card_anywhere():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)  # at halfway, far from any promising attack
+    tackler(m, 7, -1.8, 0.3, slide=True)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "yellow", "free_kick"]
+
+
+def test_a_slide_tackle_that_misses_leaves_the_slider_on_the_ground():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 7.0
+    tackler(m, 7, -0.3, 2.3, slide=True)
+    m.step()
+    assert m.owner == 18 and not m.drain_events() and m.moves[7][0] == "slide"
+    run(m, 0.6)
+    assert 7 in m.down and 7 in m.recovering
+
+
+def test_a_kick_at_nothing_at_speed_ends_on_the_ground():
+    m = in_play()
+    for vx, down in ((2.0, False), (6.5, True)):
+        p = m.player(7)
+        p.x, p.y, p.vx, p.vy = 10.0, 0.0, vx, 0.0
+        m.moves.clear(), m.down.clear(), m.recovering.clear()
+        m.command(7, AirKick())
+        m.step()
+        assert m.moves[7][0] == "air_kick" and m.commands[7] == Hold()
+        run(m, 0.6)
+        assert 7 not in m.moves and (7 in m.down) == down

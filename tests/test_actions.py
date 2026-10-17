@@ -85,13 +85,24 @@ def test_a_model_is_asked_only_the_actions_that_apply():
     assert "dribble" in on and "sprint" in on and "press" not in on
     assert "shoot" not in on and "cross" not in on and "shield" not in on  # far from goal, central, unpressed
     off = actions.options(m, m.player(8))
-    assert tuple(off) == actions.OFF_THE_BALL[:-1]  # too far from their line to run in behind
+    assert tuple(off) == ("hold", "support", "mark")  # a teammate has it; too far back to run in behind
     assert tuple(actions.options(m, m.player(1))) == actions.KEEPER_OFF_THE_BALL
     m._restart("corner", 0, 52.5, 34.0)
     taker = bots._taker(m, 0)
     assert "cross" in actions.options(m, taker) and "dribble" not in actions.options(m, taker)
     others = next(q for q in m.players if q.team == 0 and q is not taker and q.position != "GK")
     assert set(actions.options(m, others)) <= set(actions.AT_A_RESTART)
+
+
+def test_challenges_are_asked_while_an_opponent_has_the_ball():
+    m = in_play()
+    on_the_ball(m, m.player(18))
+    near, far = m.player(8), m.player(9)
+    near.x, near.y, far.x, far.y = 5.0, 5.0, 20.0, 5.0
+    assert {"press", "tackle", "slide_tackle", "jockey"} <= set(actions.options(m, near))
+    assert "tackle" in actions.options(m, far) and "slide_tackle" not in actions.options(m, far)
+    m.owner = None  # loose: it can be pressed for, not tackled
+    assert "press" in actions.options(m, near) and "tackle" not in actions.options(m, near)
 
 
 def test_the_state_tells_how_far_the_last_defender_is():

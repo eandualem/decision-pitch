@@ -19,6 +19,7 @@ from decision_pitch.physics import (
     TOP_SPEED,
     Ball,
     Player,
+    brake,
     carry,
     separate,
     step_ball,
@@ -48,7 +49,23 @@ class KickTo:
     touch: str = "kick"  # how the page is told of it: "kick", or "knock" for a sprint's knock ahead
 
 
-Command = Hold | MoveTo | KickTo
+@dataclass(frozen=True)
+class Tackle:
+    """Run at (x, y) and go in for the ball an opponent has once it is in reach."""
+
+    x: float
+    y: float
+    speed: float = TOP_SPEED
+    slide: bool = False  # a slide tackle, from further away; else a standing tackle
+    from_behind: bool = True  # it goes in from behind the carrier too
+
+
+@dataclass(frozen=True)
+class AirKick:
+    """Kick where the player stands, with no ball to kick: a late answer carried out."""
+
+
+Command = Hold | MoveTo | KickTo | Tackle | AirKick
 
 CONTROL = 0.75  # m from a player's centre to the ball's within which it plays the ball
 CONTROL_HEIGHT = 0.9  # m, the highest ball a player can play
@@ -81,6 +98,22 @@ SUBSTITUTES = 5  # substitutions a team may make
 WINDOWS = 3  # stoppages it may make them in, half time not counted
 FEWEST = 7  # players a team needs to play on
 RECENT_TOUCHES = 0.1  # s of touches each snapshot repeats, so none falls between two of them
+STAND_REACH = 1.2  # m from a tackler's centre to the ball within which it goes in standing
+SLIDE_REACH = 2.5  # m within which it slides in
+TACKLE_LOOK = 0.25  # s ahead at which a standing tackle is judged
+SLIDE_TIME = 0.5  # s a slide lasts, and ahead at which it is judged
+SLIDE_SPEED = 6.0  # m/s a slide starts at
+SLIDE_DOWN = 1.5  # s from going in to slide until the slider is up again
+TAKE_SPEED = 3.0  # m/s closing on the carrier at or below which a tackle takes the ball
+POKE_SPEED = 4.0  # m/s a standing tackle that closes faster pokes the ball on at
+SLIDE_POKE = 5.0  # m/s a slide pokes the ball on at
+STUMBLE = 0.5  # s a missed standing tackle leaves the tackler unable to play the ball
+DISPOSSESSED = 0.4  # s a carrier that loses the ball to a tackle cannot play it
+FOULED_DOWN = 1.2  # s a fouled player is on the ground
+AIR_KICK = 0.6  # s a kick at nothing takes
+AIR_KICK_FALL = 6.0  # m/s at or above which a kick at nothing ends on the ground
+AIR_KICK_DOWN = 1.5  # s on the ground after it
+BRAKE = 12.0  # m/s² a player swinging, sliding or falling slows at
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -155,6 +188,11 @@ class Match:
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
         self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
         self.diving: set[int] = set()  # goalkeepers diving across their goal this step
+        # movements without the ball (docs/protocol.md): kind, until when, and how it then
+        # goes down and until when, if it does
+        self.moves: dict[int, tuple[str, float, str | None, float]] = {}
+        self.down: dict[int, tuple[str, float]] = {}  # on the ground: which way, until when
+        self.kicked: dict[int, float] = {}  # when each player last kicked the ball, not a knock
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -217,6 +255,11 @@ class Match:
         }
         if p.id in self.diving:
             entry["dive"] = True
+        if p.id in self.moves:
+            entry["move"] = self.moves[p.id][0]
+        if p.id in self.down:
+            way, until = self.down[p.id]
+            entry["down"] = {"way": way, "until": round(until, 3)}
         return entry
 
     def drain_events(self) -> list[dict]:
@@ -264,6 +307,14 @@ class Match:
             self.recovering[pid] -= STEP
             if self.recovering[pid] <= 0:
                 del self.recovering[pid]
+        for pid, (_, until, way, down_until) in list(self.moves.items()):
+            if self.t >= until:
+                del self.moves[pid]
+                if way:
+                    self.down[pid] = (way, down_until)
+        for pid, (_, until) in list(self.down.items()):
+            if self.t >= until:
+                del self.down[pid]
 
         for p in self.players:
             self._move(p)
@@ -304,9 +355,16 @@ class Match:
 
     def _move(self, p: Player) -> None:
         command = self.commands[p.id]
-        if self._out_of_place(p) > OUT_OF_PLACE:
+        if p.id in self.down or p.id in self.moves:
+            brake(p, BRAKE)  # swinging, stumbling, sliding or on the ground: it slows to a stop
+        elif self._out_of_place(p) > OUT_OF_PLACE:
             # the laws ask it to retreat, whatever it was told
             step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
+        elif isinstance(command, AirKick):
+            self._air_kick(p)
+        elif isinstance(command, Tackle):
+            if not self._tackle(p, command):
+                step_player(p, command.x, command.y, command.speed)
         elif isinstance(command, MoveTo):
             dive = self._dives(p)
             if dive:
@@ -331,6 +389,93 @@ class Match:
         if (goal_x - b.x) * b.vx <= 0:
             return False  # not moving towards the goal
         return abs(b.y + b.vy * (goal_x - b.x) / b.vx) <= pitch.GOAL_WIDTH / 2 + DIVE_MARGIN
+
+    # -- movements without the ball: kicks at nothing, tackles and falls -------------------
+
+    def _air_kick(self, p: Player) -> None:
+        """`p` kicks where it stands, at nothing; at speed it goes down after the swing
+        (docs/decisions.md, section 4). The command is then spent."""
+        out = AIR_KICK
+        if p.speed >= AIR_KICK_FALL:
+            self.moves[p.id] = ("air_kick", self.t + AIR_KICK, "back", self.t + AIR_KICK + AIR_KICK_DOWN)
+            out += AIR_KICK_DOWN
+        else:
+            self.moves[p.id] = ("air_kick", self.t + AIR_KICK, None, 0.0)
+        self.recovering[p.id] = max(self.recovering.get(p.id, 0.0), out)
+        self.commands[p.id] = Hold()
+        brake(p, BRAKE)
+
+    def _tackle(self, p: Player, command: Tackle) -> bool:
+        """Whether `p` goes in for the ball an opponent has, now, and if so how it ends
+        (docs/decisions.md, section 8)."""
+        if self.phase != "play" or self.owner is None or p.id in self.recovering:
+            return False
+        c, b = self.player(self.owner), self.ball
+        reach = SLIDE_REACH if command.slide else STAND_REACH
+        if c.team == p.team or b.z > CONTROL_HEIGHT or math.hypot(b.x - p.x, b.y - p.y) > reach:
+            return False
+        behind = self._behind(p, c)
+        if behind and not command.from_behind:
+            return False
+        look = SLIDE_TIME if command.slide else TACKLE_LOOK
+        bx, by = b.x + c.vx * look, b.y + c.vy * look  # where the ball and the players will be
+        cx, cy = c.x + c.vx * look, c.y + c.vy * look
+        px, py = (p.x, p.y) if command.slide else (p.x + p.vx * look, p.y + p.vy * look)
+        if command.slide:
+            dx, dy = bx - p.x, by - p.y
+            dist = math.hypot(dx, dy) or 1.0
+            p.vx, p.vy = dx / dist * SLIDE_SPEED, dy / dist * SLIDE_SPEED
+            p.heading = math.atan2(dy, dx)
+            self.moves[p.id] = ("slide", self.t + SLIDE_TIME, "side", self.t + SLIDE_DOWN)
+            self.recovering[p.id] = SLIDE_DOWN
+        if behind:
+            self._fouled(p, c, behind=True, reckless=command.slide)
+        elif math.hypot(bx - px, by - py) <= reach:
+            self._win_ball(p, c, command.slide)
+        elif math.hypot(cx - px, cy - py) <= (SLIDE_REACH if command.slide else 2 * PLAYER_RADIUS):
+            self._fouled(p, c, behind=False, reckless=False)  # it took the player, not the ball
+        elif not command.slide:
+            self.moves[p.id] = ("stumble", self.t + STUMBLE, None, 0.0)
+            self.recovering[p.id] = STUMBLE
+        return True
+
+    def _behind(self, p: Player, carrier: Player) -> bool:
+        """Whether `p` is more than 120° from where `carrier` faces."""
+        dx, dy = p.x - carrier.x, p.y - carrier.y
+        dist = math.hypot(dx, dy)
+        return dist > 0 and (dx * math.cos(carrier.heading) + dy * math.sin(carrier.heading)) / dist < BEHIND
+
+    def _win_ball(self, p: Player, carrier: Player, slide: bool) -> None:
+        """`p`'s tackle wins the ball: it takes it, or pokes it loose if it closes fast
+        or slides. Either way the ball leaves the carrier, which cannot play it at once."""
+        b = self.ball
+        dx, dy = carrier.x - p.x, carrier.y - p.y
+        dist = math.hypot(dx, dy) or 1.0
+        closing = ((p.vx - carrier.vx) * dx + (p.vy - carrier.vy) * dy) / dist
+        if not slide and closing <= TAKE_SPEED:
+            # the ball comes to the tackler's feet
+            tx, ty = p.x + math.cos(p.heading) * DRIBBLE, p.y + math.sin(p.heading) * DRIBBLE
+            speed = math.hypot(tx - b.x, ty - b.y) / TACKLE_LOOK
+            kind = "tackle"
+        else:
+            tx, ty = b.x + (b.x - p.x), b.y + (b.y - p.y)  # on, the way the tackler went in
+            speed = SLIDE_POKE if slide else POKE_SPEED
+            kind = "poke"
+        self._touched(p, kind)
+        aim = math.hypot(tx - b.x, ty - b.y) or 1.0
+        b.vx, b.vy, b.vz = (tx - b.x) / aim * speed, (ty - b.y) / aim * speed, 0.0
+        self.owner = None
+        self.last_touch = p.team
+        self.offside = self._offside_positions(p)
+        if p.id != self.indirect:
+            self.indirect = None
+        self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), DISPOSSESSED)
+
+    def _fouled(self, p: Player, carrier: Player, behind: bool, reckless: bool) -> None:
+        """`p`'s tackle fouls `carrier`, which goes down."""
+        self.down[carrier.id] = ("front" if behind else "side", self.t + FOULED_DOWN)
+        self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), FOULED_DOWN)
+        self._foul(p, carrier, reckless=reckless)
 
     # -- possession and kicks ---------------------------------------------------------------
 
@@ -455,6 +600,8 @@ class Match:
         self.owner = None
         self.recovering[p.id] = KICK_RECOVERY
         self.commands[p.id] = Hold()
+        if command.touch != "knock":
+            self.kicked[p.id] = self.t
         if self.phase != "play":
             self.phase, self.restart_team = "play", None
 
@@ -466,6 +613,8 @@ class Match:
         touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
                  "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
         if self.touches and (self.touches[-1]["t"], self.touches[-1]["player"]) == (touch["t"], p.id):
+            if kind == "control":
+                return  # its tackle brought the ball to it: the tackle is the touch
             self.touches.pop()
         self.touches.append(touch)
 
@@ -496,13 +645,13 @@ class Match:
                 self._foul(q, carrier)
                 return
 
-    def _foul(self, offender: Player, fouled: Player) -> None:
+    def _foul(self, offender: Player, fouled: Player, reckless: bool = False) -> None:
         team = fouled.team
         self._event("foul", team, offender.id, fouled=fouled.id)
         goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
         if goal <= GOAL_CHANCE and self._denies_goal(offender, fouled):
             self._card(offender, red=True)
-        elif goal <= PROMISING_ATTACK:
+        elif goal <= PROMISING_ATTACK or reckless:
             self._card(offender)
         if self.phase == "full_time":
             return
@@ -535,7 +684,8 @@ class Match:
 
     def _send_off(self, p: Player) -> None:
         self.players.remove(p)
-        self.recovering.pop(p.id, None)
+        for state in (self.recovering, self.moves, self.down):
+            state.pop(p.id, None)
         self.pending = [(off, on) for off, on in self.pending if off != p.id]
         if self.owner == p.id:
             self.owner = None
@@ -578,6 +728,8 @@ class Match:
             self.substitutions[p.team] += 1
             self.players[self.players.index(p)] = q
             self.bench.remove(q)
+            for state in (self.recovering, self.moves, self.down):
+                state.pop(off, None)
             q.x, q.y, q.vx, q.vy, q.heading = p.x, p.y, 0.0, 0.0, p.heading
             q.position, q.home = p.position, p.home
             self.commands[q.id] = Hold()
@@ -648,6 +800,8 @@ class Match:
             self._place_for_kickoff()
 
     def _place_for_kickoff(self) -> None:
+        self.moves.clear()
+        self.down.clear()
         for p in self.players:
             side = -self.attack(p.team)
             p.x, p.y = -side * p.home[0], -side * p.home[1]
