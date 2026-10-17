@@ -300,6 +300,54 @@ def test_a_foul_that_denies_an_obvious_goal_scoring_chance_is_a_red_card():
     assert 15 not in on_pitch(m)
 
 
+@pytest.mark.parametrize(
+    ("tackle", "chance", "expected"),
+    [
+        (True, True, ["foul", "yellow", "penalty"]),  # it tried to play the ball: a yellow
+        (True, False, ["foul", "penalty"]),  # a promising attack stopped: the penalty alone
+        (False, True, ["foul", "red", "penalty"]),  # it ran into the player: still a red
+    ],
+)
+def test_a_tackle_in_the_offenders_own_area_is_one_card_lower(tackle, chance, expected):
+    m = in_play()
+    if chance:
+        for p in m.players:
+            if p.team == 1 and p.position != "GK":
+                p.x = min(p.x, 20.0)
+    c = on_the_ball(m, 10, 45.0, 0.0)
+    if tackle:
+        c.vx = 2.0
+        tackler(m, 15, 44.85, 0.85, vx=0.4, vy=-1.6)  # takes the player, not the ball
+    else:
+        challenge(m, 15, 44.3, 0.0, 5.0, 0.0)  # runs into its back
+    m.step()
+    assert kinds(m.drain_events()) == expected
+
+
+@pytest.mark.parametrize(
+    ("keeper", "expected"),
+    [
+        (False, ["foul", "red", "penalty"]),  # it would have reached the loose ball first
+        (True, ["foul", "yellow", "penalty"]),  # the goalkeeper would have: no chance denied
+    ],
+)
+def test_a_foul_off_the_ball_denies_a_goal_chance_only_if_the_fouled_player_would_reach_it(keeper, expected):
+    m = in_play()
+    m.owner = None
+    for p in m.players:
+        if p.team == 1 and p.position != "GK":
+            p.x = min(p.x, 20.0)
+    r = m.player(9)
+    r.x, r.y, r.heading = 40.0, 0.0, 0.0
+    m.ball.place(43.0, 0.0)
+    if keeper:
+        k = m.player(12)
+        k.x, k.y = 44.0, 0.0
+    challenge(m, 17, 39.3, 0.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == expected
+
+
 def test_a_sent_off_goalkeeper_is_replaced_in_goal_by_the_teammate_nearest_it():
     m = in_play()
     m._card(m.player(12), red=True)
@@ -804,6 +852,32 @@ def test_running_into_an_opponent_off_the_ball_from_behind_is_a_foul():
     r = m.player(9)
     r.x, r.y, r.heading = 5.0, 5.0, 0.0
     challenge(m, 17, 5.7, 5.0, -5.0, 0.0)  # from the front: jostling, not a foul
+    m.step()
+    assert m.drain_events() == []
+
+
+@pytest.mark.parametrize("carrier", [True, False])
+def test_touching_a_player_from_behind_at_its_own_pace_is_not_running_into_it(carrier):
+    m = no_advantage(in_play())
+    m.owner = None
+    if carrier:
+        r = on_the_ball(m, 9, 5.0, 5.0)
+    else:
+        r = m.player(9)
+        r.x, r.y, r.heading = 5.0, 5.0, 0.0
+        m.ball.place(8.0, 5.0)
+    r.vx = 7.0
+    m.command(9, MoveTo(60.0, 5.0))
+    challenge(m, 17, 4.3, 5.0, 7.5, 0.0)  # tracking its run, closing at 0.5 m/s
+    m.step()
+    assert m.drain_events() == []
+
+
+def test_a_carrier_backing_into_an_opponent_standing_still_is_not_fouled_by_it():
+    m = no_advantage(in_play())
+    c = on_the_ball(m, 10, 45.0, 0.0)
+    c.vx = -3.0
+    challenge(m, 15, 44.25, 0.0, 0.0, 0.0)
     m.step()
     assert m.drain_events() == []
 
