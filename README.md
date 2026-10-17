@@ -9,6 +9,8 @@ faster model acts more often while the match keeps running.
 It is a sibling of [Decision Arena](https://github.com/eandualem/decision-arena),
 where the same models race in a runner game.
 
+![A match in play: Harbour in blue against Ridge in orange, seen from the main stand](docs/media/grass/wide.jpg)
+
 **Status:** early. Decision models or built-in bots play a full match on the
 page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
 for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
@@ -19,6 +21,15 @@ You need [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv run decision-pitch
+```
+
+With no keys, that match is played by the built-in bots. To watch a decision
+model play with no keys, install Laya once and give it a team. Laya runs on
+your computer, and its first start downloads about 850 MB:
+
+```bash
+uv tool install 'laya[serve]'
+uv run decision-pitch --home laya --away bot
 ```
 
 The page opens in your browser at `http://127.0.0.1:8000/` and a match starts
