@@ -1128,3 +1128,42 @@ test('a slide goes in on the boot nearer the ball; one that ends down lies in it
   assert.deepEqual(shownBy(actors, 3), [], 'up again');
   actors.dispose();
 });
+
+test('a touch just after a player is up again plays, seen while it is still getting up', () => {
+  const { actors } = match();
+  const touch = { player: 1, kind: 'kick', t: 3.3, x: 10.6, y: 0, z: 0.11 };
+  const at = (t) => snap(t, [player(1, 10, 0, t < 3.2 ? { down: { way: 'front', until: 3.2 } } : {}), player(3, 30, 30)],
+    { x: 10.6, y: 0, owner: t < 3.3 ? 1 : null, touches: t >= 3.3 && t < 3.4 ? [touch] : [] });
+  for (let t = 2; t < 3.5; t += STEP) actors.update(at(t), at(t + STEP), 0.5, STEP, t + STEP / 2, at(t + 4 * STEP));
+  assert.ok(shownBy(actors, 1).some(([name]) => name === 'pass'), `the kick plays: ${shownBy(actors, 1)}`);
+  actors.dispose();
+});
+
+test('a slide faces the way the engine turns it as it goes in', () => {
+  const { actors, play } = match();
+  play((t) => [[player(3, 10, t < 2 ? 0 : 6 * (t - 2), { heading: t < 2 ? 0 : Math.PI / 2, ...(t >= 2 ? { move: 'slide' } : {}) }),
+    player(1, 30, 30)], { x: 10, y: 3 }], 1.3, 1);
+  assert.ok(Math.abs(actors.getPlayerFacing(3) - Math.PI) < 1e-6, `along its slide: ${actors.getPlayerFacing(3)}`);
+  actors.dispose();
+});
+
+test('a lunge at nothing still playing out gives way to the ball played next', () => {
+  const { actors, play } = match();
+  const touch = { player: 1, kind: 'kick', t: 2.6, x: 10.6, y: 0, z: 0.11 };
+  play((t) => [[player(1, 10, 0, t >= 2 && t < 2.5 ? { move: 'stumble' } : {}), player(3, 30, 30)],
+    { x: 10.6, y: 0, owner: 1, touches: t >= touch.t && t < touch.t + 0.1 ? [touch] : [] }], 1.85, 1);
+  const shown = shownBy(actors, 1).map(([name]) => name);
+  assert.ok(shown.includes('pass') && !shown.includes('tackle_missed'), `the kick alone: ${shown}`);
+  actors.dispose();
+});
+
+test('getting up turned across its heading, the stride runs the way the body shows', () => {
+  const { actors, play } = match();
+  play((t) => [[player(1, t < 4 ? 10 : 10 + 3 * (t - 4), 0, t >= 2 && t < 4 ? { down: { way: 'side', until: 4 } } : {}),
+    player(3, 10, -0.9)], { x: 40, y: 0 }], 2.3, 2);
+  const shown = actors.getPlayerFacing(1) - Math.PI / 2; // the body's facing on the pitch
+  assert.ok(Math.abs(shown) > 0.3, `still turned back: ${shown}`);
+  const { travel } = actors.inspect(1);
+  assert.ok(Math.abs(Math.atan2(Math.sin(travel + shown), Math.cos(travel + shown))) < 0.15, `running +x against a body facing ${shown}: ${travel}`);
+  actors.dispose();
+});

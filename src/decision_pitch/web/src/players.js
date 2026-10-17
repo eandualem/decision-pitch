@@ -275,7 +275,8 @@ export function createPlayers(scene, teams, figure, options = {}) {
   function startPose(touch, snapshot, time, now) {
     const at = touch.t - STEP;
     const actor = actors.get(touch.player);
-    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT) || actor.down) return;
+    // Down, it plays the ball only once it is up again, at `until`: a touch seen ahead may be.
+    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT) || (actor.down && at < actor.down.until)) return;
     // The tackle a slide makes, judged as it goes in, is shown by the slide itself.
     if ((touch.kind === 'tackle' || touch.kind === 'poke')
       && (actor.mishap?.kind === 'slide' || snapshot.players.some(p => p.id === touch.player && p.move === 'slide'))) return;
@@ -304,6 +305,12 @@ export function createPlayers(scene, teams, figure, options = {}) {
     const clip = pose.clip && actor.person.clip(pose.clip);
     if (!clip) return;
     pose.end = clip.duration - clip.contact;
+    // A lunge at nothing or a swing still playing out gives way to the ball played now.
+    if (actor.mishap && !actor.down) {
+      actor.mishap.cut = Math.min(actor.mishap.cut, time);
+      actor.fadingMishap = actor.mishap;
+      actor.mishap = null;
+    }
     replace(actor, pose, time);
   }
 
@@ -437,15 +444,17 @@ export function createPlayers(scene, teams, figure, options = {}) {
       name = running ? 'stumble' : 'tackle_missed';
       options.planted = Boolean(running);
     } else if (kind === 'slide') {
-      // The boot nearer the ball: the left for a ball on its left.
-      const left = -(ball.x - player.x) * Math.sin(actor.facing) + (ball.y - player.y) * Math.cos(actor.facing) > 0;
+      // The boot nearer the ball, the left for a ball on its left, facing the way it slides:
+      // the heading the engine turns it to as it goes in, in the same snapshot.
+      const way = player.heading;
+      const left = -(ball.x - player.x) * Math.sin(way) + (ball.y - player.y) * Math.cos(way) > 0;
       name = left ? 'tackle_L' : 'tackle';
     }
     name = playable(actor, name);
     if (!name) return;
     const m = mishapClip(actor, name, time, options);
     m.kind = kind;
-    m.facing = actor.facing;
+    m.facing = kind === 'slide' ? player.heading : actor.facing;
     giveWay(actor, time);
     actor.mishap = m;
   }
@@ -881,7 +890,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
       }
       actor.sets.touchIn = touchIn;
       person.object.rotation.y = actor.facing + Math.PI / 2 + actor.turned;
-      person.update(step, actor.speed, actor.way - actor.facing, actor.sets);
+      person.update(step, actor.speed, actor.way - actor.facing - actor.turned, actor.sets);
     }
 
     // The ball as the engine sends it, through the point of each touch at its moment.
