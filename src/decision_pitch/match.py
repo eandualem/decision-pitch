@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from decision_pitch import pitch
 from decision_pitch.physics import (
     BALL_RADIUS,
+    GRAVITY,
     PLAYER_RADIUS,
     STEP,
     TOP_SPEED,
@@ -213,6 +214,7 @@ class Match:
         self.cards_due: list[int] = []  # cautioned during an advantage, shown at the next stoppage
         self.lost = 0.0  # match minutes lost in this half
         self.added: int | None = None  # minutes added to this half, once shown
+        self.lost_shown = 0.0  # `lost` when they were shown
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -331,7 +333,7 @@ class Match:
         self.elapsed += STEP
         self.since_restart += STEP
         if self.added is None and self.elapsed >= self.half_length:
-            self.added = math.ceil(self.lost - 1e-9)
+            self.added, self.lost_shown = math.ceil(self.lost - 1e-9), self.lost
             if self.added:
                 self._event("added_time", None, minutes=self.added)
         for pid in list(self.recovering):
@@ -364,6 +366,8 @@ class Match:
 
         before = (self.ball.x, self.ball.y, self.ball.z)
         self._take_possession()
+        if self.phase == "play" and self.advantage is not None:
+            self._check_advantage()  # before a new owner can play the ball on
         owner = self.player(self.owner) if self.owner else None
         command = self.commands[owner.id] if owner else None
         if owner and isinstance(command, KickTo) and self._may_kick(owner):
@@ -378,14 +382,12 @@ class Match:
             )
         elif self.phase == "play":
             step_ball(self.ball)
-        if self.phase == "play" and self.owner is None:
-            self._arm_height()
         if self.phase == "play":
             self._check_ball(before)
+        if self.phase == "play" and self.owner is None:
+            self._arm_height()  # only a ball still in play
         if self.phase == "play" and self.holder is not None:
             self._check_holding()
-        if self.phase == "play" and self.advantage is not None:
-            self._check_advantage()
 
         if self.penalty_live and self.ball.vx == self.ball.vy == self.ball.vz == 0:
             self.penalty_live = False  # it came to rest untouched
@@ -814,6 +816,9 @@ class Match:
                 continue  # it may handle the ball there
             if last is not None and last["player"] == p.id:
                 continue  # its own touch
+            if p.id in self.offside:
+                self._offside(p)
+                return
             side = abs(-dx * math.sin(p.heading) + dy * math.cos(p.heading))
             close = last is not None and math.hypot(last["x"] - p.x, last["y"] - p.y) <= TOO_CLOSE
             if side > BODY_SIDE and not close:
@@ -826,7 +831,10 @@ class Match:
         team, b = 1 - p.team, self.ball
         self._event("handball", team, p.id)
         goal_x = -self.attack(p.team) * pitch.HALF_LENGTH
-        heading_in = (goal_x - b.x) * b.vx > 0 and abs(b.y + b.vy * (goal_x - b.x) / b.vx) <= pitch.GOAL_WIDTH / 2
+        heading_in = False
+        if (goal_x - b.x) * b.vx > 0:
+            t = (goal_x - b.x) / b.vx  # when it reaches the goal line, as it flies
+            heading_in = abs(b.y + b.vy * t) <= pitch.GOAL_WIDTH / 2 and b.z + b.vz * t - GRAVITY * t * t / 2 < pitch.GOAL_HEIGHT
         if heading_in:
             self._card(p, red=True)
         elif math.hypot(goal_x - b.x, b.y) <= PROMISING_ATTACK:
@@ -843,8 +851,11 @@ class Match:
             self._restart("free_kick", team, x, y)
 
     def _half_end(self) -> float:
-        """The `elapsed` at which this half ends, with any added time."""
-        return self.half_length * (1 + (self.added or 0) / 45)
+        """The `elapsed` at which this half ends: with the added time shown, and time lost
+        during it."""
+        if self.added is None:
+            return self.half_length
+        return self.half_length * (1 + (self.added + self.lost - self.lost_shown) / 45)
 
     def _cards_due(self) -> None:
         """Show the cards held back during an advantage, now that play has stopped."""
@@ -981,6 +992,8 @@ class Match:
     ) -> None:
         self.advantage = None
         self._cards_due()
+        if self.phase == "full_time":
+            return  # a held-back card left a team too short to play on
         self.ball.place(x, y)
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
@@ -995,6 +1008,8 @@ class Match:
 
     def _kickoff(self, team: int, place_players: bool = False) -> None:
         self._restart("kickoff", team, 0.0, 0.0)
+        if self.phase == "full_time":
+            return
         self.events.pop()  # a kick-off is not shown as an event
         if place_players:
             self._place_for_kickoff()
@@ -1079,6 +1094,8 @@ class Match:
         self.advantage = None
         self._cards_due()
         self.owner = self.holder = None
+        if self.phase == "full_time":
+            return
         if self.period == 1:
             self.phase, self.since_restart = "half_time", 0.0
             self._event("half_time", None)
@@ -1087,7 +1104,8 @@ class Match:
             self._event("full_time", None)
 
     def _event(self, kind: str, team: int | None, player: int | None = None, **details) -> None:
-        self.lost += LOST.get(kind, 0.0)
+        if self.elapsed < self._half_end():
+            self.lost += LOST.get(kind, 0.0)  # not once time is up, as when a penalty is completed
         event = {"type": "event", "kind": kind, "t": round(self.t, 3), "team": team}
         if player is not None:
             event["player"] = player

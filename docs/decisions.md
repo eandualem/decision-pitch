@@ -1211,7 +1211,8 @@ set up in a test and checked.
   away from the body: handball, a direct free kick or a penalty, unless the
   ball came from within 2 m, too close to react, or from the player's own
   touch. Otherwise it bounces off the body as any deflection does. Handball
-  that stops a ball heading into the goal is a red card; within 27 m of the
+  that stops a ball heading into the goal (between the posts and under the
+  bar, as it flies) is a red card; within 27 m of the
   player's own goal it is a yellow card.
 - **Advantage.** After a foul outside the offender's penalty area that is
   not a red-card offence, when the ball is in the fouled team's attacking
@@ -1227,7 +1228,9 @@ set up in a test and checked.
   match minutes, rounded up to a whole minute; no time is lost, none is
   added. A match minute is a forty-fifth of the half's length. When the half
   reaches its length the referee shows the added minutes, and the clock runs
-  on as 45+ or 90+. No player is injured or wastes time on purpose in the
+  on as 45+ or 90+. Time lost during added time is added on as well, but not
+  time lost once the half's time is up, such as a penalty the half waits for. No
+  player is injured or wastes time on purpose in the
   engine, so neither adds time.
 - **Free kicks and penalties.** The fouled team takes a free kick where the
   foul happened, after a pause of 1.5 s, with opponents held 9.15 m from the

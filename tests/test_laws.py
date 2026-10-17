@@ -847,3 +847,73 @@ def test_time_lost_in_a_half_is_added_on_and_the_clock_runs_on():
     assert m.clock() == "45+01:00"
     run(m, m.half_length / 45 + 0.1)
     assert m.phase == "half_time"
+
+
+def test_play_comes_back_even_when_the_opponent_kicks_the_ball_at_once():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)
+    challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
+    m.step()
+    m.drain_events()
+    m.player(10).x = 0.0
+    m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
+    m.command(16, KickTo(-20.0, 0.0, 20.0))  # it would clear the ball in the same step
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+
+
+def test_an_offside_player_hit_by_a_chest_high_ball_is_offside():
+    m = in_play()
+    p = m.player(10)
+    p.x, p.y, p.heading = 30.0, 0.0, 0.0
+    m.offside = {10}
+    m.ball.x, m.ball.y, m.ball.z = 30.0, 0.1, 1.3
+    m.step()
+    assert kinds(m.drain_events()) == ["offside", "free_kick"]
+
+
+def test_a_held_back_card_that_leaves_a_team_short_ends_the_match():
+    for stop in ("restart", "half", "kickoff"):
+        m = in_play()
+        for q in [q for q in m.players if q.team == 1][7:]:
+            m.players.remove(q)  # seven left
+        offender = next(q for q in m.players if q.team == 1 and q.position != "GK")
+        m.yellows[offender.id], m.cards_due = 1, [offender.id]
+        if stop == "restart":
+            m._restart("throw_in", 0, 0.0, 34.0)
+        elif stop == "half":
+            m._end_half()
+        else:
+            m._kickoff(0)
+        assert m.phase == "full_time" and kinds(m.drain_events())[-1] == "full_time"
+
+
+def test_a_ball_already_over_the_goal_line_is_not_handball():
+    m = in_play()
+    keeper = m.player(12)
+    keeper.x = -40.0  # away from the goal
+    p = m.player(15)
+    p.x, p.y, p.heading = 52.9, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 52.4, 0.55, 1.3, 30.0
+    m.step()
+    assert m.score == [1, 0] and "handball" not in kinds(m.drain_events())
+
+
+def test_handball_on_a_ball_going_over_the_bar_is_not_a_red_card():
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 47.8, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 47.8, 0.55, 1.3
+    m.ball.vx, m.ball.vz = 10.0, 10.0
+    m.step()
+    assert kinds(m.drain_events()) == ["handball", "yellow", "penalty"]
+
+
+def test_time_lost_during_added_time_is_added_on_too():
+    m = in_play()
+    m.lost = 0.5
+    m.elapsed = m.half_length - STEP / 2
+    m.step()
+    assert m.added == 1
+    m._event("goal", 0)  # in added time
+    assert m._half_end() == pytest.approx(m.half_length * (1 + 2 / 45))
