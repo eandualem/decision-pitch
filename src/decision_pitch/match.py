@@ -90,7 +90,7 @@ RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick":
                     "free_kick": 9.15, "penalty": 9.15}  # fmt: skip
 RESTARTS = tuple(RESTART_DISTANCE)
 NO_OFFSIDE = ("throw_in", "goal_kick", "corner")  # restarts no one can be offside from
-FOUL_SPEED = 2.0  # m/s a challenger runs into the ball carrier at for its challenge to be judged
+FOUL_SPEED = 2.0  # m/s a challenger closes on the ball carrier at for its challenge to be judged
 BEHIND = -0.5  # cosine: a challenger more than 120° from where the carrier faces is behind it
 PROMISING_ATTACK = 27.0  # m from goal within which a foul stops a promising attack: a yellow card
 GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-scoring chance
@@ -123,7 +123,7 @@ TOO_CLOSE = 2.0  # m from where it was last played within which a ball on the ar
 GOAL_LOOK = 3.0  # s of a ball's path followed to judge whether it is going into the goal
 LOOK_STEP = 0.02  # s between the points of that path
 OFF_BALL_RANGE = 5.0  # m from the ball within which running into a player off the ball is judged
-OFF_BALL_SPEED = 4.0  # m/s it must run into it at
+OFF_BALL_SPEED = 4.0  # m/s it must close on it at
 LOST = {"goal": 1.0, "penalty": 1.0, "substitution": 0.5, "yellow": 0.5, "red": 0.5}  # match minutes
 
 # 4-4-2 for a team attacking towards +x, in its own half
@@ -524,11 +524,11 @@ class Match:
             self.indirect = None
         self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), DISPOSSESSED)
 
-    def _fouled(self, p: Player, carrier: Player, behind: bool, reckless: bool) -> None:
+    def _fouled(self, p: Player, carrier: Player, behind: bool, reckless: bool, tackle: bool = True) -> None:
         """`p`'s tackle fouls `carrier`, which goes down."""
         self.down[carrier.id] = ("front" if behind else "side", self.t + FOULED_DOWN)
         self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), FOULED_DOWN)
-        self._foul(p, carrier, reckless=reckless)
+        self._foul(p, carrier, reckless=reckless, tackle=tackle)
 
     # -- possession and kicks ---------------------------------------------------------------
 
@@ -744,7 +744,7 @@ class Match:
                     continue
                 if self.advantage is not None and (q.id, r.id) == self.advantage[1:3]:
                     continue  # the contact being played on from
-                towards = -(q.vx * dx + q.vy * dy) / dist
+                towards = -((q.vx - r.vx) * dx + (q.vy - r.vy) * dy) / dist  # how fast they close
                 behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
                 if not carrier and (towards <= OFF_BALL_SPEED or not self._near_ball(r)):
                     continue
@@ -752,18 +752,23 @@ class Match:
                     if carrier:
                         self._foul(q, r)
                     else:
-                        self._fouled(q, r, behind=True, reckless=False)  # off the ball
+                        self._fouled(q, r, behind=True, reckless=False, tackle=False)  # off the ball
                     return
 
-    def _foul(self, offender: Player, fouled: Player, reckless: bool = False) -> None:
+    def _foul(self, offender: Player, fouled: Player, reckless: bool = False, tackle: bool = False) -> None:
         team = fouled.team
         self._event("foul", team, offender.id, fouled=fouled.id)
         goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
-        red = goal <= GOAL_CHANCE and self._denies_goal(offender, fouled)
+        denies = goal <= GOAL_CHANCE and self._denies_goal(offender, fouled)
         booked = self.yellows.get(offender.id, 0) + self.cards_due.count(offender.id)
         second = reckless and booked > 0  # a second yellow sends it off: no advantage
         x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
         y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
+        # a tackle in the offender's own area tried to play the ball: the penalty gives back
+        # the chance it took, so the card is one lower (docs/decisions.md, section 8)
+        attempt = tackle and self._in_own_penalty_area(x, y, offender.team)
+        red = denies and not attempt
+        caution = reckless or (denies if attempt else goal <= PROMISING_ATTACK)
         advantage = self.advantage is None and not red and not second and not self._in_own_penalty_area(x, y, offender.team)
         if advantage and self._plays_on(team):
             self._event("advantage", team, fouled.id)
@@ -773,7 +778,7 @@ class Match:
             return
         if red:
             self._card(offender, red=True)
-        elif goal <= PROMISING_ATTACK or reckless:
+        elif caution:
             self._card(offender)
         if self.phase == "full_time":
             return
@@ -889,7 +894,15 @@ class Match:
                 self._card(self.player(pid))
 
     def _denies_goal(self, offender: Player, fouled: Player) -> bool:
-        """No outfield defender but the offender is nearer the goal line than the carrier."""
+        """The fouled player had the ball, or was the nearest to a loose ball but for the
+        offender, and no outfield defender but the offender is nearer the goal line."""
+        if self.owner is None:
+            b = self.ball
+            others = [q for q in self.players if q is not offender]
+            if min(others, key=lambda q: math.hypot(b.x - q.x, b.y - q.y)) is not fouled:
+                return False  # someone else would have reached the ball first
+        elif self.owner != fouled.id:
+            return False  # someone else has the ball
         direction = self.attack(fouled.team)
         return not any(
             q.team == offender.team and q is not offender and q.position != "GK"

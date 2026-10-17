@@ -121,7 +121,7 @@ while it waits.
 | Free kicks and penalties | Implemented. Opponents stay 9.15 m away, with a wall near goal; at a penalty only the taker and the goalkeeper on its line stay in the area and arc |
 | Advantage | Implemented: when the fouled team can play on in the opponents' half, play goes on, and comes back for the free kick if the opponents win the ball within 3 s |
 | Offside | Implemented, judged when a teammate kicks the ball, with an indirect free kick. Interfering with an opponent without playing the ball is not judged yet |
-| Yellow and red cards | Implemented: a yellow for stopping a promising attack or a slide tackle from behind, a red for denying an obvious goal-scoring opportunity or a second yellow. A sent-off player leaves the match; a team with fewer than seven ends it |
+| Yellow and red cards | Implemented: a yellow for stopping a promising attack or a slide tackle from behind, a red for denying an obvious goal-scoring opportunity or a second yellow. A tackle in the offender's own penalty area is one card lower, as the penalty gives the chance back. A sent-off player leaves the match; a team with fewer than seven ends it |
 | Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage, as the managers ask for them. A substitute takes the place and position of the player it replaces |
 
 ## Test it
