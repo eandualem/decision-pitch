@@ -1355,30 +1355,32 @@ export function createFigures(template, { footLock = true } = {}) {
 
     // Adds the page's pose over the clips: the hips turned to the stride (gait.yaw) with the
     // chest and neck turned back, the body leant into its acceleration from the feet, and
-    // the person's own carriage of its back and arms.
-    function pose() {
+    // the person's own carriage of its back and arms. `free` is the share of the body the
+    // one-shots leave it: a fall or a slide that takes the whole body lies as it was made.
+    function pose(free) {
+      const turned = hips * free;
       if (base) {
-        if (hips !== 0) base.quaternion.premultiply(turn.setFromAxisAngle(up, hips));
+        if (turned !== 0) base.quaternion.premultiply(turn.setFromAxisAngle(up, turned));
         const yaw = object.rotation.y;
         const c = Math.cos(yaw);
         const sn = Math.sin(yaw);
         const across = ax * c - az * sn; // the acceleration to the figure's left
         const ahead = ax * sn + az * c; // and ahead of it
         const hard = Math.hypot(across, ahead);
-        tilt = Math.min(TILT_MOST, TILT * Math.atan(hard / GRAVITY));
+        tilt = Math.min(TILT_MOST, TILT * Math.atan(hard / GRAVITY)) * free;
         if (tilt > 1e-4) {
           // Leaning towards the acceleration: up tips over towards it.
           tiltAxis.set(ahead / hard, 0, -across / hard).applyQuaternion(toBase);
           base.quaternion.premultiply(turn.setFromAxisAngle(tiltAxis, tilt));
         }
       }
-      if (spine) spine.quaternion.multiply(turn.setFromAxisAngle(axes.spine.bend, posture));
-      if (chest && hips !== 0) chest.quaternion.multiply(turn.setFromAxisAngle(axes.chest.twist, -COUNTER.chest * hips));
-      if (neck && hips !== 0) neck.quaternion.multiply(turn.setFromAxisAngle(axes.neck.twist, -COUNTER.neck * hips));
+      if (spine) spine.quaternion.multiply(turn.setFromAxisAngle(axes.spine.bend, posture * free));
+      if (chest && turned !== 0) chest.quaternion.multiply(turn.setFromAxisAngle(axes.chest.twist, -COUNTER.chest * turned));
+      if (neck && turned !== 0) neck.quaternion.multiply(turn.setFromAxisAngle(axes.neck.twist, -COUNTER.neck * turned));
       for (let i = 0; i < arms.length; i++) {
         const arm = arms[i];
-        if (arm.upper) arm.upper.quaternion.multiply(turn.setFromAxisAngle(arm.out, armsOut));
-        if (arm.fore) arm.fore.quaternion.multiply(turn.setFromAxisAngle(arm.bend, elbows));
+        if (arm.upper) arm.upper.quaternion.multiply(turn.setFromAxisAngle(arm.out, armsOut * free));
+        if (arm.fore) arm.fore.quaternion.multiply(turn.setFromAxisAngle(arm.bend, elbows * free));
       }
     }
 
@@ -1544,7 +1546,7 @@ export function createFigures(template, { footLock = true } = {}) {
         for (let i = 0; i < posed.length; i++) posed[i].quaternion.copy(mixed[i]);
         mixer.update(0);
         for (let i = 0; i < posed.length; i++) mixed[i].copy(posed[i].quaternion);
-        pose();
+        pose(1 - takenLeft / MOST);
         if (lockable) {
           let moving = 0;
           let duty = 0;

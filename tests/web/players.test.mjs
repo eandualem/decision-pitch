@@ -262,8 +262,8 @@ test('each touch plays its clip', () => {
   assert.equal(touchClip('control'), 'control');
   assert.equal(touchClip('deflect'), 'control');
   assert.equal(touchClip('knock'), null, 'a sprint\'s knock is the light touch of its stride, not a clip');
-  assert.equal(touchClip('tackle', { running: 6 }), 'tackle', 'at a run, the slide');
-  assert.equal(touchClip('tackle', { running: 2 }), 'tackle_standing', 'slower, the standing block');
+  assert.equal(touchClip('tackle'), 'tackle_standing', 'the standing block: a slide shows with its move');
+  assert.equal(touchClip('poke'), 'tackle_standing', 'knocking the ball loose, too');
   assert.equal(touchClip('kick', { speed: 22, loft: 0.5 }), 'pass_lofted', 'a long ball in the air is no shot');
   assert.equal(touchClip('kick', { speed: 14, loft: 0.5, crossing: true }), 'cross', 'lifted in from wide');
   assert.equal(touchClip('kick', { speed: 25, loft: 0.06 }), 'shot');
@@ -724,21 +724,24 @@ test('a kick plays the cross, the lofted pass or the shot by how the ball flies 
   assert.deepEqual(kick(figure, [40, 25], lifted), ['pass']);
 });
 
-test('a tackle at a run is the slide, a slower one the standing block', () => {
-  const tackle = (template, speed) => {
+test('a tackle is the standing block, even at a run; the slide that comes with its move shows its own', () => {
+  const tackle = (template, speed, fields = {}) => {
     const { actors, play } = match(template);
     const touch = { player: 3, kind: 'tackle', t: 2.2, x: 5.6, y: 0, z: 0.11 };
     play((t) => [[
-      player(1, 5, 0), player(2, -30, 0), player(3, 5 - 0.7 - speed * (2.2 - t), 0, { speed }), player(4, 30, 30),
+      player(1, 5, 0), player(2, -30, 0), player(3, 5 - 0.7 - speed * (2.2 - t), 0, { speed, ...(t >= 2.2 ? fields : {}) }),
+      player(4, 30, 30),
     ], { x: 5.6, y: 0, owner: t < 2.2 ? 1 : 3, touches: t >= touch.t && t < touch.t + 0.1 ? [touch] : [] }], 1.2, 1);
-    const shown = actors.inspect(3).acts.filter(act => act.weight > 0).map(act => act.name);
+    const shown = actors.inspect(3).acts.filter(act => act.weight > 0).map(act => act.name.split(':')[0]);
     actors.dispose();
     return shown;
   };
-  assert.deepEqual(tackle(figureMore, 6), ['tackle'], 'sliding in, the whole body');
-  const standing = tackle(figureMore, 1.5);
-  assert.ok(standing.length && standing.every(name => name.split(':')[0] === 'tackle_standing'), `the standing block: ${standing}`);
+  for (const speed of [1.5, 6]) {
+    const standing = tackle(figureMore, speed);
+    assert.ok(standing.length && standing.every(name => name === 'tackle_standing'), `the standing block: ${standing}`);
+  }
   assert.ok(tackle(figure, 1.5).every(name => name.startsWith('tackle')), 'a figure without the block slides');
+  assert.deepEqual(tackle(figureMore, 6, { move: 'slide' }), ['tackle'], 'sliding in, the whole body, from its move');
 });
 
 test('a sprinter knocking the ball on meets it with its stride, not a clip, and keeps its run with the ball', () => {
@@ -1025,5 +1028,103 @@ test('the throw-in is not picked up while play is still being drawn to a stop', 
   const after = snap(2 + STEP, [player(1, 0, 33.6)], { x: 0, y: 34 }, 'throw_in');
   for (let i = 1; i <= 9; i++) actors.update(before, after, i / 10, 1 / 60, 2 + i / 60);
   assert.deepEqual(actors.inspect(1).acts, [], 'the last throw-in\'s team is not used for this one');
+  actors.dispose();
+});
+
+// A player's `move` and `down` (issue #65): what it does without the ball, as the engine
+// carries it out. `shownBy(actors, id)` lists the one-shots it shows, with their clip times.
+const shownBy = (actors, id) => actors.inspect(id).acts.filter(a => a.weight > 0).map(a => [a.name.split(':')[0], a.time]);
+
+test('a kick at nothing swings from the moment the snapshot shows it', () => {
+  const { actors, play } = match();
+  play((t) => [[player(1, t * 5, 0, { speed: 5, ...(t >= 2 && t < 2.3 ? { move: 'air_kick' } : {}) }), player(3, 30, 30)],
+    { x: 40, y: 0 }], 1.5, 1);
+  const [[name, time]] = shownBy(actors, 1).filter(([n]) => n === 'air_kick');
+  // From 0.15 s into the clip, 0.5 s since the snapshot first showed it.
+  assert.equal(name, 'air_kick');
+  assert.ok(Math.abs(time - 0.67) < 0.04, `at ${time}`);
+  actors.dispose();
+});
+
+test('a stumble at a run plays at the runner\'s pace; a stumble walking is a lunge at nothing', () => {
+  const stumble = (speed) => {
+    const { actors, play } = match();
+    play((t) => [[player(1, t * speed, 0, { speed, ...(t >= 2 ? { move: 'stumble' } : {}) }), player(3, 30, 30)],
+      { x: 40, y: 0 }], 1.4, 1);
+    const shown = shownBy(actors, 1);
+    const { scale } = actors.inspect(1);
+    actors.dispose();
+    return { shown, scale };
+  };
+  const { shown: [[running, time]], scale } = stumble(5);
+  assert.equal(running, 'stumble');
+  assert.ok(Math.abs(time - 0.42 / scale) < 0.05, `its feet on the grass at 5 m/s: ${time}`);
+  assert.equal(stumble(1.5).shown[0][0], 'tackle_missed');
+});
+
+test('a player down falls, lies there and is on its feet as `until` comes', () => {
+  const { actors, play } = match();
+  const at = (t) => [[player(1, 10, 0, t >= 2 && t < 5 ? { down: { way: 'front', until: 5 } } : {}), player(3, 30, 30)],
+    { x: 40, y: 0 }];
+  play(at, 1.5, 1);
+  assert.deepEqual(shownBy(actors, 1).map(([n]) => n), ['fall_front'], 'falling');
+  play(at, 1, 2.5);
+  const [[lying, still]] = shownBy(actors, 1);
+  assert.ok(lying === 'fall_front' && still > 0.89, `lying as the fall ends: ${lying} ${still}`);
+  play(at, 1, 3.5);
+  const [[rising, time]] = shownBy(actors, 1);
+  assert.equal(rising, 'get_up_front');
+  assert.ok(Math.abs(time - (4.5 - (5 - 1.1))) < 0.05, `getting up to stand at 5 s: ${time}`);
+  play(at, 1, 4.5);
+  assert.deepEqual(shownBy(actors, 1), [], 'up again');
+  actors.dispose();
+});
+
+test('a short time down gets up faster; shouldered off, it falls away from the opponent and turns back up', () => {
+  const { actors, play } = match();
+  const short = (t) => [[player(1, 10, 0, t >= 2 && t < 3.5 ? { down: { way: 'back', until: 3.5 } } : {}),
+    player(3, 30, 30)], { x: 40, y: 0 }];
+  play(short, 2.25, 1);
+  const [[rising, time]] = shownBy(actors, 1);
+  assert.ok(rising === 'get_up_back' && time > 0.45, `up faster than its own pace: ${rising} ${time}`);
+  actors.dispose();
+  const side = match();
+  // The opponent on its right (it faces +x): it goes down to its left.
+  const shoved = (t) => [[player(1, 10, 0, t >= 2 && t < 5 ? { down: { way: 'side', until: 5 } } : {}),
+    player(3, 10, -0.9)], { x: 40, y: 0 }];
+  side.play(shoved, 1.5, 1);
+  assert.equal(shownBy(side.actors, 1)[0][0], 'fall_side_L');
+  side.play(shoved, 1.6, 2.5);
+  assert.equal(shownBy(side.actors, 1)[0][0], 'get_up_back');
+  const facing = side.actors.getPlayerFacing(1);
+  assert.ok(Math.abs(facing - (Math.PI / 2 - Math.PI / 2)) < 1e-6, `turned a quarter to get up from its back: ${facing}`);
+  side.play(shoved, 1.5, 5);
+  assert.ok(Math.abs(side.actors.getPlayerFacing(1) - Math.PI / 2) < 1e-6, 'and back to its heading on its feet');
+  side.actors.dispose();
+});
+
+test('a slide goes in on the boot nearer the ball; one that ends down lies in its slide until it gets up', () => {
+  const slide = (ballY) => {
+    const { actors, play } = match();
+    play((t) => [[player(3, 6 * Math.min(t, 2), 0, { speed: t < 2 ? 6 : 0, ...(t >= 2 ? { move: 'slide' } : {}) }),
+      player(1, 30, 30)], { x: 14, y: ballY }], 1.2, 1);
+    const shown = shownBy(actors, 3);
+    actors.dispose();
+    return shown[0][0];
+  };
+  assert.equal(slide(1), 'tackle_L', 'the ball on its left');
+  assert.equal(slide(-1), 'tackle', 'the ball on its right');
+  const { actors, play } = match();
+  const at = (t) => [[player(3, 12, 0, {
+    ...(t >= 2 && t < 2.5 ? { move: 'slide' } : {}), ...(t >= 2.3 && t < 4 ? { down: { way: 'front', until: 4 } } : {}),
+  }), player(1, 30, 30)], { x: 14, y: -1 }];
+  play(at, 1.6, 1);
+  const [[name, time]] = shownBy(actors, 3);
+  assert.ok(name === 'tackle' && Math.abs(time - 0.6) < 1e-6, `lying at the end of its slide: ${name} ${time}`);
+  play(at, 0.2, 3.8);
+  const [[rising, rise]] = shownBy(actors, 3);
+  assert.ok(rising === 'tackle' && rise > 0.6 && rise < 1, `getting up from it: ${rise}`);
+  play(at, 1, 4);
+  assert.deepEqual(shownBy(actors, 3), [], 'up again');
   actors.dispose();
 });
