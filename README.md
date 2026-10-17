@@ -110,7 +110,7 @@ while it waits.
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
 | Throw-ins | Implemented. Opponents stay 2 m away. A foul throw cannot happen: the thrower always throws with both hands from where the ball went out |
-| Goal kicks | Implemented. Opponents stay 9.15 m away and outside the penalty area until the kick is taken |
+| Goal kicks | Implemented. Opponents leave the penalty area until the kick is taken; it is taken once none is within 9.15 m of the ball, and one that had no time to leave may stay |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends and added time for goals, penalties, substitutions and cards |
 | Goalkeepers | Implemented. A goalkeeper can handle the ball, so play it higher and further, in its own penalty area, except a ball a teammate deliberately kicked or threw to it, which it plays with its feet. A goalkeeper holding the ball for more than eight seconds concedes a corner, with the referee's count shown for the last five |

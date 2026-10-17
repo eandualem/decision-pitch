@@ -80,7 +80,15 @@ a test or from the command line without a browser.
   is put right at once. Anyone still out of place after 10 s at a kick-off,
   or 5 s at another restart, is moved there, so nothing can stall the match.
   Moving players straight to their place, as the engine first did, showed as
-  jumps of up to 40 m on screen.
+  jumps of up to 40 m on screen. A goal kick does not wait for every
+  opponent to leave the penalty area: it is taken once none is within
+  9.15 m of the ball, and one further away that is still leaving may stay,
+  as the laws allow an opponent that had no time to leave. Waiting for
+  them all kept the goalkeeper on the ball for about 1.9 s after it got
+  there; over 32 matches with models answering as Laya does, a goal kick
+  now takes 2.9 s from being given to being taken, against 3.8 s (bots
+  only: 2.7 s, against 4.1 s). Taking it at once, with an opponent beside
+  the ball, would kick it into a player who can still challenge for it.
 - **Built-in bot.** Simple rules (keep shape, chase the ball, dribble, pass
   to an open teammate, shoot in range) that play any position, so a full
   match runs with no model at all. A loose ball is chased by the one player
@@ -110,8 +118,25 @@ a test or from the command line without a browser.
   Laya does, shots rose from 7.9 to 12.8 a match and corners from 0.25 to
   0.72; over 24 bot matches, possession spells that reached shooting range
   rose from 20% to 32%. Following the ball more only while in possession gave
-  half the gain. A goalkeeper keeps to its goal line, and when a loose ball
-  is heading into its goal it moves across to the ball's line; a model in
+  half the gain. A team takes up these attacking places while it has the
+  ball, while it takes a restart, and while the ball is loose after one of
+  its players last played it, as during its own pass. Before, every pass
+  sent the team back to its defending places until the receiver had the
+  ball, and a model answering `hold`, its most common answer, kept its
+  defending place even while its team had the ball. Over 32 bot matches,
+  goals rose from 0.94 to 1.34 a match and shots from 17.0 to 17.8; over 32
+  matches with models answering as Laya does, goals rose from 1.28 to 1.56,
+  with shots the same (12.6). Offsides rose from 0.3 to 0.8 and from 0.8 to
+  1.8, as forwards stay further up while a pass is on its way. The ball's
+  share of play in the middle third (46% with bots, 40% with models) and
+  entries into the penalty area (16 and 18 a match) stayed about the same,
+  and so did they with each other shape tried, over 24 bot matches: wider
+  with the ball and narrower without it (team width 41 m and 34 m, against
+  37 m both) cut entries from 16.4 to 13.9 and shots from 17.3 to 12.8;
+  forwards waiting on the opponents' offside line, and the bot crossing from
+  wide in the final third, moved entries by less than one a match and the
+  middle-third share by less than two points. A goalkeeper keeps to its goal
+  line, and when a loose ball is heading into its goal it moves across to the ball's line; a model in
   goal that holds or supports does the same. Over the same 16 matches, this
   cut the share of shots scored from 35% to 16% (goals from 2.8 to 1.1 a
   match), and from 41% to 9% (11 to 3.6 goals) with every outfield player

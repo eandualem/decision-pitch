@@ -307,12 +307,14 @@ def _taker(m: Match, team: int) -> Player:
 
 
 def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
-    """The player's formation spot, shifted with the ball; a goalkeeper's is on its line."""
+    """The player's formation spot, shifted with the ball, and further up while its team
+    has the ball or `attacking`; a goalkeeper's is on its line."""
     direction = m.attack(p.team)
     if m.phase == "kickoff":
         return direction * p.home[0], direction * p.home[1]
     if p.position == "GK":
         return _goal_line_spot(m, p)
+    attacking = attacking or _in_possession(m, p.team)
     bx, by = m.ball.x * direction, m.ball.y * direction  # the ball in the team's frame
     x = p.home[0] + SHAPE_FOLLOW * bx + (8 if attacking else 0) + 15
     y = p.home[1] * 0.85 + 0.25 * by
@@ -320,6 +322,17 @@ def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
     if m.phase == "goal_kick" and p.team != m.restart_team:
         x = min(x, pitch.HALF_LENGTH - pitch.PENALTY_DEPTH - 1)  # outside the area until the kick
     return direction * x, direction * y
+
+
+def _in_possession(m: Match, team: int) -> bool:
+    """Whether `team` has the ball, for its shape: one of its players has it, it is taking
+    the restart, or the ball is loose and it played it last, as after its pass
+    (docs/decisions.md, section 2)."""
+    if m.owner is not None:
+        return m.player(m.owner).team == team
+    if m.phase in RESTARTS:
+        return m.restart_team == team
+    return m.last_touch == team
 
 
 def _goal_line_spot(m: Match, p: Player) -> tuple[float, float]:
