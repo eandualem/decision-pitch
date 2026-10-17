@@ -664,7 +664,7 @@ own left: Blender's +X, and the page's local +x before the figure turns. The
 same holds for clip names: `strafe_L` steps and `keeper_dive_L` dives to the
 figure's left.
 
-**Clips.** All 66 clips play on that skeleton, keyed 60 times a second (at 30, a
+**Clips.** All 76 clips play on that skeleton, keyed 60 times a second (at 30, a
 fast loop had one key between a touch and the landing, and the page's linear
 interpolation cut the foot's arc into the grass by up to 13 mm), with the
 `root` bone fixed: the engine moves the player, the clip only moves the body
@@ -729,8 +729,8 @@ the tracks that hold a bone at rest and the keys interpolating their
 neighbours reproduces (within 0.05 degrees or 0.3 mm), and stores rotations as
 normalised 16-bit integers, which glTF allows for animation and three.js
 reads; no bone moves more than 1.2 mm for it. With every clip above,
-`figure.glb` is 1.66 MB (it was 1.6 MB with the first 24 clips, and would be
-over 2 MB without the compaction).
+`figure.glb` is 1.82 MB (it was 1.6 MB with the first 24 clips and 1.66 MB with
+66, and would be over 2 MB without the compaction).
 
 **On the page.** `GLTFLoader`, with `SkeletonUtils` for cloning skinned meshes
 and the `BufferGeometryUtils` it imports, is vendored from three.js 0.186.0
@@ -749,7 +749,7 @@ individual movement" below says how the page chooses among the loops, sets
 and moves). The touches from the contact moments above play their clip so
 that its moment of contact lands on the touch: a `kick` plays the shot, pass,
 lofted pass or cross by the ball's flight, `control` and `throw` play theirs,
-`tackle` the slide or the standing block, `deflect` plays `control`, and a
+`tackle` and `poke` the standing block, `deflect` plays `control`, and a
 `knock` plays no clip. The engine keeps a player moving while it plays the ball, so a
 player above a walking pace plays only the clip's upper body and kicking leg
 over its running stride; the whole clip plays only near standstill, except
@@ -908,8 +908,8 @@ the ball's flight after the touch: lifted (0.3 rad or more, from how high the
 ball has risen against gravity) from a wide attacking place in towards the
 middle, the cross; lifted elsewhere, the lofted pass; along the ground, the
 shot when it leaves faster than 18 m/s. A model's decision of the last two
-seconds says instead (shoot, cross, through ball, clear). A tackle at 4.5 m/s
-or more is the slide, slower the standing block. Over a run, a kick's kicking
+seconds says instead (shoot, cross, through ball, clear). A tackle is the
+standing block; a slide comes with the player's `move` ("Mishaps" below). Over a run, a kick's kicking
 leg follows the clip only from 0.3 s before contact to 0.35 s after, so its
 grounded wind-up and landing do not skate. A sprinter's knock plays no clip:
 its stride is timed (within -25% to +30% of its pace) so the boot's touch
@@ -941,9 +941,9 @@ planted foot slips in each stance, which neighbours step in time, and each
 player's cadence, stride, lean and arm swing; and `tests/web/motion-record.mjs`
 films the evidence in `docs/media/motion/`, whose README gives the numbers.
 
-**Known limits.** A goalkeeper's dive plays its whole clip over the engine's
-dive, so its feet slide as it leaves the grass, and over a run the support
-foot under a pass or a lofted pass still slips in about half its stances.
+**Known limits.** The standing foot under a kick still slips in a share of
+its stances; "Mishaps" below gives the numbers after the dive and the lofted
+pass were improved.
 
 **Why.** Players read as people when they move as people do: facing the play
 while moving across it, changing pace and direction with a plant and a push,
@@ -964,6 +964,116 @@ fit: a 6 m/s cut slowed to the 2.5 to 4 m/s most cuts start at plays in slow
 motion and its turn cannot match the engine's, and no fixed playback matches
 a stop at a different deceleration. A cut on any fast turn of the body at a
 run: cuts took 13% of all stances live, half of them sliding.
+
+### Mishaps: kicks at nothing, stumbles, falls and slides
+
+**Choice.** What a player does without the ball when a decision has gone
+wrong is shown as the engine carries it out: a kick at nothing, a stumble
+after a missed tackle, a slide, and going down and getting up again. The
+snapshot says which (a player's `move` and `down`, docs/protocol.md); the
+figure has clips made for each with the same rig and scripts as the others,
+and the page plays them from those fields alone.
+
+**Clips.** Ten more, 76 in all:
+
+- `air_kick`: a full swing through where the ball should be (`contact`),
+  much higher than a shot's, the body leaning back, a hop on the standing
+  foot and the arms out before it steadies.
+- `stumble`: a toe caught at a run, the body pitching over a short step with
+  the arms thrown out, two quick steps and on. Its feet are planted for a
+  root running at 5 m/s (`speeds`), so the page plays it at the player's pace.
+  `tackle_missed`: a standing lunge that finds nothing, the left foot hopping
+  through to catch the weight, then back over its feet.
+- `fall_front` (tripped: knees and hands, then the chest, the shins swinging
+  up and down), `fall_back` (the feet going from under it, onto its backside
+  and back) and `fall_side_L`, `fall_side_R` (shouldered off: a step across,
+  down on the hip and shoulder, rolling onto the back). The first ends lying
+  face down, the others on the back; a side fall lies across the way the
+  player ran, a quarter turn (`turn`) from `fall_back`'s end.
+- `get_up_front` (pushing up, onto hands and knees, a foot through and up)
+  and `get_up_back` (sitting up, feet in, onto them and up), from those lying
+  poses to standing over the root.
+- `tackle_L`: the slide on the left boot, `tackle` mirrored. Both slides say
+  (`down`) from when the slider is on the grass to when it begins to get up.
+
+Lying, the legs lie straight and the body twists about its own length to
+roll over, so the scripts gained two pose channels: an ankle placed at a
+point (`f*ax`, `f*ay`, `f*az`, by weight `f*at`) and a twist of the hips
+(`htwist`). Both are zero in every earlier clip, which rebuild byte for byte.
+Each new clip was checked in Blender for parts below the grass: lying, none;
+a knee or a hand dips up to 7 cm into the grass for a frame or two as it lands
+(11 cm for the arm a side fall lands on).
+
+**On the page.**
+
+- `move: "air_kick"` plays `air_kick` from the first snapshot that shows it,
+  0.15 s into the clip, so the swing goes through about 0.3 s later, within
+  the 0.6 s the engine gives it. Over a run only its upper body and kicking
+  leg play, as for a kick; slowing, all of it.
+- `move: "stumble"` is the miss of a standing tackle: at 2.5 m/s or more the
+  `stumble`, its feet held on the grass, more slowly `tackle_missed`.
+- `move: "slide"` plays the slide on the boot nearer the ball from going in.
+  The engine judges a slide as it goes in, so its `tackle` or `poke` touch
+  plays no clip of its own. A `tackle` or `poke` touch without a slide is the
+  standing block.
+- `down` plays the fall for its `way`, a side fall away from the nearest
+  opponent, holds the lying pose and plays the get-up so that the figure is
+  on its feet at `until`. With less time than the fall and the get-up take
+  (a fouled player is down 1.2 s, against 2 s for the clips) both play
+  faster, up to twice. A slide that ends down holds its own lying pose and
+  gets up from it: in the engine's 1.5 s from going in, at its own pace.
+  After a side fall the figure turns a quarter to get up from its back, which
+  matches the side fall's end exactly, and turns back to its heading on its
+  feet, at 3 rad/s, which the turn on the spot shows.
+- Down or sliding, a figure keeps the facing it went down with, and the
+  page's lean, hip turn and carriage give way to a clip that takes the whole
+  body, so a body lying on the grass lies as it was made.
+- A scripted scene shows each of these as the engine sends it, before or
+  without a match: `tests/web/motion_replay.py --mishaps`.
+
+**Planted feet: the dive and the kicks.** Measured with the motion probe on
+scripted scenes that repeat the moment (`--mishaps` for a goalkeeper diving
+to each side, `--kicks` for one player passing at 0 to 6 m/s along the ground
+and lofted, ahead, to the side and behind it), the page as on develop against
+this one, 150 s each:
+
+- A dive seen begun, the keeper already moving across, now starts at its
+  push-off (0.2 s into the clip), and the foot lock holds whichever sole is on
+  the grass until it leaves it (0.36 s) and again as it gets up (from 1.4 s).
+  Stances sliding: dive to the left 92.7% to 20%, to the right 98.1% to
+  18.2%; median slip 31 to 0.6 cm/s.
+- Turning into a lofted pass or a cross, the body pivots on its standing foot
+  while that is on the grass, instead of about the engine's position, which
+  dragged the planted foot round turns of up to 180 degrees, and comes back
+  over the engine's position over 0.3 s, the foot lock holding the feet.
+  Stances sliding: lofted pass 48.3% to 39.3%, cross 30.8% to 17.6%.
+- A plain pass is drawn as before: pivoting measured no better for it
+  (38.9% on develop, 40.6% pivoting), so it is left as it was.
+
+The page ran at 40 to 53 fps through these runs, with other work on the
+machine, so the counts are of 11 to 55 stances each.
+
+**Known limits.** Under a plain pass at a run the standing foot still slides
+in about 40% of its stances: the stride's standing foot is often in the air
+as the body turns into the kick, and the page learns where the ball goes only
+about 0.1 s ahead, too late to time the stride. First touches (`control`) slide
+in about half of theirs. A side fall's get-up plays across the player's
+heading and turns back afterwards. The slide is shown from the moment the
+engine judges it, so the ball can leave the carrier's feet before the
+slider's boot gets there.
+
+**Why.** A decision that has gone wrong should look like one: a swing at
+nothing, a stumble, a player on the grass. Lying and getting up poses shared
+between clips let the page hold a player down for as long as the engine
+keeps it there, and speeding the clips up rather than cutting them keeps a
+short fall a whole fall.
+
+**Rejected.** Get-ups for each side: the side falls roll onto the back, and
+turning the figure a quarter lets one get-up serve. Showing a slide's tackle
+at its touch: the touch comes as the slide goes in, so the slide would be
+rushed through in a tenth of a second. Holding the standing foot for every
+kick with the foot lock alone: a turn of 90 degrees carries a foot 0.27 m
+from the root nearly 0.4 m, past the lock's reach.
 
 ### Real grass and the stands behind the goals
 

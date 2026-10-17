@@ -15,6 +15,8 @@ measures foot sliding and lockstep (tests/web/motion-probe.mjs).
     uv run python tests/web/motion_replay.py --live        # a real keyless match, with the probe
     uv run python tests/web/motion_replay.py --live --home laya,bot  # model players: a local model
     uv run python tests/web/motion_replay.py --ref develop # the page as committed there, to compare
+    uv run python tests/web/motion_replay.py --mishaps     # kicks at nothing, stumbles, falls, slides, dives
+    uv run python tests/web/motion_replay.py --kicks       # one player passing at every pace, every way
 
 Open http://127.0.0.1:8796/ and press h for the probe's keys. Every page that connects
 gets play from the start. This is a tool for looking, not a test: pytest and
@@ -98,6 +100,12 @@ class Body:
     kick: tuple | None = None  # (angle, speed, loft, kind) to play once it has the ball
     takes_ball: bool = False  # only the players in the passage may take the ball
     decision: str | None = None
+    # With --mishaps: the `move`, `down` and `dive` the snapshot sends (docs/protocol.md), and
+    # how fast it speeds up or slows down meanwhile, if not as a runner does.
+    move: str | None = None
+    down: dict | None = None
+    dive: bool = False
+    accel: float | None = None
 
     @property
     def speed(self) -> float:
@@ -153,8 +161,9 @@ def step_player(p: Body) -> None:
         _turn(p, look)
     ax, ay = want * math.cos(way) - p.vx, want * math.sin(way) - p.vy
     change = math.hypot(ax, ay)
-    if change > ACCELERATION * STEP:
-        ax, ay = ax / change * ACCELERATION * STEP, ay / change * ACCELERATION * STEP
+    accel = p.accel or ACCELERATION
+    if change > accel * STEP:
+        ax, ay = ax / change * accel * STEP, ay / change * accel * STEP
     p.vx += ax
     p.vy += ay
     p.x += p.vx * STEP
@@ -302,7 +311,7 @@ def compass(cx: float, cy: float, reach: float, speed: float, face) -> list:
 class World:
     """The players, the ball and who has it, stepped like the engine."""
 
-    def __init__(self, decisions: bool = False) -> None:
+    def __init__(self, decisions: bool = False, mishaps: bool = False, kicks: bool = False) -> None:
         self.t = 0.0
         self.ball = Ball()
         self.owner: int | None = None
@@ -469,7 +478,11 @@ class World:
             station.starts = places
             for body, (x, y, h) in zip(station.bodies, places, strict=True):
                 body.place(x, y, h)
-        self.passage = Passage(self, b[9], b[14], b[10], b[11], b[21])
+        if mishaps or kicks:
+            self.stations = []
+            self.passage = Mishaps(self) if mishaps else Kicks(self)
+        else:
+            self.passage = Passage(self, b[9], b[14], b[10], b[11], b[21])
 
     def point(self, face):
         if face == "ball":
@@ -600,6 +613,9 @@ class World:
                     "heading": round(p.heading, 3),
                     "speed": round(p.speed, 2),
                     "action": "kick" if p.kick else ("move" if p.command else "hold"),
+                    **({"move": p.move} if p.move else {}),
+                    **({"down": p.down} if p.down else {}),
+                    **({"dive": True} if p.dive else {}),
                 }
                 for p in self.bodies
             ],
@@ -610,6 +626,8 @@ class World:
             {"name": s.name, "shows": s.shows, "centre": list(s.centre), "players": [p.id for p in s.bodies]}
             for s in self.stations
         ]
+        if isinstance(self.passage, (Mishaps, Kicks)):
+            return self.passage.info()
         out.append(
             {"name": "passage", "shows": Passage.SHOWS, "centre": [26, 0], "players": [p.id for p in self.passage.cast]}
         )
@@ -809,9 +827,180 @@ class Passage:
         return dx / dist, dy / dist
 
 
-async def play(websocket: WebSocket, decisions: bool) -> None:
+class Mishaps:
+    """With --mishaps (issue #65): what a player does without the ball when a decision has
+    gone wrong, as the snapshot sends it (`move` and `down`, docs/protocol.md), over and over
+    on the right half, and a goalkeeper diving to either side (`dive`) to watch its feet. The
+    others stand still where the stations begin. How the engine moves a player meanwhile is
+    assumed: a kick at nothing stops as a player told to hold does, a player on the ground
+    slows at 8 m/s2, a slide at 6 m/s2 and a dive speeds up at 8 m/s2 as the engine's does."""
+
+    SHOWS = {
+        "falls": "runs at 5 m/s and kicks at nothing; sprints, kicks at nothing and goes down on its back; "
+        "is tripped (front); is shouldered off by an opponent running alongside on its right (side)",
+        "stumble": "stumbles at 5 m/s and runs on; stumbles walking (the lunge at nothing)",
+        "slide": "slides at a still ball from 6 m/s each way: once getting up at once, once staying down",
+        "dives": "a goalkeeper dives to its left and right, walking back in between",
+    }
+
+    def __init__(self, world: World) -> None:
+        self.w = world
+        b = {p.id: p for p in world.bodies}
+        self.faller, self.stumbler, self.slider, self.shoulder, self.keeper = b[9], b[10], b[11], b[14], b[1]
+        self.cast = {"falls": [self.faller, self.shoulder], "stumble": [self.stumbler], "slide": [self.slider],
+                     "dives": [self.keeper]}  # fmt: skip
+        for p, (x, y) in ((self.faller, (8, 10)), (self.shoulder, (24, 4)), (self.stumbler, (8, -4)),
+                          (self.slider, (12, -16)), (self.keeper, (46, 24))):  # fmt: skip
+            p.place(x, y)
+        world.ball.x, world.ball.y = 24.0, -16.4
+        self.scripts = [self._falls(), self._stumbles(), self._slides(), self._dives()]
+
+    def info(self) -> list[dict]:
+        out = []
+        for name, cast in self.cast.items():
+            centre = [round(cast[0].x), round(cast[0].y)]
+            out.append({"name": name, "shows": self.SHOWS[name], "centre": centre, "players": [p.id for p in cast]})
+        return out
+
+    def direct(self) -> None:
+        for script in self.scripts:
+            next(script)
+
+    # Each helper commands its player for a number of steps, yielding once a step.
+    def _for(self, p: Body, seconds: float, command, **state):
+        for k, v in state.items():
+            setattr(p, k, v)
+        for _ in range(round(seconds / STEP)):
+            p.command = command(p) if callable(command) else command
+            yield
+        for k in state:
+            setattr(p, k, None if k in ("move", "down", "accel") else False)
+
+    def _run(self, p: Body, x: float, y: float, speed: float, seconds: float):
+        yield from self._for(p, seconds, (x, y, speed, None))
+
+    def _still(self, p: Body, seconds: float, face=None):
+        yield from self._for(p, seconds, lambda q: (q.x, q.y, 0.0, self.w.point(face)))
+
+    def _down(self, p: Body, way: str, seconds: float):
+        p.down = {"way": way, "until": round(self.w.t + seconds, 3)}
+        yield from self._for(p, seconds, lambda q: (q.x, q.y, 0.0, None), accel=8.0)
+        p.down = None
+
+    def _falls(self):
+        p, q = self.faller, self.shoulder
+        while True:
+            yield from self._run(p, 40, 10, 5.0, 2.6)
+            yield from self._for(p, 0.4, lambda r: (r.x, r.y, 0.0, None), move="air_kick")
+            yield from self._still(p, 1.6)
+            yield from self._run(p, 8, 10, 7.5, 2.6)
+            yield from self._for(p, 0.3, lambda r: (r.x, r.y, 0.0, None), move="air_kick")
+            yield from self._down(p, "back", 2.2)
+            yield from self._still(p, 1.0)
+            yield from self._run(p, 40, 10, 5.0, 2.4)
+            yield from self._down(p, "front", 2.4)
+            yield from self._still(p, 1.0)
+            # Shouldered off by an opponent alongside, on its right as it runs towards -x.
+            q.place(p.x, p.y + 1.0, math.pi)
+            for _ in range(round(2.4 / STEP)):
+                p.command = (p.x - 10, 10, 5.0, None)
+                q.command = (p.x - 10, 11, 5.0, None)
+                yield
+            q.command = None
+            yield from self._down(p, "side", 2.4)
+            yield from self._still(p, 1.0)
+            q.place(24, 4)
+
+    def _stumbles(self):
+        p = self.stumbler
+        while True:
+            yield from self._run(p, 40, -4, 5.0, 2.4)
+            yield from self._for(p, 0.6, (40, -4, 4.5, None), move="stumble")
+            yield from self._run(p, 40, -4, 5.0, 1.6)
+            yield from self._still(p, 1.5)
+            yield from self._run(p, 8, -4, 1.5, 2.0)
+            yield from self._for(p, 0.6, lambda r: (r.x, r.y, 0.0, None), move="stumble")
+            yield from self._still(p, 1.5)
+            yield from self._run(p, 8, -4, 5.0, 4.0)
+            yield from self._still(p, 1.0)
+
+    def _slides(self):
+        p = self.slider
+        ball = self.w.ball
+        while True:
+            for there, stays in ((36.0, False), (12.0, True)):
+                way = 1.0 if there > p.x else -1.0
+                for _ in range(round(6.0 / STEP)):
+                    p.command = (there, -16, 6.0, None)
+                    yield
+                    if (ball.x - p.x) * way < 3.0:
+                        break
+                yield from self._for(p, 0.9, lambda r: (r.x, r.y, 0.0, None), move="slide", accel=6.0)
+                if stays:
+                    yield from self._down(p, "front", 1.8)
+                yield from self._still(p, 2.0)
+                yield from self._run(p, there, -16, 4.0, 2.0)
+                yield from self._still(p, 1.0)
+
+    def _dives(self):
+        p = self.keeper
+        home = (46.0, 24.0)
+        while True:
+            for side in (1.0, -1.0):
+                face = math.atan2(self.w.ball.y - p.y, self.w.ball.x - p.x)
+                spot = (p.x - side * 2.5 * math.sin(face), p.y + side * 2.5 * math.cos(face))
+                yield from self._for(p, 0.9, (*spot, 7.5, None), dive=True, accel=8.0)
+                yield from self._still(p, 2.0, "ball")
+                yield from self._for(p, 3.0, lambda q: (*home, 1.4, self.w.point("ball")))
+                yield from self._still(p, 1.5, "ball")
+
+
+class Kicks:
+    """With --kicks (issue #65): one player passing over and over, standing, walking, jogging
+    and running, along the ground and lofted, ahead, to the side and behind it, so the page's
+    standing foot under each kick can be measured. The ball is put back at its feet after
+    each kick; the others stand still where the stations begin."""
+
+    SHOWS = "passes at 0, 1.5, 3, 4.5 and 6 m/s, along the ground and lofted, from straight ahead to behind it"
+    TURNS = (0.0, 50.0, 95.0, 140.0, 180.0, -60.0, -110.0)  # degrees from the way it faces
+
+    def __init__(self, world: World) -> None:
+        self.w = world
+        self.kicker = next(p for p in world.bodies if p.id == 9)
+        self.kicker.place(10, -28)
+        self.kicker.takes_ball = True
+        self.script = self._kicks()
+
+    def info(self) -> list[dict]:
+        return [{"name": "kicks", "shows": self.SHOWS, "centre": [28, -28], "players": [self.kicker.id]}]
+
+    def direct(self) -> None:
+        next(self.script)
+
+    def _kicks(self):
+        p, w = self.kicker, self.w
+        n = 0
+        while True:
+            for speed in (0.0, 1.5, 3.0, 4.5, 6.0):
+                for loft in (0.0, 0.4):
+                    turn = math.radians(self.TURNS[n % len(self.TURNS)])
+                    n += 1
+                    # Back and forth along the lane, so it runs whichever way it is facing.
+                    there = 45.0 if p.x < 28 else 10.0
+                    w.ball.x, w.ball.y = p.x + math.cos(p.heading) * DRIBBLE, p.y + math.sin(p.heading) * DRIBBLE
+                    w.ball.z, w.ball.vx, w.ball.vy, w.ball.vz = BALL_RADIUS, 0.0, 0.0, 0.0
+                    for _ in range(round(1.2 / STEP)):
+                        p.command = (there, -28, speed, None) if speed > 0 else None
+                        yield
+                    p.kick = (p.heading + turn, 14.0 if loft == 0 else 16.0, loft, "kick")
+                    for _ in range(round(1.4 / STEP)):
+                        p.command = (there, -28, speed, None) if speed > 0 else None
+                        yield
+
+
+async def play(websocket: WebSocket, decisions: bool, mishaps: bool = False, kicks: bool = False) -> None:
     await websocket.accept()
-    world = World(decisions)
+    world = World(decisions, mishaps, kicks)
     await websocket.send_text(json.dumps(world.hello()))
     loop = asyncio.get_running_loop()
     due = loop.time()
@@ -844,7 +1033,14 @@ async def play(websocket: WebSocket, decisions: bool) -> None:
         feeding.cancel()
 
 
-def page(live: bool, decisions: bool, ref: str | None = None, teams: tuple = (("bot",), ("bot",))) -> Starlette:
+def page(
+    live: bool,
+    decisions: bool,
+    ref: str | None = None,
+    teams: tuple = (("bot",), ("bot",)),
+    mishaps: bool = False,
+    kicks: bool = False,
+) -> Starlette:
     """The page, with the probe added, over the scripted feed or a real keyless match whose
     teams' managers choose from `teams` (bots or local models). With `ref`, the page's files
     are served as committed at that git revision."""
@@ -873,7 +1069,8 @@ def page(live: bool, decisions: bool, ref: str | None = None, teams: tuple = (("
         return Response(PROBE.read_text(), media_type="text/javascript")
 
     def stations(_request):
-        return JSONResponse({"live": live, "stations": [] if live else World().stations_info()})
+        stations = [] if live else World(mishaps=mishaps, kicks=kicks).stations_info()
+        return JSONResponse({"live": live, "stations": stations})
 
     routes = [
         Route("/", index),
@@ -894,7 +1091,7 @@ def page(live: bool, decisions: bool, ref: str | None = None, teams: tuple = (("
     else:
 
         async def scripted(websocket: WebSocket) -> None:
-            await play(websocket, decisions)
+            await play(websocket, decisions, mishaps, kicks)
 
         routes.append(WebSocketRoute("/ws", scripted))
     if ref is None:
@@ -940,10 +1137,12 @@ def main() -> None:
             help=f"with --live, the models the {team} manager may choose from, separated by commas: bot or "
             "a local model (no keys, so nothing is paid for)",
         )
+    parser.add_argument("--mishaps", action="store_true", help="kicks at nothing, stumbles, falls, slides and dives")
+    parser.add_argument("--kicks", action="store_true", help="one player passing at every pace, every way")
     parser.add_argument("--stations", action="store_true", help="print the stations and exit")
     args = parser.parse_args()
     if args.stations:
-        for s in World().stations_info():
+        for s in World(mishaps=args.mishaps, kicks=args.kicks).stations_info():
             print(f"{s['name']:13} players {s['players']}: {s['shows']}")
         return
     from decision_pitch import players
@@ -954,7 +1153,8 @@ def main() -> None:
             parser.error(f"--home and --away take bot or local models: {', '.join((players.BOT, *players.LOCAL))}")
     what = ("live match" if args.live else "scripted") + (f", page at {args.ref}" if args.ref else "")
     print(f"Motion replay ({what}) at http://127.0.0.1:{args.port}/", flush=True)
-    uvicorn.run(page(args.live, args.decisions, args.ref, teams), host="127.0.0.1", port=args.port, log_level="warning")
+    app = page(args.live, args.decisions, args.ref, teams, args.mishaps, args.kicks)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

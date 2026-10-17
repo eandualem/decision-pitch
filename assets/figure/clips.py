@@ -195,6 +195,7 @@ NEUTRAL = {
     # Pelvis offset from its rest position (m) and its rotation (deg).
     "hx": 0.0, "hy": 0.0, "hz": -0.015,
     "hyaw": 0.0, "hpitch": 0.0, "hroll": 0.0,
+    "htwist": 0.0,  # deg about the body's own length, after the rest: rolling over on the grass
     "sflex": 0.0, "sside": 0.0, "stwist": 0.0,
     "cflex": 0.0, "cside": 0.0, "ctwist": 0.0,
     # Where the head looks, relative to the root (deg); `look_body` follows the chest instead.
@@ -209,6 +210,9 @@ for _s in SIDES:
         f"f{_s}toe": 0.0, f"f{_s}flat": 1.0,
         # 1 moves the foot with the pelvis (airborne), 0 keeps it in root space.
         f"f{_s}space": 0.0,
+        # The ankle placed at (ax, ay, az) in root space, by weight `at`: for a leg lying
+        # on the grass or swinging through a fall, where the foot's own point would not do.
+        f"f{_s}ax": 0.0, f"f{_s}ay": 0.0, f"f{_s}az": 0.0, f"f{_s}at": 0.0,
         f"k{_s}out": 6.0,  # knee points this far outwards
         # Arm, relative to hanging straight down at the side, palm in.
         f"a{_s}elev": 0.0, f"a{_s}prot": 0.0,
@@ -381,7 +385,7 @@ class Solver:
         w = out.world
         w["root"] = Quaternion()
         out.offset = Vector((p["hx"], p["hy"], p["hz"]))
-        q_hips = rot(Z, p["hyaw"]) @ rot(X, p["hpitch"]) @ rot(Y, p["hroll"])
+        q_hips = rot(Z, p["hyaw"]) @ rot(X, p["hpitch"]) @ rot(Y, p["hroll"]) @ rot(Z, p["htwist"])
         w["hips"] = q_hips
         w["spine"] = q_hips @ euler(p["sflex"], p["sside"], p["stwist"])
         w["chest"] = w["spine"] @ euler(p["cflex"], p["cside"], p["ctwist"])
@@ -406,6 +410,8 @@ class Solver:
             ankle, q_foot, q_toe = self.foot(s, p)
             if p.get(f"f{s}ankle") is not None:
                 ankle = p[f"f{s}ankle"].copy()  # a swinging foot follows its own path
+            if p[f"f{s}at"] > 0.0:
+                ankle = ankle.lerp(Vector((p[f"f{s}ax"], p[f"f{s}ay"], p[f"f{s}az"])), p[f"f{s}at"])
             space = p[f"f{s}space"]
             if space > 0.0:
                 ankle = ankle.lerp(with_pelvis(ankle), space)
@@ -1750,7 +1756,7 @@ def aim(solver, shot, t, bone, rest_point, target, channels, passes=4):
     return (Vector(target) - solved.point(bone, rest_point)).length
 
 
-_MIRROR_NEGATE = {"hx", "hyaw", "hroll", "sside", "stwist", "cside", "ctwist", "look_yaw", "look_tilt"}
+_MIRROR_NEGATE = {"hx", "hyaw", "hroll", "htwist", "sside", "stwist", "cside", "ctwist", "look_yaw", "look_tilt"}
 
 
 def mirror(p):
@@ -1763,7 +1769,7 @@ def mirror(p):
         for a, b in (("L", "R"), ("R", "L")):
             if len(k) > 1 and k[1] == a and k[0] in "fak":
                 other = k[0] + b + k[2:]
-                if k[2:] in ("x", "ix") or k[2:] == "yaw":
+                if k[2:] in ("x", "ix", "ax") or k[2:] == "yaw":
                     out[other] = -v if v is not None else v
                 elif k[2:] == "ankle":
                     out[other] = Vector((-v.x, v.y, v.z)) if v is not None else None
@@ -1911,7 +1917,16 @@ def tackle_clip(solver):
     toe_head = solver.sk.head["toe_R"]
     aim(solver, shot, contact, "foot_R", toe_head, BALL + Vector((0.0, BALL_RADIUS * 0.9, 0.0)),
         ("fRx", "fRy", "fRz"))
-    return Clip("tackle", int(round(end * FPS)), shot, loop=False, contact=contact)
+    # `down`: from when it is on the grass to when it begins to get up, where the page
+    # holds a slide that ends with the player down.
+    return Clip("tackle", int(round(end * FPS)), shot, loop=False, contact=contact, down=[0.32, 0.7])
+
+
+def tackle_L_clip(solver):
+    """The slide with the left boot: `tackle` mirrored, down on the right hip."""
+    clip = tackle_clip(solver)
+    return Clip("tackle_L", clip.frames, lambda t: mirror(clip.sample(t)), loop=False, contact=clip.contact,
+                **clip.info)
 
 
 def tackle_standing_clip(solver):
@@ -2252,6 +2267,409 @@ def keeper_catch_high_clip(solver):
     return Clip("keeper_catch_high", int(round(end * FPS)), shot, loop=False, contact=contact)
 
 
+# -- mishaps: kicking at nothing, stumbling, falling and getting up -------------
+
+# Lying on the grass, the pelvis 13 cm up: face down with the head ahead and the hands
+# by the head, or on the back with the head behind and the arms out. Each fall ends in
+# one of them and each get-up starts from it, so the page can hold a player down for as
+# long as the engine keeps it there. The legs lie straight, their ankles placed.
+PRONE = {
+    "hx": 0.0, "hy": -0.25, "hz": -0.845, "hpitch": 88.0, "hyaw": 0.0, "hroll": 0.0,
+    "sflex": -3.0, "sside": 0.0, "stwist": 0.0, "cflex": -6.0, "cside": 0.0, "ctwist": 0.0,
+    "look_body": 1.0, "look_down": -15.0, "look_yaw": 0.0, "look_tilt": 0.0,
+    "fLspace": 0.0, "fRspace": 0.0, "fLflat": 0.0, "fRflat": 0.0, "fLtoe": 0.0, "fRtoe": 0.0,
+    "fLat": 1.0, "fLax": 0.11, "fLay": 0.72, "fLaz": 0.09, "fLyaw": 8.0, "fLpitch": -195.0,
+    "fRat": 1.0, "fRax": -0.11, "fRay": 0.72, "fRaz": 0.09, "fRyaw": -8.0, "fRpitch": -195.0,
+    "aLik": 1.0, "aLix": 0.30, "aLiy": -0.80, "aLiz": 0.10, "aLpole": 0.0, "aLpron": 60.0, "aLwrist": 40.0,
+    "aRik": 1.0, "aRix": -0.30, "aRiy": -0.80, "aRiz": 0.10, "aRpole": 0.0, "aRpron": 60.0, "aRwrist": 40.0,
+}
+SUPINE = {
+    "hx": 0.0, "hy": 0.30, "hz": -0.835, "hpitch": -86.0, "hyaw": 0.0, "hroll": 0.0,
+    "sflex": 4.0, "sside": 0.0, "stwist": 0.0, "cflex": 6.0, "cside": 0.0, "ctwist": 0.0,
+    "look_body": 1.0, "look_down": 4.0, "look_yaw": 0.0, "look_tilt": 0.0,
+    "fLspace": 0.0, "fRspace": 0.0, "fLflat": 1.0, "fRflat": 1.0, "fLtoe": 0.0, "fRtoe": 0.0,
+    "fLat": 1.0, "fLax": 0.14, "fLay": -0.58, "fLaz": 0.09, "fLyaw": 16.0, "fLpitch": 75.0,
+    "fRat": 1.0, "fRax": -0.14, "fRay": -0.58, "fRaz": 0.09, "fRyaw": -16.0, "fRpitch": 75.0,
+    "aLik": 1.0, "aLix": 0.70, "aLiy": 0.50, "aLiz": 0.10, "aLpole": 90.0, "aLpron": 0.0, "aLwrist": 0.0,
+    "aRik": 1.0, "aRix": -0.70, "aRiy": 0.50, "aRiz": 0.10, "aRpole": 90.0, "aRpron": 0.0, "aRwrist": 0.0,
+}
+# A running stride, the left foot down and the right trailing: where a fall at a run
+# begins (the page fades into it from the stride it is in).
+STRIDE = dict(READY)
+STRIDE.update({
+    "hz": -0.06, "hpitch": 8.0, "sflex": 6.0, "cflex": 2.0, "look_down": 6.0,
+    "fLx": 0.08, "fLy": -0.28, "fLyaw": 4.0, "fRx": -0.08, "fRy": 0.30, "fRz": 0.10, "fRpitch": -40.0,
+    "fRflat": 0.0, "fRyaw": -4.0,
+    "aLflex": -28.0, "aRflex": 32.0, "aLelbow": 85.0, "aRelbow": 85.0, "aLabd": 12.0, "aRabd": 12.0,
+})
+
+
+def _ankles(x, y, z, weight=1.0, **more):
+    """Both ankles placed at (+-x, y, z) in root space, by `weight`."""
+    return {"fLat": weight, "fLax": x, "fLay": y, "fLaz": z, "fRat": weight, "fRax": -x, "fRay": y, "fRaz": z,
+            **more}
+
+
+def fall_front_clip(solver):
+    """Tripped at a run: the trailing foot is caught, the body pitches forward over the
+    front foot, the knees and hands go down and take the fall, then the chest as the
+    shins swing up and down again, and it lies face down (PRONE)."""
+    end = 0.90
+    hands = {"aLik": 1.0, "aLix": 0.28, "aLiy": -0.90, "aLiz": 0.10, "aRik": 1.0, "aRix": -0.28,
+             "aRiy": -0.90, "aRiz": 0.10, "aLpron": 60.0, "aRpron": 60.0, "aLwrist": 40.0, "aRwrist": 40.0}
+    keys = [
+        (0.12, {"hpitch": 22.0, "hy": -0.12, "hz": -0.10, "sflex": 10.0, "look_down": 10.0,
+                "fRy": 0.42, "fRz": 0.05, "fRpitch": -60.0,
+                "aLflex": 35.0, "aRflex": 30.0, "aLabd": 22.0, "aRabd": 22.0, "aLelbow": 45.0, "aRelbow": 45.0}),
+        (0.26, {"hpitch": 42.0, "hy": -0.30, "hz": -0.30, "sflex": 8.0, "cflex": 0.0, "look_down": -12.0,
+                "fLpitch": -45.0, "fLflat": 0.0, "fRy": 0.48, "fRz": 0.24, "fRpitch": -70.0,
+                "aLflex": 85.0, "aRflex": 80.0, "aLabd": 25.0, "aRabd": 25.0, "aLelbow": 15.0, "aRelbow": 15.0,
+                "aLik": 0.0, "aRik": 0.0}),
+        # Knees and hands down.
+        (0.40, {**hands, **_ankles(0.12, 0.30, 0.15, 0.0), "hpitch": 60.0, "hy": -0.36, "hz": -0.49, "sflex": 2.0,
+                "cflex": -4.0, "look_body": 0.6, "look_down": -30.0,
+                "fLx": 0.12, "fLy": 0.30, "fLz": 0.0, "fLpitch": -85.0, "fRx": -0.12, "fRy": 0.36, "fRz": 0.0,
+                "fRpitch": -85.0}),
+        # As the chest goes down the shins swing up, then lie flat.
+        (0.48, _ankles(0.12, 0.22, 0.50, fLpitch=-140.0, fRpitch=-140.0)),
+        (0.54, {**hands, "hpitch": 82.0, "hy": -0.30, "hz": -0.80, "look_body": 1.0, "look_down": -25.0,
+                "aLiy": -0.86, "aRiy": -0.86}),
+        (0.56, _ankles(0.12, 0.46, 0.32, fLpitch=-170.0, fRpitch=-170.0)),
+        (0.64, {**_ankles(0.11, 0.72, 0.09, fLpitch=-195.0, fRpitch=-195.0), "hpitch": 89.0, "hz": -0.855}),
+        (0.75, {"hpitch": 88.0, "hz": -0.845}),
+        (end, PRONE),
+    ]
+    shot = Shot(STRIDE, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.02}, settle=False)
+    return Clip("fall_front", int(round(end * FPS)), shot, loop=False)
+
+
+def fall_back_clip(solver):
+    """The feet go from under it: it drops onto its backside, the hands behind to break
+    the fall, and rolls back to lie on its back (SUPINE)."""
+    end = 0.90
+    behind = {"aLik": 1.0, "aLix": 0.30, "aLiy": 0.55, "aLiz": 0.20, "aRik": 1.0, "aRix": -0.30, "aRiy": 0.55,
+              "aRiz": 0.20}
+    keys = [
+        (0.12, {"hpitch": -12.0, "hy": 0.06, "hz": -0.22, "sflex": 8.0, "cflex": 6.0, "look_down": 18.0,
+                "fLy": -0.40, "fLz": 0.12, "fLpitch": 20.0, "fLflat": 0.0, "fRy": -0.10, "fRz": 0.04, "fRpitch": 0.0,
+                "aLflex": 60.0, "aRflex": 55.0, "aLabd": 30.0, "aRabd": 30.0, "aLelbow": 30.0, "aRelbow": 30.0}),
+        (0.26, {"hpitch": -30.0, "hy": 0.18, "hz": -0.50, "sflex": 14.0, "cflex": 8.0, "look_down": 26.0,
+                "fLy": -0.58, "fLz": 0.34, "fLpitch": 30.0, "fRy": -0.50, "fRz": 0.26, "fRpitch": 25.0,
+                "fRflat": 0.0,
+                "aLflex": -30.0, "aRflex": -30.0, "aLabd": 40.0, "aRabd": 40.0, "aLelbow": 10.0, "aRelbow": 10.0,
+                "aLik": 0.0, "aRik": 0.0}),
+        # On its backside, the heels still up, the hands behind.
+        (0.38, {**behind, **_ankles(0.15, -0.62, 0.16, 0.0), "hpitch": -45.0, "hy": 0.26, "hz": -0.82,
+                "sflex": 18.0, "cflex": 8.0, "look_down": 24.0,
+                "fLx": 0.15, "fLy": -0.70, "fLz": 0.20, "fLpitch": 40.0, "fRx": -0.15, "fRy": -0.64, "fRz": 0.24,
+                "fRpitch": 40.0}),
+        (0.48, {**behind, **_ankles(0.15, -0.60, 0.11), "hpitch": -66.0, "hy": 0.28, "hz": -0.835, "sflex": 12.0,
+                "cflex": 8.0, "look_down": 18.0, "fLpitch": 65.0, "fRpitch": 65.0}),
+        (0.62, {**_ankles(0.14, -0.58, 0.09), "hpitch": -88.0, "hz": -0.845, "hy": 0.30, "sflex": 4.0, "cflex": 6.0,
+                "look_down": 8.0, "look_body": 1.0, "fLpitch": 75.0, "fRpitch": 75.0, "fLyaw": 16.0, "fRyaw": -16.0,
+                "aLix": 0.60, "aLiy": 0.58, "aRix": -0.60, "aRiy": 0.58, "aLiz": 0.10, "aRiz": 0.10,
+                "aLpole": 90.0, "aRpole": 90.0}),
+        (0.75, {"hpitch": -86.0, "hz": -0.835}),
+        (end, SUPINE),
+    ]
+    shot = Shot(STRIDE, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.02}, settle=False)
+    return Clip("fall_back", int(round(end * FPS)), shot, loop=False)
+
+
+def _standing_up(shot, end, from_time):
+    """A get-up's sample: the shot, coming to READY exactly by its end."""
+    def sample(t):
+        p = shot(t)
+        k = smoothstep((t - from_time) / (end - from_time))
+        for name, value in READY.items():
+            if isinstance(value, float):
+                p[name] = lerp(p[name], value, k)
+        return p
+    return sample
+
+
+def get_up_front_clip(solver):
+    """From face down (PRONE): pushes up on the hands, brings the knees under, steps
+    the right foot through and stands, over the root."""
+    end = 1.10
+    hands = {"aLik": 1.0, "aLix": 0.30, "aLiy": -0.80, "aLiz": 0.10, "aRik": 1.0, "aRix": -0.30, "aRiy": -0.80,
+             "aRiz": 0.10}
+    keys = [
+        (0.18, {**hands, **_ankles(0.11, 0.72, 0.09), "hpitch": 74.0, "hz": -0.79, "hy": -0.25, "cflex": -12.0,
+                "look_down": -20.0}),
+        (0.30, {**_ankles(0.12, 0.60, 0.09), "hz": -0.60, "hy": -0.17}),
+        # On hands and knees.
+        (0.40, {**hands, **_ankles(0.12, 0.36, 0.09, fLpitch=-195.0, fRpitch=-195.0), "hpitch": 74.0, "hz": -0.45,
+                "hy": -0.10, "sflex": 8.0, "cflex": 0.0, "look_down": -5.0, "look_body": 0.8}),
+        # The right foot steps through and plants; the hands come off the grass.
+        (0.50, {"fRat": 1.0, "fRpitch": -195.0}),
+        (0.62, {"aLik": 0.4, "aRik": 0.0, "hpitch": 42.0, "hz": -0.44, "hy": -0.02, "sflex": 18.0, "look_down": 10.0,
+                "look_body": 0.3, "fRat": 0.0, "fRx": -0.14, "fRy": -0.20, "fRz": 0.0, "fRpitch": 0.0, "fRflat": 1.0,
+                "fLat": 1.0, "fLpitch": -195.0,
+                "aRflex": 30.0, "aRabd": 20.0, "aRelbow": 60.0}),
+        # Up onto the right foot, the left coming through.
+        (0.84, {"aLik": 0.0, "hpitch": 14.0, "hz": -0.16, "hy": 0.0, "sflex": 8.0, "look_body": 0.0, "look_down": 4.0,
+                "fLat": 0.0, "fLx": 0.13, "fLy": 0.15, "fLz": 0.04, "fLpitch": -40.0, "fLflat": 0.0,
+                "aLflex": 10.0, "aLabd": 18.0, "aLelbow": 40.0}),
+        (0.96, {"fLx": 0.13, "fLy": 0.01, "fLz": 0.0, "fLpitch": 0.0, "fLflat": 1.0}),
+        (end, {}),
+    ]
+    start = dict(READY)
+    start.update(PRONE)
+    shot = Shot(start, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.02}, settle=False)
+    return Clip("get_up_front", int(round(end * FPS)), _standing_up(shot, end, 0.84), loop=False)
+
+
+def get_up_back_clip(solver):
+    """From on its back (SUPINE): sits up on its hands, draws the feet in, rocks
+    forward onto them and stands, over the root."""
+    end = 1.10
+    keys = [
+        (0.22, {"hpitch": -40.0, "hz": -0.83, "hy": 0.28, "sflex": 20.0, "cflex": 10.0, "look_down": 15.0,
+                "look_body": 0.7, "aLix": 0.30, "aLiy": 0.55, "aLiz": 0.21, "aRix": -0.30, "aRiy": 0.55,
+                "aRiz": 0.21, "aLpole": 0.0, "aRpole": 0.0,
+                "fLat": 0.0, "fRat": 0.0, "fLx": 0.14, "fLy": -0.35, "fLz": 0.0, "fLpitch": 0.0, "fLyaw": 9.0,
+                "fRx": -0.14, "fRy": -0.30, "fRz": 0.0, "fRpitch": 0.0, "fRyaw": -9.0}),
+        (0.45, {"hpitch": 20.0, "hz": -0.62, "hy": 0.12, "sflex": 30.0, "cflex": 10.0, "look_down": 10.0,
+                "look_body": 0.2, "aLik": 0.5, "aRik": 0.5, "aLiy": 0.25, "aRiy": 0.25, "aLiz": 0.12, "aRiz": 0.12,
+                "fLx": 0.15, "fLy": -0.02, "fRx": -0.15, "fRy": -0.06, "fLpitch": -10.0, "fRpitch": -10.0}),
+        (0.70, {"aLik": 0.0, "aRik": 0.0, "hpitch": 22.0, "hz": -0.38, "hy": 0.04, "sflex": 22.0, "look_down": 6.0,
+                "look_body": 0.0, "fLpitch": 0.0, "fRpitch": 0.0,
+                "aLflex": 40.0, "aRflex": 40.0, "aLabd": 18.0, "aRabd": 18.0, "aLelbow": 40.0, "aRelbow": 40.0}),
+        (0.92, {"hpitch": 8.0, "hz": -0.10, "hy": 0.0, "sflex": 6.0}),
+        (end, {}),
+    ]
+    start = dict(READY)
+    start.update(SUPINE)
+    shot = Shot(start, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.02}, settle=False)
+    return Clip("get_up_back", int(round(end * FPS)), _standing_up(shot, end, 0.80), loop=False)
+
+
+def turned_about_root(p, degrees):
+    """The pose `p` turned `degrees` about the root: the same body, lying another way."""
+    q = rot(Z, degrees)
+    out = dict(p)
+
+    def turn(kx, ky):
+        v = q @ Vector((p[kx], p[ky], 0.0))
+        out[kx], out[ky] = v.x, v.y
+
+    turn("hx", "hy")
+    out["hyaw"] = p["hyaw"] + degrees
+    out["look_yaw"] = p["look_yaw"] + degrees
+    for s in SIDES:
+        turn(f"f{s}x", f"f{s}y")
+        turn(f"f{s}ax", f"f{s}ay")
+        turn(f"a{s}ix", f"a{s}iy")
+        out[f"f{s}yaw"] = p[f"f{s}yaw"] + degrees
+    return out
+
+
+def fall_side_clip(solver):
+    """Shouldered off at a run, to its own left: the left foot steps across to catch it
+    and cannot, it goes down on its left hip and shoulder, the arm out, and rolls onto
+    its back, lying across the way it was running (SUPINE turned a quarter, `turn`
+    degrees: the page turns the figure that far back to get it up from its back)."""
+    end = 0.95
+    side = 0.44  # on its side
+    lying = dict(READY)
+    lying.update(SUPINE)
+    lying = turned_about_root(lying, -90.0)
+    # On its left side: the hips turned as the end's, twisted a quarter about their length,
+    # which is the plain roll of 86 degrees the fall comes down through.
+    on_side = {"hyaw": -90.0, "hpitch": -86.0, "hroll": 0.0, "htwist": 90.0}
+    keys = [
+        (0.10, {"hx": 0.10, "hroll": 12.0, "hz": -0.08, "sside": -8.0, "look_down": 6.0, "look_tilt": 8.0,
+                "fLx": 0.30, "fLy": -0.12, "fLz": 0.08, "fLflat": 0.0, "fRy": 0.20, "fRz": 0.04,
+                "aLabd": 35.0, "aRabd": 30.0, "aLflex": 10.0, "aRflex": 20.0, "aLelbow": 40.0, "aRelbow": 50.0}),
+        (0.22, {"hx": 0.28, "hroll": 30.0, "hz": -0.20, "sside": -10.0, "look_tilt": 14.0,
+                "fLx": 0.40, "fLy": -0.10, "fLz": 0.0, "fLpitch": 0.0, "fLflat": 1.0,
+                "fRx": 0.02, "fRy": 0.10, "fRz": 0.14, "fRpitch": -30.0,
+                "aLabd": 70.0, "aLflex": 20.0, "aLelbow": 20.0, "aRabd": 70.0, "aRflex": 40.0, "aRelbow": 60.0}),
+        (0.34, {"hx": 0.45, "hroll": 60.0, "hz": -0.55, "sside": -6.0, "look_tilt": 10.0, "look_body": 0.6,
+                **_ankles(0.0, -0.05, 0.25, 0.0), "fLpitch": -30.0, "fLflat": 0.0, "fRz": 0.30,
+                "aLabd": 85.0, "aLflex": 10.0}),
+        (side, {"hx": 0.50, "hroll": 86.0, "hz": -0.79, "hy": 0.0, "sside": 0.0, "look_body": 1.0, "look_tilt": 0.0,
+                "fLat": 1.0, "fLax": -0.34, "fLay": -0.12, "fLaz": 0.10, "fRat": 1.0, "fRax": -0.30, "fRay": 0.02,
+                "fRaz": 0.26, "fLyaw": -90.0, "fRyaw": -90.0, "fLpitch": 30.0, "fRpitch": 30.0,
+                "aLik": 1.0, "aLix": 0.95, "aLiy": -0.42, "aLiz": 0.20, "aRik": 1.0, "aRix": 0.75, "aRiy": -0.30,
+                "aRiz": 0.35}),
+        # Rolling over, the left arm comes up over the body rather than through the grass.
+        (0.64, {"aLix": 0.80, "aLiy": -0.50, "aLiz": 0.40, "aRix": 0.55, "aRiy": 0.45, "aRiz": 0.30}),
+        (end, lying),
+    ]
+    shot = Shot(STRIDE, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.02}, settle=False)
+
+    def sample(t):
+        p = shot(t)
+        if t >= side:
+            # Rolling from its side onto its back, about the body's length.
+            k = smoothstep((t - side) / (end - 0.12 - side))
+            p.update(on_side)
+            p["htwist"] = lerp(90.0, 0.0, k)
+        return p
+
+    return Clip("fall_side_L", int(round(end * FPS)), sample, loop=False, turn=-90.0)
+
+
+def fall_side_clips(solver):
+    clip = fall_side_clip(solver)
+    right = Clip("fall_side_R", clip.frames, lambda t: mirror(clip.sample(t)), loop=False, turn=90.0)
+    return [clip, right]
+
+
+def air_kick_clip(solver):
+    """A full swing at a ball that is not there: the boot goes through where the ball
+    should be at `contact`, flies up much higher than a shot's, the body leans back and
+    the standing foot hops to keep its balance, the arms out, then it steadies."""
+    contact = 0.45
+    end = 1.50
+    keys = [
+        (0.10, {"look_down": 20.0, "hz": -0.045, "fRpitch": -10.0}),
+        (0.15, {"fLz": 0.06, "fLy": -0.08, "fLpitch": 4.0}),
+        (0.30, {"fLx": 0.21, "fLy": -0.30, "fLz": 0.0, "fLpitch": 12.0, "fLyaw": 6.0,
+                "hx": 0.06, "hy": -0.16, "hz": -0.075, "hyaw": -24.0, "hroll": 4.0, "hpitch": 4.0,
+                "sflex": 3.0, "cflex": -5.0, "ctwist": 16.0, "sside": 7.0,
+                "fRx": -0.10, "fRy": 0.26, "fRz": 0.40, "fRyaw": -12.0, "fRpitch": -62.0, "fRflat": 0.0, "fRtoe": 5.0,
+                "aLabd": 80.0, "aLflex": 38.0, "aLelbow": 24.0, "aLtwist": -10.0,
+                "aRabd": 38.0, "aRflex": -36.0, "aRelbow": 30.0}),
+        (0.36, {"fLpitch": 0.0}),
+        (0.395, {"fRx": -0.08, "fRy": 0.02, "fRz": 0.30, "fRyaw": -10.0, "fRpitch": -68.0}),
+        # Through where the ball should be, a little above it: nothing there.
+        (contact, {"fRx": -0.04, "fRy": -0.42, "fRz": 0.24, "fRyaw": -8.0, "fRpitch": -55.0,
+                   "hx": 0.05, "hy": -0.22, "hz": -0.09, "hyaw": 8.0, "hroll": -2.0, "hpitch": 0.0,
+                   "sflex": 4.0, "cflex": -6.0, "ctwist": -8.0, "sside": 5.0, "look_down": 32.0,
+                   "aLabd": 88.0, "aLflex": 32.0, "aLelbow": 28.0, "aLtwist": -10.0,
+                   "aRabd": 26.0, "aRflex": 38.0, "aRelbow": 55.0, "aRtwist": 40.0}),
+        (0.56, {"fRx": -0.03, "fRy": -0.95, "fRz": 0.78, "fRpitch": -40.0,
+                "hpitch": -10.0, "hy": -0.20, "sflex": -6.0, "cflex": -10.0, "look_down": 34.0}),
+        # Up and over: the standing heel comes up and the arms fly out.
+        (0.68, {"fRx": -0.02, "fRy": -1.02, "fRz": 1.05, "fRpitch": -30.0, "fRyaw": -5.0,
+                "fLpitch": -22.0, "fLflat": 0.0, "hpitch": -16.0, "hy": -0.18, "hz": -0.11, "hroll": -4.0,
+                "sflex": -8.0, "cflex": -12.0, "ctwist": -14.0, "look_down": 20.0,
+                "aLabd": 112.0, "aLflex": 22.0, "aLelbow": 20.0, "aRabd": 84.0, "aRflex": 52.0, "aRtwist": 20.0,
+                "aRelbow": 40.0}),
+        # A hop on the standing foot, the kicking leg coming down wide.
+        (0.78, {"fLz": 0.09, "fLx": 0.25, "fLy": -0.30, "fLpitch": 6.0,
+                "fRx": -0.14, "fRy": -0.62, "fRz": 0.36, "fRpitch": -20.0,
+                "hx": 0.08, "hroll": -8.0, "sside": -10.0, "cside": -6.0, "look_down": 8.0, "look_tilt": 10.0}),
+        (0.88, {"fLz": 0.0, "fLx": 0.29, "fLy": -0.32, "fLpitch": 0.0, "fLflat": 1.0,
+                "fRx": -0.22, "fRy": -0.46, "fRz": 0.0, "fRpitch": 0.0, "fRflat": 1.0, "fRtoe": 0.0, "fRyaw": -14.0,
+                "hx": 0.05, "hy": -0.30, "hz": -0.14, "hpitch": 6.0, "hroll": 4.0, "hyaw": 4.0,
+                "sflex": 10.0, "cflex": 2.0, "ctwist": -4.0, "sside": 6.0, "cside": 3.0, "look_tilt": -6.0,
+                "aLabd": 70.0, "aLflex": 15.0, "aRabd": 62.0, "aRflex": 20.0, "aRtwist": 0.0}),
+        (1.05, {"hroll": -2.0, "sside": -3.0, "cside": 0.0, "hz": -0.07, "hpitch": 4.0, "look_tilt": 0.0,
+                "aLabd": 35.0, "aRabd": 32.0}),
+        (end, {"fLx": 0.29, "fLy": -0.32, "fLyaw": 9.0, "fRx": -0.10, "fRy": -0.36, "fRyaw": -10.0,
+               "hx": 0.09, "hy": -0.34, "hz": -0.035, "hyaw": 0.0, "hroll": 0.0, "hpitch": 2.0, "sside": 0.0,
+               "ctwist": 0.0, "sflex": 1.0, "cflex": -1.0, "look_down": 3.0,
+               "aLabd": 9.0, "aRabd": 9.0, "aLflex": 3.0, "aRflex": 3.0, "aLelbow": 16.0, "aRelbow": 16.0,
+               "aLtwist": 4.0, "aRtwist": 4.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03}, settle=False)
+    return Clip("air_kick", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
+def stumble_clip(solver, speed=5.0):
+    """Tripping at a run and staying up: the right toe catches as it swings through, so
+    that foot comes down short, under the body, which pitches forward with the arms
+    thrown out; two quick short steps catch it and it runs on. Its feet are planted
+    for a root running at `speed` (`speeds`), so the page plays it at the player's pace."""
+    end = 1.20
+
+    def root(t):
+        return Vector((0.0, -speed * t, 0.0)), 0.0
+
+    plants = {
+        "L": [_plant(root, -0.04, 0.08, 0.07, -0.22, 4.0), _plant(root, 0.46, 0.57, 0.08, -0.08, 6.0),
+              _plant(root, 0.80, 0.92, 0.07, -0.22, 4.0)],
+        "R": [_plant(root, 0.29, 0.40, -0.07, 0.06, -8.0), _plant(root, 0.62, 0.74, -0.08, -0.14, -6.0),
+              _plant(root, 1.06, 1.18, -0.07, -0.24, -4.0)],
+    }
+    pitch = {
+        "L": Curve([(-0.04, 4.0), (0.0, 0.0), (0.05, -20.0), (0.08, -45.0), (0.3, -20.0), (0.42, 4.0), (0.46, 0.0),
+                    (0.53, -25.0), (0.57, -45.0), (0.7, -20.0), (0.78, 4.0), (0.8, 0.0), (0.88, -25.0),
+                    (0.92, -45.0), (1.05, -15.0), (1.2, -10.0)]),
+        # The caught toe: the swinging foot drags its toes, then lands flat.
+        "R": Curve([(0.0, -40.0), (0.18, -20.0), (0.24, -60.0), (0.29, -10.0), (0.31, 0.0), (0.36, -20.0),
+                    (0.40, -45.0), (0.55, -15.0), (0.60, 4.0), (0.62, 0.0), (0.70, -25.0), (0.74, -45.0),
+                    (0.95, -15.0), (1.04, 4.0), (1.06, 0.0), (1.14, -25.0), (1.2, -40.0)]),
+    }
+    feet = Footwork(root, plants, pitch, height=0.16)
+    base = dict(READY)
+    base.update({"hz": -0.07, "hpitch": 8.0, "sflex": 8.0, "cflex": 3.0, "look_down": 2.0,
+                 "aLflex": 30.0, "aRflex": -25.0, "aLelbow": 88.0, "aRelbow": 88.0, "aLabd": 14.0, "aRabd": 14.0})
+    keys = [
+        (0.22, {"aLflex": -20.0, "aRflex": 25.0}),
+        # The catch: the body pitches over the short step, the arms thrown out.
+        (0.36, {"hz": -0.12, "hpitch": 24.0, "sflex": 16.0, "cflex": 6.0, "look_down": -14.0,
+                "aLflex": 55.0, "aRflex": 48.0, "aLabd": 40.0, "aRabd": 44.0, "aLelbow": 40.0, "aRelbow": 36.0}),
+        (0.52, {"hz": -0.15, "hpitch": 22.0, "sflex": 14.0, "look_down": -10.0, "hroll": 4.0, "sside": -4.0,
+                "aLflex": 35.0, "aRflex": 60.0, "aLabd": 55.0, "aRabd": 30.0}),
+        (0.70, {"hz": -0.11, "hpitch": 15.0, "sflex": 11.0, "hroll": -3.0, "sside": 3.0,
+                "aLflex": 40.0, "aRflex": -10.0, "aLabd": 25.0, "aRabd": 20.0, "aLelbow": 70.0, "aRelbow": 70.0}),
+        (0.90, {"hz": -0.08, "hpitch": 10.0, "sflex": 9.0, "hroll": 0.0, "sside": 0.0, "look_down": 0.0,
+                "aLflex": -20.0, "aRflex": 28.0, "aLabd": 15.0, "aRabd": 15.0, "aLelbow": 88.0, "aRelbow": 88.0}),
+        (1.08, {"aLflex": 28.0, "aRflex": -22.0}),
+        (end, {"hpitch": 8.0, "sflex": 8.0, "look_down": 2.0}),
+    ]
+    shot = Shot(base, end, keys, lag={"aL": 0.03, "aR": 0.04, "look": -0.03}, settle=False)
+
+    def sample(t):
+        p = shot(t)
+        p.update(feet(t))
+        return p
+
+    clip = Clip("stumble", int(round(end * FPS)), sample, loop=False, speeds=[[0.0, speed], [end, speed]])
+    clip.root = root
+    return clip
+
+
+def tackle_missed_clip(solver):
+    """A standing tackle that finds nothing: the right foot lunges in low where the ball
+    was, sweeps through empty grass, the weight goes over it and the left foot has to
+    hop through to catch it, the arms out, then it gathers itself."""
+    contact = 0.32
+    end = 1.25
+    keys = [
+        (0.08, {"hz": -0.06, "look_down": 18.0, "fRpitch": -6.0}),
+        (0.15, {"fLz": 0.045, "fLy": -0.10, "fLpitch": 4.0}),
+        (0.25, {"fLx": 0.16, "fLy": -0.30, "fLz": 0.0, "fLpitch": 8.0, "fLyaw": 6.0,
+                "hx": 0.04, "hy": -0.14, "hz": -0.14, "hpitch": 12.0, "hyaw": -4.0,
+                "sflex": 15.0, "cflex": 5.0, "look_down": 26.0,
+                "fRx": -0.13, "fRy": -0.14, "fRz": 0.10, "fRyaw": -55.0, "fRpitch": -12.0, "fRflat": 0.0,
+                "aLabd": 40.0, "aLflex": 22.0, "aLelbow": 40.0, "aRabd": 36.0, "aRflex": -8.0, "aRelbow": 36.0}),
+        (0.29, {"fLpitch": 0.0}),
+        # Lunging further than the block tackle, at nothing.
+        (contact, {"fRx": -0.06, "fRy": -0.74, "fRz": 0.05, "fRyaw": -82.0, "fRpitch": 4.0, "fRtoe": 0.0,
+                   "hx": 0.03, "hy": -0.26, "hz": -0.22, "hpitch": 16.0, "hyaw": -8.0, "hroll": -3.0,
+                   "sflex": 20.0, "cflex": 7.0, "sside": 3.0, "look_down": 34.0,
+                   "aLabd": 55.0, "aLflex": 34.0, "aLelbow": 34.0, "aRabd": 46.0, "aRflex": 14.0, "aRelbow": 30.0}),
+        (0.44, {"fRx": 0.06, "fRy": -0.80, "fRz": 0.03, "fRyaw": -70.0,
+                "hy": -0.34, "hz": -0.24, "hpitch": 20.0, "hroll": -6.0, "look_down": 24.0}),
+        # The weight goes on over the right foot: the left hops up beside it.
+        (0.56, {"fRx": 0.02, "fRy": -0.78, "fRz": 0.0, "fRyaw": -40.0, "fRpitch": -20.0, "fRflat": 0.0,
+                "fLx": 0.14, "fLy": -0.50, "fLz": 0.12, "fLpitch": -10.0, "fLflat": 0.0,
+                "hx": -0.02, "hy": -0.50, "hz": -0.16, "hpitch": 18.0, "hroll": -8.0, "hyaw": -10.0,
+                "sflex": 16.0, "sside": -6.0, "look_down": 6.0, "look_tilt": -8.0,
+                "aLabd": 80.0, "aLflex": 30.0, "aLelbow": 20.0, "aRabd": 74.0, "aRflex": 30.0, "aRelbow": 26.0}),
+        (0.68, {"fLx": 0.20, "fLy": -0.62, "fLz": 0.0, "fLpitch": 0.0, "fLflat": 1.0, "fLyaw": 6.0,
+                "hx": 0.06, "hy": -0.52, "hz": -0.12, "hpitch": 10.0, "hroll": 3.0, "sside": 4.0, "look_tilt": 0.0}),
+        # Gathering itself, it steps back over its feet.
+        (0.80, {"fRx": -0.12, "fRy": -0.40, "fRz": 0.07, "fRyaw": -12.0, "fRpitch": 0.0,
+                "hy": -0.40, "hz": -0.08, "hpitch": 5.0, "hroll": 0.0, "hyaw": 0.0, "sside": 0.0, "sflex": 7.0,
+                "aLabd": 40.0, "aRabd": 36.0, "aLflex": 10.0, "aRflex": 10.0}),
+        (0.90, {"fRy": -0.24, "fRz": 0.0, "fRflat": 1.0}),
+        (1.02, {"fLx": 0.15, "fLy": -0.30, "fLz": 0.05, "fLflat": 0.0, "hy": -0.22, "hx": 0.0}),
+        (1.12, {"fLy": -0.12, "fLz": 0.0, "fLflat": 1.0}),
+        (end, {"fLx": 0.15, "fLy": -0.12, "fLyaw": 9.0, "fRx": -0.12, "fRy": -0.24, "fRyaw": -10.0,
+               "hx": 0.0, "hy": -0.16, "hz": -0.035, "hpitch": 2.0, "sflex": 1.0, "cflex": -1.0, "look_down": 3.0,
+               "aLabd": 9.0, "aRabd": 9.0, "aLflex": 3.0, "aRflex": 3.0, "aLelbow": 16.0, "aRelbow": 16.0}),
+    ]
+    shot = Shot(READY, end, keys, lag={"aL": 0.04, "aR": 0.05, "look": -0.03}, settle=False)
+    return Clip("tackle_missed", int(round(end * FPS)), shot, loop=False, contact=contact)
+
+
 # -- the touchline -------------------------------------------------------------
 
 
@@ -2407,6 +2825,8 @@ CLIP_BUILDERS = [
     pass_clip, shot_clip, control_clip, tackle_clip, header_clip, throw_in_clip, celebrate_clip,
     tackle_standing_clip, cross_clip, pass_lofted_clip,
     keeper_dive_L_clip, keeper_dive_R_clip, keeper_catch_clip, keeper_catch_high_clip,
+    tackle_L_clip, tackle_missed_clip, air_kick_clip, stumble_clip,
+    fall_front_clip, fall_back_clip, fall_side_clips, get_up_front_clip, get_up_back_clip,
     instruct_clip, change_clip, clap_clip, protest_clip, cheer_clip, despair_clip,
 ]
 

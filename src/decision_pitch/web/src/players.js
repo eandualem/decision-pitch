@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { continuous } from './timeline.js';
-import { createFigures, contactTime, envelope, TOUCH_PHASE } from './figures.js';
+import { createFigures, contactTime, envelope, speedAt, TOUCH_PHASE } from './figures.js';
 
 // Figures face local +z. Match headings turn anticlockwise from match +x.
 const mix = (a, b, t) => a + (b - a) * t;
 const angle = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const NONE = [];
 const smooth = (t) => t * t * (3 - 2 * t);
@@ -35,6 +36,10 @@ const FADE = 0.12; // s a pose cut short by the next one takes to fade out
 // How long a model player's latest decision colours what its figure shows, s.
 const DECIDED = 2;
 const DIVE_ACROSS = 1.2; // m/s across its facing at which a diving goalkeeper leaves its feet
+// s into the dive clips: its push-off, where a dive seen begun starts, when it leaves the grass
+// and when it is getting up on its feet again
+const DIVE_FROM = 0.2;
+const DIVE_GROUND = [0.36, 1.4];
 const THROWER = 1.2; // m from the ball within which a player picks it up for a throw-in
 const THROW_RELEASE = 0.4; // s the thrown ball takes to settle from the hands onto its path
 const CELEBRATION = 4.2; // s a looping celebration lasts
@@ -59,15 +64,23 @@ export function track(keys, u) {
 
 // The engine kicks the ball wherever it is aimed, whichever way the kicker faces. The
 // drawn body turns into the kick as it winds up, so the swing sends the ball where it goes.
+// For the kicks in PIVOTED it pivots on its standing foot while that is on the grass
+// (STANDING m up at most, at scale 1), and comes back over the engine's position over
+// PIVOT_BACK s; measured, this kept the standing foot planted under those kicks and not under
+// a plain pass (docs/decisions.md, "Mishaps").
 const TURN = [[-0.14, 0], [-0.04, 1], [0.12, 1], [0.45, 0]];
+const PIVOTED = new Set(['pass_lofted', 'cross']);
+const STANDING = 0.05;
+const PIVOT_BACK = 0.3;
+const standingAt = new THREE.Vector3();
 // A touch interrupts a player's pose only once that pose has played this long, or if it
 // matters more: two players trading the ball in a duel do not twitch with every exchange.
 const REPOSE = 0.25; // s
-const WEIGHT = { control: 0, tackle: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
+const WEIGHT = { control: 0, tackle: 0, poke: 0, deflect: 0, kick: 1, throw: 1, save: 1, catch: 1 };
 const CLIPS = { control: 'control', deflect: 'control', throw: 'throw_in' };
-// Clips that move the whole body even at a run: the slide, the throw and the goalkeeper's.
+// Clips that move the whole body even at a run: the slides, the throw and the goalkeeper's.
 // The others keep the stride's support leg and hips over a run.
-const WHOLE = new Set(['tackle', 'throw_in', 'keeper_catch', 'keeper_catch_high']);
+const WHOLE = new Set(['tackle', 'tackle_L', 'throw_in', 'keeper_catch', 'keeper_catch_high']);
 // Which kick a kick plays. A model player's decision says, for a moment (DECIDED); otherwise
 // the ball's flight does: lifted from a wide attacking place in towards the middle, a cross;
 // lifted elsewhere, a lofted pass; along the ground, the shot when it leaves fast.
@@ -76,10 +89,28 @@ const LOFTED = 0.3; // rad above the ground a lifted kick leaves at, at least
 const WIDE = 18; // m from the middle of the pitch a cross comes from, at least
 const DEEP = 22; // m from halfway
 const GRAVITY = 9.81;
-// A tackle at a run is the slide; one made more slowly, the standing block.
-const SLIDE = 4.5; // m/s
 // A clip a figure lacks plays the nearest it has.
-const INSTEAD = { cross: 'pass_lofted', pass_lofted: 'pass', shot: 'pass', tackle_standing: 'tackle' };
+const INSTEAD = {
+  cross: 'pass_lofted', pass_lofted: 'pass', shot: 'pass', tackle_standing: 'tackle', tackle_L: 'tackle',
+  tackle_missed: 'tackle_standing', air_kick: 'shot',
+};
+// A player's `move` and `down` (docs/protocol.md): what it does without the ball, shown as
+// the engine carries it out. A kick at nothing plays `air_kick` from the moment the snapshot
+// shows it, from AIR_KICK s into the clip, so its swing goes through where the ball should
+// be about a quarter of a second later. A stumble at STUMBLING m/s or more is `stumble`, at
+// the player's pace; slower, it is a lunge at nothing, `tackle_missed`. A slide is the slide
+// on the boot nearer the ball, from going in; the engine judges it then, so the slide shows
+// the tackle it makes. Down, it falls by `way` (to the side away from the nearest opponent),
+// lies there and gets up so that it is on its feet at `until`; with less time than the fall
+// and the get-up take, both play faster, up to HURRIED times. A slide that ends down lies in
+// its own pose and gets up from it.
+const AIR_KICK = 0.15;
+const STUMBLING = 2.5; // m/s
+const FALLS = { front: 'fall_front', back: 'fall_back', side_L: 'fall_side_L', side_R: 'fall_side_R' };
+const GET_UP = { front: 'get_up_front', back: 'get_up_back', side_L: 'get_up_back', side_R: 'get_up_back' };
+const HURRIED = 2;
+const TURN_BACK = 3; // rad/s: a figure got up across its heading after a side fall turns back
+const MISHAP_FADE = 0.12; // s a fall or a slide comes in over
 // A sprinter knocks the ball ahead (a `knock` touch) and catches it up (its `control`):
 // neither is a clip. Its stride is timed so its boot meets the ball at each, within STEER
 // of its own pace, and it keeps the look of a run with the ball while it chases (CHASE s).
@@ -102,18 +133,19 @@ export function reach(lateral, height, diving) {
 
 // The clip a touch plays: `speed` is how fast a kick sent the ball, `loft` the angle it
 // left the ground at, `crossing` whether it went from a wide attacking place in towards the
-// middle and `decision` the kicker's latest decision, if a model's; `running` how fast a
-// tackler ran; `lateral` and `height` where a goalkeeper met the ball, and `diving` whether
-// it was diving. A knock, the sprinter's touch of its stride, plays none.
+// middle and `decision` the kicker's latest decision, if a model's; `lateral` and `height`
+// where a goalkeeper met the ball, and `diving` whether it was diving. A knock, the
+// sprinter's touch of its stride, plays none. A tackle is the standing block: a slide comes
+// with the player's `move`, which shows it.
 export function touchClip(kind, {
-  speed = 0, loft = 0, crossing = false, decision = null, running = 0, lateral = 0, height = 0, diving = false,
+  speed = 0, loft = 0, crossing = false, decision = null, lateral = 0, height = 0, diving = false,
 } = {}) {
   if (kind === 'kick') {
     if (decision && DECIDED_KICKS[decision]) return DECIDED_KICKS[decision];
     if (loft >= LOFTED) return crossing ? 'cross' : 'pass_lofted';
     return speed > SHOT ? 'shot' : 'pass';
   }
-  if (kind === 'tackle') return running >= SLIDE ? 'tackle' : 'tackle_standing';
+  if (kind === 'tackle' || kind === 'poke') return 'tackle_standing';
   if (kind === 'save' || kind === 'catch') return reach(lateral, height, diving);
   return CLIPS[kind] ?? null;
 }
@@ -167,12 +199,18 @@ export function createPlayers(scene, teams, figure, options = {}) {
         group, person, badge, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
         vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
+        // A move without the ball under way (air kick, stumble, slide), the `move` last seen,
+        // a fall under way, and how far the figure is turned from its facing (rad) to get up.
+        mishap: null, moving: null, down: null, turned: 0,
         celebrateAt: -Infinity,
         // The loop sets the figure shows (figures.js) and the model's latest decision.
         sets: { dribble: 0, jockey: 0, shield: 0, touchIn: 0, hurry: 0 }, decision: null, decidedAt: -Infinity, id: player.id,
         parting: 0, // frames it goes on quickening its stride to fall out of step
         strideAt: -Infinity, // when its boot is to meet the ball it knocked on or catches up
         chasing: false, // the ball it knocked ahead
+        // Turning into a kick on its standing foot, the drawn body is this far (m, on the
+        // pitch) from where the engine has it, coming back over a fraction of a second.
+        standing: person.object.getObjectByName('toe_L'), ox: 0, oy: 0,
       });
     });
   });
@@ -237,7 +275,11 @@ export function createPlayers(scene, teams, figure, options = {}) {
   function startPose(touch, snapshot, time, now) {
     const at = touch.t - STEP;
     const actor = actors.get(touch.player);
-    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT)) return;
+    // Down, it plays the ball only once it is up again, at `until`: a touch seen ahead may be.
+    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT) || (actor.down && at < actor.down.until)) return;
+    // The tackle a slide makes, judged as it goes in, is shown by the slide itself.
+    if ((touch.kind === 'tackle' || touch.kind === 'poke')
+      && (actor.mishap?.kind === 'slide' || snapshot.players.some(p => p.id === touch.player && p.move === 'slide'))) return;
     // A throw-in held overhead is released on the touch; one not yet picked up is thrown
     // from the wind-up there is time for.
     if (touch.kind === 'throw') {
@@ -259,10 +301,16 @@ export function createPlayers(scene, teams, figure, options = {}) {
       aim(pose, snapshot); // the first snapshot to report the touch, if it can tell
       pose.aimed = pose.from;
     }
-    pose.clip = playable(actor, touchClip(touch.kind, { ...pose, running: actor.speed }));
+    pose.clip = playable(actor, touchClip(touch.kind, pose));
     const clip = pose.clip && actor.person.clip(pose.clip);
     if (!clip) return;
     pose.end = clip.duration - clip.contact;
+    // A lunge at nothing or a swing still playing out gives way to the ball played now.
+    if (actor.mishap && !actor.down) {
+      actor.mishap.cut = Math.min(actor.mishap.cut, time);
+      actor.fadingMishap = actor.mishap;
+      actor.mishap = null;
+    }
     replace(actor, pose, time);
   }
 
@@ -318,8 +366,12 @@ export function createPlayers(scene, teams, figure, options = {}) {
     return result;
   }
 
+  // A dive seen begun, the keeper already moving across, starts at its push-off; until it
+  // leaves the grass its feet stay planted where they are while the engine carries it.
   function startDive(actor, name, time, contactAt = null) {
     actor.dive = timed(actor, name, time, contactAt);
+    if (contactAt == null) actor.dive.clipTime = DIVE_FROM;
+    actor.dive.planted = DIVE_GROUND;
     actor.armed = false;
   }
 
@@ -343,8 +395,151 @@ export function createPlayers(scene, teams, figure, options = {}) {
     }
     if (clip.clipTime >= clip.duration) return false;
     const share = Math.min(clamp((time - clip.start) / 0.12, 0, 1), clamp((clip.duration - clip.clipTime) / 0.3, 0, 1));
-    actor.person.act(clip.clip, clip.clipTime, share, waits && !clip.anchor ? 'gesture' : 'whole');
+    const planted = clip.planted && (clip.clipTime < clip.planted[0] || clip.clipTime > clip.planted[1]);
+    actor.person.act(clip.clip, clip.clipTime, share, waits && !clip.anchor ? 'gesture' : 'whole', Boolean(planted));
     return true;
+  }
+
+  // A clip played from clip time `from` on the drawn match's clock, as a dive is (timed), on
+  // `layer`; a `planted` one keeps the feet the clip puts down on the grass. One with
+  // `speeds` plays at the player's pace; `hold` keeps it at that clip time, `rate` plays it
+  // faster and `cut` fades it out from then.
+  function mishapClip(actor, name, time, { from = 0, layer = 'whole', planted = false } = {}) {
+    const clip = actor.person.clip(name);
+    return {
+      clip: name, duration: clip.duration, start: time, last: time, clipTime: from, layer, planted,
+      speeds: clip.speeds ?? null, hold: null, rate: 1, cut: Infinity, down: clip.down ?? null, turn: clip.turn ?? 0,
+    };
+  }
+
+  // Plays a mishap clip; returns false once it has finished or faded out.
+  function playMishap(actor, m, time) {
+    if (time > m.last) {
+      const dt = time - m.last;
+      if (m.speeds) {
+        const made = Math.max(0.1, speedAt(m.speeds, m.clipTime));
+        m.clipTime += dt * clamp(actor.speed / actor.person.scale / made, 0.4, 1.5);
+      } else m.clipTime += dt * m.rate;
+      if (m.hold !== null) m.clipTime = Math.min(m.clipTime, m.hold);
+      m.last = time;
+    }
+    const out = clamp(1 - (time - m.cut) / FADE, 0, 1);
+    if (m.clipTime >= m.duration || !(out > 0)) return false;
+    const ending = m.hold === null ? clamp((m.duration - m.clipTime) / 0.3, 0, 1) : 1; // one held stays
+    const share = Math.min(clamp((time - m.start) / MISHAP_FADE, 0, 1), ending) * out;
+    actor.person.act(m.clip, m.clipTime, share, m.layer, m.planted);
+    return true;
+  }
+
+  // A player's `move` as the snapshot first shows it.
+  function startMishap(actor, kind, player, time, ball) {
+    let name = null;
+    const options = {};
+    if (kind === 'air_kick') {
+      name = 'air_kick';
+      options.from = AIR_KICK;
+      options.layer = 'play';
+    } else if (kind === 'stumble') {
+      const running = actor.speed >= STUMBLING && actor.person.clip('stumble');
+      name = running ? 'stumble' : 'tackle_missed';
+      options.planted = Boolean(running);
+    } else if (kind === 'slide') {
+      // The boot nearer the ball, the left for a ball on its left, facing the way it slides:
+      // the heading the engine turns it to as it goes in, in the same snapshot.
+      const way = player.heading;
+      const left = -(ball.x - player.x) * Math.sin(way) + (ball.y - player.y) * Math.cos(way) > 0;
+      name = left ? 'tackle_L' : 'tackle';
+    }
+    name = playable(actor, name);
+    if (!name) return;
+    const m = mishapClip(actor, name, time, options);
+    m.kind = kind;
+    m.facing = kind === 'slide' ? player.heading : actor.facing;
+    giveWay(actor, time);
+    actor.mishap = m;
+  }
+
+  // What the figure was showing fades out under a mishap or a fall beginning.
+  function giveWay(actor, time) {
+    if (actor.mishap) {
+      actor.mishap.cut = Math.min(actor.mishap.cut, time);
+      actor.fadingMishap = actor.mishap;
+      actor.mishap = null;
+    }
+    if (actor.pose) replace(actor, null, time);
+  }
+
+  // A player's `down` as the snapshot first shows it: it falls, by `way` (to the side away
+  // from the nearest opponent), or a slide under way lies down in its own pose.
+  function startDown(actor, player, down, time, players) {
+    let way = down.way;
+    if (way === 'side') {
+      let nearest = Infinity;
+      let lateral = 0;
+      for (const other of players) {
+        if (actors.get(other.id)?.team === actor.team) continue;
+        const dx = other.x - player.x;
+        const dy = other.y - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < nearest) {
+          nearest = d;
+          lateral = -dx * Math.sin(actor.facing) + dy * Math.cos(actor.facing);
+        }
+      }
+      way = lateral > 0 ? 'side_R' : 'side_L'; // pushed from its left, it goes down to its right
+    }
+    const slide = actor.mishap?.kind === 'slide' && actor.mishap.down ? actor.mishap : null;
+    const d = { way, until: down.until, facing: actor.facing, fall: null, rise: null, slide, lying: null, gone: false };
+    if (slide) slide.hold = slide.down[1];
+    else {
+      const name = playable(actor, FALLS[way] ?? 'fall_front');
+      if (!name) return;
+      d.fall = mishapClip(actor, name, time);
+      d.fall.hold = d.fall.duration - 1e-3; // it lies there
+      // Down for less time than falling and getting up take: both play faster.
+      const getUp = actor.person.clip(playable(actor, GET_UP[way] ?? 'get_up_front'))?.duration ?? 0;
+      d.fall.rate = clamp((d.fall.duration + getUp) / Math.max(d.until - time, 1e-3), 1, HURRIED);
+      giveWay(actor, time);
+    }
+    actor.down = d;
+  }
+
+  // Plays a fall: down, lying until it is time to get up, and up so that it is on its feet
+  // at `until`. Returns false once it is up.
+  function playDown(actor, d, time) {
+    const down = d.slide ?? d.fall;
+    if (!d.rise && down) {
+      if (d.slide) {
+        if (!playMishap(actor, d.slide, time)) return false;
+      } else playMishap(actor, d.fall, time);
+      if (d.lying === null && down.clipTime >= down.hold - 1e-6) d.lying = time;
+      if (d.lying === null) return true;
+      // How long getting up takes, and so when it begins.
+      const getUp = d.slide ? d.slide.duration - d.slide.hold : actor.person.clip(GET_UP[d.way] ?? 'get_up_front')?.duration;
+      if (!(getUp > 0)) return false;
+      const left = d.gone ? 0 : d.until - d.lying;
+      const rate = left >= getUp ? 1 : clamp(getUp / Math.max(left, 1e-3), 1, HURRIED);
+      const from = d.gone ? time : Math.max(d.lying, d.until - getUp / rate);
+      if (time < from) return true;
+      if (d.slide) {
+        d.slide.hold = null;
+        d.slide.rate = rate;
+        d.rise = d.slide;
+        return true; // it has played this frame
+      } else {
+        const name = playable(actor, GET_UP[d.way] ?? 'get_up_front');
+        if (!name) return false;
+        // The get-up begins in the pose the fall lies in, so it takes over at once. From a
+        // side fall it lies across the way it faced: the figure turns that far to get up
+        // from its back, and turns back once it is up.
+        d.rise = mishapClip(actor, name, time - MISHAP_FADE);
+        d.rise.last = time;
+        d.rise.rate = rate;
+        actor.turned = (d.fall.turn * Math.PI) / 180;
+        d.fall = null;
+      }
+    }
+    return d.rise ? playMishap(actor, d.rise, time) : false;
   }
 
   // Which way a kick sends the ball and how fast, from the touch to where `snapshot` has
@@ -395,13 +590,25 @@ export function createPlayers(scene, teams, figure, options = {}) {
       pose.ease = mix(pose.ease, 1, 1 - Math.exp(-step / 0.05));
       // A turn starts from where the body is, even when the aim is known only late.
       const turning = track(TURN, u) * Math.min(w, clamp((u - pose.aimed) / 0.06, 0, 1));
-      if (pose.aim !== null) actor.facing = angle(actor.facing, pose.aim, turning);
+      if (pose.aim !== null) {
+        const before = actor.facing;
+        actor.facing = angle(actor.facing, pose.aim, turning);
+        // The turn into the kick is redone from the engine's heading every frame: the body
+        // pivots by how much more of it there is than last frame.
+        const into = wrap(actor.facing - before);
+        if (PIVOTED.has(pose.clip)) pivot(actor, wrap(into - (pose.into ?? 0)));
+        pose.into = into;
+      }
     }
     const { person } = actor;
     if (pose.kind === 'kick') {
+      // For a lofted pass or a cross the foot lock holds whichever sole is on the grass, the
+      // standing foot above all, as the body turns into the kick over it.
       const kick = person.clip(pose.clip);
-      if (pose.was && pose.ease < 1) person.act(pose.was, contactTime(u, pose.from, person.clip(pose.was).contact), w * (1 - pose.ease));
-      person.act(pose.clip, contactTime(u, pose.from, kick.contact), w * (pose.was ? pose.ease : 1));
+      if (pose.was && pose.ease < 1) {
+        person.act(pose.was, contactTime(u, pose.from, person.clip(pose.was).contact), w * (1 - pose.ease), 'play', PIVOTED.has(pose.was));
+      }
+      person.act(pose.clip, contactTime(u, pose.from, kick.contact), w * (pose.was ? pose.ease : 1), 'play', PIVOTED.has(pose.clip));
     } else if (pose.held) {
       // A caught ball is held at the chest at the clip's end, over the steps once it is done.
       const clip = person.clip(pose.clip);
@@ -411,6 +618,30 @@ export function createPlayers(scene, teams, figure, options = {}) {
       const clip = person.clip(pose.clip);
       person.act(pose.clip, contactTime(u, pose.from, clip.contact), w, WHOLE.has(pose.clip) ? 'whole' : 'play');
     }
+  }
+
+  // Turns the drawn body by `turned` (rad) about its standing foot while that foot is on the
+  // grass, as a player turning into a kick pivots on it, rather than about the engine's
+  // position, which drags the planted foot round with the turn. The body comes back over
+  // the engine's position over PIVOT_BACK s (update), the foot lock holding the feet.
+  function pivot(actor, turned) {
+    const toe = actor.standing;
+    if (!toe || !(Math.abs(turned) > 1e-6)) return;
+    toe.getWorldPosition(standingAt);
+    if (standingAt.y > STANDING * actor.person.scale) return; // in the air: it turns about itself
+    const { group } = actor;
+    const fx = standingAt.x;
+    const fy = -standingAt.z;
+    const rx = group.position.x;
+    const ry = -group.position.z;
+    const c = Math.cos(turned);
+    const s = Math.sin(turned);
+    const dx = fx + c * (rx - fx) - s * (ry - fy) - rx;
+    const dy = fy + s * (rx - fx) + c * (ry - fy) - ry;
+    actor.ox += dx;
+    actor.oy += dy;
+    group.position.x += dx;
+    group.position.z -= dy;
   }
 
   // Which loop sets a player's figure shows, from the snapshot: the dribble on the ball,
@@ -536,6 +767,13 @@ export function createPlayers(scene, teams, figure, options = {}) {
       const { group, person } = actor;
       group.visible = true;
       group.position.set(mix(old.x, player.x, k), 0, -mix(old.y, player.y, k));
+      // Off the engine's position after pivoting into a kick, it comes back over it.
+      if (teleport || reset || stopped) actor.ox = actor.oy = 0;
+      const back = Math.exp(-step / PIVOT_BACK);
+      actor.ox *= back;
+      actor.oy *= back;
+      group.position.x += actor.ox;
+      group.position.z -= actor.oy;
       actor.heading = angle(old.heading, player.heading, k);
       // The drawn velocity, between the snapshots either side of the drawn time: the
       // stride follows how the figure moves on screen, not the engine's heading.
@@ -557,6 +795,21 @@ export function createPlayers(scene, teams, figure, options = {}) {
       const by = after.ball.y - player.y;
       if (bx * bx + by * by > 6.25) actor.faceYaw = Math.atan2(by, bx);
       if (stopped) actor.pose = actor.fading = actor.dive = actor.throwing = actor.holding = null;
+      // A move without the ball and a fall (docs/protocol.md): a kick at nothing, a
+      // stumble, a slide, going down and getting up again.
+      const placed = stopped || reset || teleport;
+      if (placed) {
+        actor.mishap = actor.fadingMishap = actor.down = null;
+        actor.turned = 0;
+      }
+      const move = placed ? null : player.move ?? null;
+      if (move && move !== actor.moving && !actor.down) startMishap(actor, move, player, time, after.ball);
+      actor.moving = move;
+      if (!placed && player.down && !actor.down) startDown(actor, player, player.down, time, after.players);
+      if (actor.down) {
+        if (player.down) actor.down.until = player.down.until;
+        else actor.down.gone = true;
+      }
       const pose = actor.pose;
       const diving = !stopped && Boolean(player.dive);
       if (diving && !actor.diving) actor.armed = true; // the snapshot first marks it diving
@@ -564,7 +817,9 @@ export function createPlayers(scene, teams, figure, options = {}) {
       actor.diving = diving;
       const guarding = diving || Boolean(actor.dive) || pose?.kind === 'save' || pose?.kind === 'catch';
       actor.guard = stopped ? 0 : mix(actor.guard, guarding ? 1 : 0, 1 - Math.exp(-step * (guarding ? 12 : 3)));
-      actor.facing = angle(actor.heading, actor.faceYaw, actor.guard);
+      // Down or sliding, it keeps the facing it went down with.
+      const facing = angle(actor.heading, actor.faceYaw, actor.guard);
+      actor.facing = actor.down?.facing ?? (actor.mishap?.kind === 'slide' ? actor.mishap.facing : facing);
       if (actor.armed && !actor.dive) {
         const lateral = -vx * Math.sin(actor.facing) + vy * Math.cos(actor.facing);
         if (Math.abs(lateral) > DIVE_ACROSS) startDive(actor, lateral > 0 ? 'keeper_dive_L' : 'keeper_dive_R', time);
@@ -577,6 +832,20 @@ export function createPlayers(scene, teams, figure, options = {}) {
       if (pose && (pose.held ? time - pose.cut > FADE : time - pose.at > pose.end)) actor.pose = null;
       else if (pose) playPose(actor, pose, time, after, latest, step);
       if (actor.dive && !playTimed(actor, actor.dive, time)) actor.dive = null;
+      if (actor.fadingMishap && !playMishap(actor, actor.fadingMishap, time)) actor.fadingMishap = null;
+      const fallen = actor.down;
+      if (fallen && !playDown(actor, fallen, time)) {
+        if (actor.mishap === fallen.slide) actor.mishap = null;
+        actor.down = null;
+        // On its feet it faces its heading again, from the way it got up, by turning.
+        actor.turned = wrap(actor.turned + fallen.facing - facing);
+        actor.facing = facing;
+      }
+      if (actor.mishap && actor.mishap !== actor.down?.slide && !playMishap(actor, actor.mishap, time)) actor.mishap = null;
+      if (!actor.down && actor.turned !== 0) {
+        const back = TURN_BACK * step;
+        actor.turned = Math.abs(actor.turned) <= back ? 0 : actor.turned - Math.sign(actor.turned) * back;
+      }
       // The throw-in's taker holds the ball until its throw, or lets go if play moves on.
       if (!actor.throwing && actor === taker) actor.throwing = timed(actor, 'throw_in', time, null, Math.max(0, person.clip('throw_in').contact - 0.15));
       if (actor.throwing && !actor.throwing.anchor && actor !== taker) actor.throwing = null;
@@ -620,8 +889,8 @@ export function createPlayers(scene, teams, figure, options = {}) {
         if (gap > 0 && closing > 0.5) touchIn = gap / closing;
       }
       actor.sets.touchIn = touchIn;
-      person.object.rotation.y = actor.facing + Math.PI / 2;
-      person.update(step, actor.speed, actor.way - actor.facing, actor.sets);
+      person.object.rotation.y = actor.facing + Math.PI / 2 + actor.turned;
+      person.update(step, actor.speed, actor.way - actor.facing - actor.turned, actor.sets);
     }
 
     // The ball as the engine sends it, through the point of each touch at its moment.
