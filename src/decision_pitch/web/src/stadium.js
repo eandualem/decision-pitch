@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { technicalArea } from './touchline.js';
+import { createGrass } from './grass.js';
 
 const DUGOUT = { gap: 3.3, depth: 1.4, width: 8, height: 1.8 }; // m behind a manager's spot
 
@@ -53,95 +54,11 @@ export function createStadium(scene, renderer, pitch) {
     return mesh;
   }
   box(0, -0.3, 0, length + 38, 0.5, width + 40, trim);
-  box(0, -0.06, 0, length + 16, 0.1, width + 16, lambert(0x326c49));
-
-  // One vertex-coloured mesh for the mowing stripes.
-  const turfPositions = [];
-  const turfColors = [];
-  const stripeColors = [new THREE.Color(0x408b55), new THREE.Color(0x367c49)];
-  const stripes = 20;
-  for (let i = 0; i < stripes; i++) {
-    const left = -hl + length * i / stripes;
-    const right = -hl + length * (i + 1) / stripes;
-    turfPositions.push(left, 0, -hw, left, 0, hw, right, 0, hw,
-      left, 0, -hw, right, 0, hw, right, 0, -hw);
-    for (let vertex = 0; vertex < 6; vertex++) {
-      const c = stripeColors[i % 2];
-      turfColors.push(c.r, c.g, c.b);
-    }
-  }
-  const turfGeometry = geometry(new THREE.BufferGeometry());
-  turfGeometry.setAttribute('position', new THREE.Float32BufferAttribute(turfPositions, 3));
-  turfGeometry.setAttribute('color', new THREE.Float32BufferAttribute(turfColors, 3));
-  turfGeometry.computeVertexNormals();
-  const turf = new THREE.Mesh(turfGeometry,
-    material(new THREE.MeshLambertMaterial({ vertexColors: true })));
-  turf.receiveShadow = true;
-  root.add(turf);
-
-  // Real-width painted ribbons, rather than implementation-dependent GL lines.
-  const paint = [];
-  function segment(x1, z1, x2, z2, thickness = 0.12) {
-    const distance = Math.hypot(x2 - x1, z2 - z1);
-    if (!distance) return;
-    const dx = -(z2 - z1) / distance * thickness / 2;
-    const dz = (x2 - x1) / distance * thickness / 2;
-    paint.push(x1 + dx, 0.016, z1 + dz, x2 + dx, 0.016, z2 + dz,
-      x2 - dx, 0.016, z2 - dz, x1 + dx, 0.016, z1 + dz,
-      x2 - dx, 0.016, z2 - dz, x1 - dx, 0.016, z1 - dz);
-  }
-  function arc(x, z, radius, start = 0, end = Math.PI * 2) {
-    const steps = Math.max(12, Math.ceil((end - start) * radius * 3));
-    for (let i = 0; i < steps; i++) {
-      const a = start + (end - start) * i / steps;
-      const b = start + (end - start) * (i + 1) / steps;
-      segment(x + radius * Math.cos(a), z + radius * Math.sin(a),
-        x + radius * Math.cos(b), z + radius * Math.sin(b));
-    }
-  }
-  function spot(x, z) { arc(x, z, 0.055); }
-  segment(-hl, -hw, hl, -hw);
-  segment(hl, -hw, hl, hw);
-  segment(hl, hw, -hl, hw);
-  segment(-hl, hw, -hl, -hw);
-  segment(0, -hw, 0, hw);
-  arc(0, 0, 9.15);
-  spot(0, 0);
-  const penaltyArc = Math.acos(5.5 / 9.15);
-  for (const side of [-1, 1]) {
-    for (const [depth, halfWidth] of [[16.5, 20.16], [5.5, 9.16]]) {
-      const x = side * (hl - depth);
-      segment(side * hl, -halfWidth, x, -halfWidth);
-      segment(x, -halfWidth, x, halfWidth);
-      segment(x, halfWidth, side * hl, halfWidth);
-    }
-    const spotX = side * (hl - 11);
-    spot(spotX, 0);
-    const angle = side === -1 ? 0 : Math.PI;
-    arc(spotX, 0, 9.15, angle - penaltyArc, angle + penaltyArc);
-    for (const end of [-1, 1]) {
-      const start = side === -1 ? (end === -1 ? 0 : -Math.PI / 2)
-        : (end === -1 ? Math.PI / 2 : Math.PI);
-      arc(side * hl, end * hw, 1, start, start + Math.PI / 2);
-    }
-  }
-  // Each technical area: a dashed box from a metre off the touchline to its dugout.
-  for (const team of [0, 1]) {
+  // The grass, with its mowing stripes and painted lines, out to the advertising wall.
+  const grass = createGrass(root, renderer, pitch, [0, 1].map((team) => {
     const area = technicalArea(pitch, team);
-    const front = hw + 1;
-    const back = area.z + DUGOUT.gap;
-    const left = area.minX - 0.5;
-    const right = area.maxX + 0.5;
-    for (let x = left; x < right; x += 0.85) segment(x, front, Math.min(x + 0.5, right), front, 0.1);
-    for (const x of [left, right]) {
-      for (let z = front; z < back; z += 0.85) segment(x, z, x, Math.min(z + 0.5, back), 0.1);
-    }
-  }
-  const paintGeometry = geometry(new THREE.BufferGeometry());
-  paintGeometry.setAttribute('position', new THREE.Float32BufferAttribute(paint, 3));
-  const markings = new THREE.Mesh(paintGeometry,
-    material(new THREE.MeshBasicMaterial({ color: 0xe6edda, side: THREE.DoubleSide })));
-  root.add(markings);
+    return { minX: area.minX, maxX: area.maxX, back: area.z + DUGOUT.gap };
+  }));
 
   // Both goals share one line-segment mesh for the net. Its muted colour keeps
   // it readable without obscuring the ball or creating a dense white shimmer.
@@ -213,6 +130,17 @@ export function createStadium(scene, renderer, pitch) {
           0.7, 0.4, 0.65, seatPalette[(seat * 7 + tier * 3) % seatPalette.length]]);
       }
     }
+    // The same tiers behind each goal, short of the floodlights at the corners.
+    for (let tier = 0; tier < 5; tier++) {
+      const height = 0.65 + tier * 0.72;
+      const x = side * (hl + 10 + tier * 1.5);
+      terraces.push([x, height / 2, 0, 1.5, height, width + 18]);
+      for (let seat = 0; seat < 69; seat++) {
+        if (seat % 23 < 2) continue; // access aisles
+        seats.push([x, height + 0.2, (seat - 34) * ((width + 18) / 69),
+          0.65, 0.4, 0.7, seatPalette[(seat * 5 + tier * 3 + 1) % seatPalette.length]]);
+      }
+    }
     box(0, 0.48, side * (hw + 7.5), length + 8, 0.96, 0.18, concrete);
     box(side * (hl + 8), 0.48, 0, 0.18, 0.96, width + 15, concrete);
   }
@@ -266,6 +194,7 @@ export function createStadium(scene, renderer, pitch) {
       if (disposed) return;
       disposed = true;
       scene.remove(root);
+      grass.dispose();
       // InstancedMesh owns GPU instance buffers in addition to its geometry.
       root.traverse((object) => { if (object.isInstancedMesh) object.dispose(); });
       geometries.forEach((value) => value.dispose());
