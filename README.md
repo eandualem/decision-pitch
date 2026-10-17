@@ -109,14 +109,14 @@ while it waits.
 | Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players out of place run back and the kick-off waits for them, for up to 10 s |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
-| Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
+| Throw-ins | Implemented. Opponents stay 2 m away. A foul throw cannot happen: the thrower always throws with both hands from where the ball went out |
 | Goal kicks | Implemented. Opponents stay 9.15 m away and outside the penalty area until the kick is taken |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends. No added time |
-| Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
+| Goalkeepers | Implemented. A goalkeeper can handle the ball, so play it higher and further, in its own penalty area, except a ball a teammate deliberately kicked or threw to it, which it plays with its feet. A goalkeeper holding the ball for more than eight seconds concedes a corner, with the referee's count shown for the last five |
 | Saves and deflections | Implemented. A ball faster than 18 m/s bounces off any player it reaches; a goalkeeper at full stretch parries a shot instead of catching it, so a parry or block can give a corner |
-| Playing the ball twice at a restart | Not implemented yet |
-| Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick, corner or direct free kick) | Not implemented yet: such a goal currently counts. A goal straight from an indirect free kick does not count |
+| Playing the ball twice at a restart | Implemented: an indirect free kick to the opponents |
+| Goals that may not be scored directly from a restart | Implemented. A throw-in straight into the opponents' goal is a goal kick, and into the thrower's own goal a corner. An own goal straight from a kick-off, goal kick, corner or free kick is a corner, and a goal straight from an indirect free kick does not count |
 | Fouls | Implemented for challenges on the player with the ball: a standing or slide tackle from behind, a tackle that takes the player and not the ball, and running into the carrier from behind or without being able to reach the ball. A fouled player goes down. Handball and fouls off the ball are not implemented yet |
 | Free kicks and penalties | Implemented. Opponents stay 9.15 m away, with a wall near goal; at a penalty only the taker and the goalkeeper on its line stay in the area and arc |
 | Advantage | Not implemented: every foul stops play |

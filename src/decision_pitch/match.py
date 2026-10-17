@@ -114,6 +114,7 @@ AIR_KICK = 0.6  # s a kick at nothing takes
 AIR_KICK_FALL = 6.0  # m/s at or above which a kick at nothing ends on the ground
 AIR_KICK_DOWN = 1.5  # s on the ground after it
 BRAKE = 12.0  # m/s² a player swinging, sliding or falling slows at
+HOLD_LIMIT = 8.0  # s a goalkeeper may hold the ball in its hands
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -193,6 +194,11 @@ class Match:
         self.moves: dict[int, tuple[str, float, str | None, float]] = {}
         self.down: dict[int, tuple[str, float]] = {}  # on the ground: which way, until when
         self.kicked: dict[int, float] = {}  # when each player last kicked the ball, not a knock
+        self.restart_kicker: int | None = None  # took a restart, and no one else has touched the ball since
+        self.direct: tuple[str, int] | None = None  # the restart and team the ball is straight from
+        self.passed: int | None = None  # the team that deliberately kicked or threw the ball last
+        self.holder: int | None = None  # the goalkeeper holding the ball in its hands
+        self.held_since = 0.0
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -240,6 +246,7 @@ class Match:
                 "z": round(b.z, 3),
                 "owner": self.owner,
                 "touches": [dict(touch) for touch in self.touches if touch["t"] >= self.t - RECENT_TOUCHES],
+                **({"held": round(self.t - self.held_since, 1)} if self.holder is not None else {}),
             },
             "players": [self._player_snapshot(p) for p in self.players],
         }
@@ -349,6 +356,8 @@ class Match:
             step_ball(self.ball)
         if self.phase == "play":
             self._check_ball(before)
+        if self.phase == "play" and self.holder is not None:
+            self._check_holding()
 
         if self.penalty_live and self.ball.vx == self.ball.vy == self.ball.vz == 0:
             self.penalty_live = False  # it came to rest untouched
@@ -493,7 +502,7 @@ class Match:
     def _reaches(self, p: Player) -> bool:
         """Whether the ball is within `p`'s reach."""
         reach, height = CONTROL, CONTROL_HEIGHT
-        if self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team):
+        if self._handles(p):
             reach, height = KEEPER_CONTROL, KEEPER_HEIGHT
         b = self.ball
         return b.z <= height and math.hypot(b.x - p.x, b.y - p.y) <= reach
@@ -518,6 +527,9 @@ class Match:
             if self.penalty_live and self.elapsed >= self.half_length and not (deflects and self._saves(nearest)):
                 self._end_half()  # this touch completes the penalty the half waited for; a save does not
                 return
+            if nearest.id == self.restart_kicker:
+                self._second_touch(nearest)
+                return
             if nearest.id in self.offside:
                 self._offside(nearest)
                 return
@@ -530,13 +542,16 @@ class Match:
                 self.indirect = None
             self.last_touch = nearest.team
             if nearest.id != self.owner:
-                self._touched(nearest, self._possession_kind(nearest))
+                kind = self._possession_kind(nearest)
+                self._touched(nearest, kind)
+                if kind == "catch":
+                    self.holder, self.held_since = nearest.id, self.t
         self.owner = nearest.id
 
     def _possession_kind(self, p: Player) -> str:
         """How `p` came to have the ball in play: a goalkeeper's catch in its own area, a
         tackle off an opponent, or a first touch."""
-        if self._saves(p):
+        if self._handles(p):
             return "catch"
         if self.owner is not None and self.player(self.owner).team != p.team:
             return "tackle"
@@ -578,6 +593,31 @@ class Match:
         self.owner = None
         self.recovering[p.id] = KICK_RECOVERY
 
+    def _handles(self, p: Player) -> bool:
+        """Whether goalkeeper `p` may take the ball in its hands: in its own penalty area,
+        unless a teammate deliberately kicked or threw it to it (docs/decisions.md, section 8)."""
+        return (self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team)
+                and self.passed != p.team)
+
+    def _second_touch(self, p: Player) -> None:
+        """The taker of a restart touched the ball again before anyone else: an indirect
+        free kick to the opponents."""
+        self._event("second_touch", 1 - p.team, p.id)
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, self.ball.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, self.ball.y))
+        self._restart("free_kick", 1 - p.team, x, y, indirect=True)
+
+    def _check_holding(self) -> None:
+        """A goalkeeper that has held the ball in its hands for more than HOLD_LIMIT concedes
+        a corner, on its side of the pitch."""
+        keeper = self.player(self.holder)
+        if self.owner != keeper.id or not self._ball_in_own_penalty_area(keeper.team):
+            self.holder = None  # released, or carried out of its area
+        elif self.t - self.held_since > HOLD_LIMIT:
+            self._event("held", 1 - keeper.team, keeper.id)
+            goal_x = -self.attack(keeper.team) * pitch.HALF_LENGTH
+            self._restart("corner", 1 - keeper.team, goal_x, math.copysign(pitch.HALF_WIDTH, self.ball.y))
+
     def _saves(self, p: Player) -> bool:
         """Whether `p` is the goalkeeper defending the goal the ball is at."""
         return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
@@ -593,7 +633,11 @@ class Match:
         return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
+        restart = self.phase if self.phase in RESTARTS else None
         self._touched(p, "throw" if self.phase == "throw_in" else command.touch)
+        self.passed = p.team  # a teammate goalkeeper may not handle it
+        if restart:
+            self.direct, self.restart_kicker = (restart, p.team), p.id
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
         loft = max(command.loft, 0.3) if self.phase == "throw_in" else command.loft
         speed = max(0.0, min(command.speed, cap))
@@ -620,6 +664,11 @@ class Match:
         """Record `p`'s touch of the ball, where the ball is as it touches it, for the page
         to show (docs/protocol.md). A kick straight after taking the ball, in the same step,
         replaces the touch it follows. It changes nothing in play."""
+        if p.id != self.restart_kicker:
+            self.restart_kicker = None
+        if p.id != self.holder:
+            self.holder = None
+        self.direct = self.passed = None
         b = self.ball
         touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
                  "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
@@ -770,7 +819,7 @@ class Match:
             end = 1 if x > 0 else -1
             attackers = 0 if self.attack(0) == end else 1
             # no goal straight from an indirect free kick
-            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT and self.indirect is None:
+            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT and self._counts(attackers):
                 self.score[attackers] += 1
                 self._event("goal", attackers, self._last_player(attackers))
                 self._kickoff(1 - attackers)
@@ -785,6 +834,14 @@ class Match:
             y = pitch.HALF_WIDTH if y > 0 else -pitch.HALF_WIDTH
             self._restart("throw_in", 1 - (self.last_touch or 0), x, y)
 
+    def _counts(self, attackers: int) -> bool:
+        """Whether a ball in the goal `attackers` attack is a goal: not straight from an
+        indirect free kick or a throw-in, nor into the kicking team's own goal straight from
+        any other restart (docs/decisions.md, section 8)."""
+        if self.indirect is not None:
+            return False
+        return self.direct is None or (self.direct[0] != "throw_in" and self.direct[1] == attackers)
+
     def _last_player(self, team: int) -> int | None:
         """The scorer, if it can be told: the player of `team` nearest the ball."""
         players = [p for p in self.players if p.team == team]
@@ -797,6 +854,7 @@ class Match:
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
         self.offside, self.indirect, self.penalty_live = set(), None, False
+        self.restart_kicker = self.direct = self.passed = self.holder = None
         self.restart_indirect, self.taker = indirect, taker
         self.stoppage += 1
         if kind == "free_kick":
