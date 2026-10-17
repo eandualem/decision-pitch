@@ -6,10 +6,10 @@ import time
 import httpx
 import pytest
 
-from decision_pitch import actions, players
+from decision_pitch import actions, bots, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
-from decision_pitch.bots import _taker
+from decision_pitch.bots import DRIBBLE_SPEED, _goal_line_spot, _home, _save_spot, _shape, _taker
 from decision_pitch.match import TEAMS, Hold, KickTo, Match, MoveTo, Team
 from decision_pitch.players import FAILURE_WAIT, Players
 from decision_pitch.server import main, run, seat
@@ -48,14 +48,14 @@ def in_play(match):
 def test_an_answer_is_checked_against_the_soccer_actions():
     def handle(request):
         criteria = json.loads(request.content)["questions"]["move"]["criteria"]
-        assert tuple(criteria) == tuple(actions.ACTIONS)
-        probabilities = {a: 0.3 if a == "pass" else 0.1 for a in criteria}
-        return httpx.Response(200, json={"answers": {"move": {"choice": "pass", "probabilities": probabilities}}})
+        assert tuple(criteria) == tuple(actions.options(match, match.player(7)))
+        probabilities = {a: (2 if a == "support" else 1) / (len(criteria) + 1) for a in criteria}
+        return httpx.Response(200, json={"answers": {"move": {"choice": "support", "probabilities": probabilities}}})
 
     model = apis.DecisionAPI("Test", "https://example.test/v1", "m", KEY, transport=httpx.MockTransport(handle))
     match = Match()
     answer = asyncio.run(model.decide(actions.question(match, match.player(7), "hold", None)))
-    assert answer.move == "pass"
+    assert answer.move == "support"
 
 
 def test_an_answer_with_the_runner_moves_is_unusable():
@@ -106,7 +106,87 @@ def test_a_pass_from_the_player_on_the_ball_is_a_kick():
     match.ball.place(p.x + 0.5, p.y)
     match.owner = p.id
     assert isinstance(actions.command(match, p, "pass"), KickTo)
-    assert isinstance(actions.command(match, p, "press"), Hold)  # it already has the ball
+
+
+def test_a_player_on_the_ball_keeps_playing_it_whatever_the_action():
+    match = in_play(Match())
+    p = match.player(7)
+    match.ball.place(p.x + 0.5, p.y)
+    match.owner = p.id
+    for action in ("press", "hold", "support", "mark"):
+        command = actions.command(match, p, action)
+        assert isinstance(command, MoveTo) and command.speed == DRIBBLE_SPEED  # not standing on it
+
+
+def test_without_the_ball_only_the_nearest_goes_for_it_to_kick_it():
+    match = in_play(Match())
+    nearest, other = match.player(7), match.player(8)
+    match.ball.place(nearest.x + 2, nearest.y)
+    for action in ("dribble", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear"):
+        assert actions.command(match, nearest, action) == bots.command(match, nearest)  # goes for it
+        assert actions.command(match, other, action) == _shape(match, other, _home(match, other))
+
+
+def test_a_model_goalkeeper_gets_across_to_a_shot_as_the_bot_does():
+    match = in_play(Match())
+    keeper = match.player(1)
+    match.ball.place(keeper.x + 20, keeper.y)
+    match.ball.vx, match.ball.vy = -22.0, -3.0
+    for action in ("hold", "support"):
+        assert actions.command(match, keeper, action) == MoveTo(keeper.x, _save_spot(match, keeper)[1], face=(-30.0, 0.0))
+
+
+def test_a_model_goalkeeper_presses_and_marks_from_its_goal():
+    match = in_play(Match())
+    keeper = match.player(1)
+    match.ball.place(0.0, 0.0)
+    for action in ("press", "mark"):
+        assert actions.command(match, keeper, action) == MoveTo(*_goal_line_spot(match, keeper), face=(0.0, 0.0))
+
+
+def test_a_presser_does_not_chase_its_own_teammate_on_the_ball():
+    match = in_play(Match())
+    carrier, presser = match.player(7), match.player(8)
+    match.ball.place(carrier.x + 0.5, carrier.y)
+    match.owner = carrier.id
+    assert actions.command(match, presser, "press") == actions.command(match, presser, "support")
+
+
+def test_a_shot_out_of_range_is_dribbled_into_range_first():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    goal_x = match.attack(p.team) * 52.5
+    for x, kind in ((goal_x * 0.2, MoveTo), (goal_x * 0.8, KickTo)):
+        p.x, p.y = x, 0.0
+        match.ball.place(x, 0.0)
+        assert isinstance(actions.command(match, p, "shoot"), kind)
+
+
+def test_a_shot_out_of_range_is_passed_when_pressed():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    p.x, p.y = match.attack(p.team) * 10.0, 0.0
+    match.ball.place(p.x, p.y)
+    presser = next(q for q in match.players if q.team != p.team and q.position != "GK")
+    presser.x, presser.y = p.x + 1.0, p.y
+    command = actions.command(match, p, "shoot")
+    assert isinstance(command, KickTo) and abs(command.x) != 52.5  # a pass, not a shot
+
+
+def test_a_shot_from_outside_the_area_is_carried_closer_unless_pressed():
+    match = in_play(Match())
+    p = match.player(7)
+    match.owner = p.id
+    p.x, p.y = match.attack(p.team) * (52.5 - 22.0), 0.0
+    match.ball.place(p.x, p.y)
+    for command in (actions.command(match, p, "shoot"), bots.command(match, p)):
+        assert isinstance(command, MoveTo) and command.speed == DRIBBLE_SPEED
+    presser = next(q for q in match.players if q.team != p.team and q.position != "GK")
+    presser.x, presser.y = p.x + 1.0, p.y
+    for command in (actions.command(match, p, "shoot"), bots.command(match, p)):
+        assert isinstance(command, KickTo) and abs(command.x) == 52.5  # a shot
 
 
 def test_at_a_restart_only_the_taker_goes_to_the_ball():
@@ -120,13 +200,11 @@ def test_at_a_restart_only_the_taker_goes_to_the_ball():
     assert isinstance(held, MoveTo) and (held.x, held.y) != (10.0, 34.0)
 
 
-def test_a_taker_that_never_takes_the_restart_is_taken_over():
+def test_a_taker_whose_action_does_not_kick_takes_the_restart_at_once():
     match = Match()
     match._restart("corner", 0, 52.5, 34.0)
     taker = _taker(match, 0)
-    assert isinstance(actions.command(match, taker, "hold"), MoveTo)
-    match.since_restart = actions.RESTART_WAIT
-    assert isinstance(actions.command(match, taker, "hold"), KickTo)
+    assert isinstance(actions.command(match, taker, "hold"), KickTo)  # it does not stall the match
 
 
 def test_a_kick_once_made_is_done():
@@ -141,6 +219,8 @@ def test_a_kick_once_made_is_done():
 
 def test_a_kick_answered_just_after_a_kick_is_still_carried_out():
     match = in_play(Match())
+    match.ball.place(match.player(7).x + 0.5, match.player(7).y)
+    match.owner = 7  # back on the ball
     squad = Players(match, {7: Fake()})
     seat_ = squad.seats[7]
     seat_.action = "clear"
@@ -210,7 +290,10 @@ def test_a_player_sent_off_is_no_longer_asked():
         match = in_play(Match())
         squad = Players(match, {7: Fake("hold")})
         match._card(match.player(7), red=True)
-        await asyncio.wait_for(squad.run(), 1.0)  # its loop has ended
+        running = asyncio.create_task(squad.run())
+        await asyncio.sleep(0.3)
+        assert squad._loops[7].done()  # its loop has ended
+        running.cancel()
 
     asyncio.run(go())
 

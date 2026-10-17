@@ -25,7 +25,11 @@ MAX_TRAVEL = 0.08  # m a ball may move in one substep: under half the ball-to-fr
 PLAYER_RADIUS = 0.4
 TOP_SPEED = 7.5  # m/s
 ACCELERATION = 4.0  # m/s²
+DIVE_ACCELERATION = 8.0  # m/s², a goalkeeper diving across its goal
 TURN_RATE = 9.0  # rad/s standing still; a running player turns more slowly
+SIDE_SPEED = 4.0  # m/s: the fastest a player moves keeping its facing well away from its way
+SIDE_TURN = 3.0  # m/s: a player turned to run turns back to face its point once this slow
+DIAGONAL = 0.5  # cosine: a way within 60° of the point faced is run without turning
 
 
 @dataclass
@@ -144,27 +148,69 @@ def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, floa
     return True
 
 
-def step_player(player: Player, tx: float, ty: float, speed: float, dt: float = STEP) -> None:
+def step_player(
+    player: Player,
+    tx: float,
+    ty: float,
+    speed: float,
+    dt: float = STEP,
+    dive: bool = False,
+    face: tuple[float, float] | None = None,
+) -> None:
     """Run towards (tx, ty) at up to `speed`, slowing to arrive, turning at a limited
-    rate and accelerating at a limited rate. A speed of 0 stops the player."""
+    rate and accelerating at a limited rate. A speed of 0 stops the player. A diving
+    goalkeeper goes straight at (tx, ty) without turning, still facing the play, and
+    accelerates faster. A player given a point to `face` keeps facing it while it moves
+    slowly or within 60° of it, side-stepping, backing off or moving diagonally, and
+    turns to run only for a faster move (docs/decisions.md, section 2)."""
+    accel = DIVE_ACCELERATION if dive else ACCELERATION
     dx, dy = tx - player.x, ty - player.y
     dist = math.hypot(dx, dy)
-    want = 0.0
+    want, way = 0.0, player.heading
+    look = None if face is None or dive else math.atan2(face[1] - player.y, face[0] - player.x)
     if speed > 0 and dist > 0.05:
-        want = min(speed, TOP_SPEED, math.sqrt(2 * ACCELERATION * dist))
-        turn = (math.atan2(dy, dx) - player.heading + math.pi) % (2 * math.pi) - math.pi
-        most = TURN_RATE / (1 + player.speed / 3) * dt
-        player.heading = (player.heading + max(-most, min(most, turn)) + math.pi) % (2 * math.pi) - math.pi
-        want *= max(0.0, math.cos(turn))  # slow down to turn
-    ax = want * math.cos(player.heading) - player.vx
-    ay = want * math.sin(player.heading) - player.vy
+        want = min(speed, TOP_SPEED, math.sqrt(2 * accel * dist))
+        travel = math.atan2(dy, dx)
+        if dive:
+            way = travel
+        elif look is not None and _keeps_facing(player, travel, look, want):
+            _turn(player, look, dt)
+            way = travel
+            off = math.cos(travel - player.heading)
+            want = min(want, SIDE_SPEED + (want - SIDE_SPEED) * max(0.0, off))
+        else:
+            turn = _turn(player, travel, dt)
+            way = player.heading
+            want *= max(0.0, math.cos(turn))  # slow down to turn
+    elif look is not None:
+        _turn(player, look, dt)  # standing, it turns to the point
+    ax = want * math.cos(way) - player.vx
+    ay = want * math.sin(way) - player.vy
     change = math.hypot(ax, ay)
-    if change > ACCELERATION * dt:
-        ax, ay = ax / change * ACCELERATION * dt, ay / change * ACCELERATION * dt
+    if change > accel * dt:
+        ax, ay = ax / change * accel * dt, ay / change * accel * dt
     player.vx += ax
     player.vy += ay
     player.x += player.vx * dt
     player.y += player.vy * dt
+
+
+def _turn(player: Player, angle: float, dt: float) -> float:
+    """Turn `player` towards `angle` at its turning rate; returns how far it had to turn."""
+    turn = (angle - player.heading + math.pi) % (2 * math.pi) - math.pi
+    most = TURN_RATE / (1 + player.speed / 3) * dt
+    player.heading = (player.heading + max(-most, min(most, turn)) + math.pi) % (2 * math.pi) - math.pi
+    return turn
+
+
+def _keeps_facing(player: Player, travel: float, look: float, want: float) -> bool:
+    """Whether a player moving along `travel` at `want` m/s keeps facing `look`: when the
+    two are within 60°, or it moves slowly enough. A player already turned to run keeps
+    running until it is slower still, so it does not turn back and forth."""
+    if math.cos(travel - look) > DIAGONAL:
+        return True
+    running = math.cos(travel - player.heading) > math.cos(look - player.heading)
+    return want <= (SIDE_TURN if running else SIDE_SPEED)
 
 
 def separate(players: list[Player]) -> None:

@@ -10,7 +10,7 @@ It is a sibling of [Decision Arena](https://github.com/eandualem/decision-arena)
 where the same models race in a runner game.
 
 **Status:** early. Decision models or built-in bots play a full match on the
-page; the managers are being built. See [docs/decisions.md](docs/decisions.md)
+page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
 for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
 
 ## Run it
@@ -35,11 +35,13 @@ uv run decision-pitch --headless --seed 1
 
 ## Choose the models
 
-Each team is played by the built-in bot unless you choose a decision model for
-it with `--home` and `--away`:
+Each team is played by the built-in bot unless you name the decision models its
+manager may choose from with `--home` and `--away`, separated by commas. One
+name puts the whole team on that model:
 
 ```bash
 uv run decision-pitch --home laya --away bot
+uv run decision-pitch --home laya,jev,bot --away clef
 ```
 
 | Name | Model | Needs |
@@ -58,6 +60,33 @@ With no keys, Laya and the bots play a full match. To use the others, copy
 `.env.example` to `.env` and fill in the keys you have; the names are Decision
 Arena's, so one `.env` serves both. At startup each model with a key is asked
 one question, and one that does not answer is named with the key to check.
+
+## Choose the managers
+
+Each team has a manager. Before kick-off it picks a model for every player
+from the ones it may choose, and during the match it is consulted every 15
+seconds with a feed of the game: it can give a player a one-line instruction,
+which the player reads with its state, and substitute a player, bringing on a
+substitute with a model of its choice at the next stoppage. Press O on the
+page to see every player's model, latest decision and answer time, and the
+managers' instructions and substitutions.
+
+The built-in manager (`builtin`, the default) needs nothing: it picks models
+by their typical answer times and substitutes by simple rules. A language
+model can manage instead, through Anthropic's API with `ANTHROPIC_API_KEY`
+or OpenAI's API with `OPENAI_API_KEY`:
+
+```bash
+uv run decision-pitch --home laya,bot --home-manager anthropic --away-manager builtin
+```
+
+`anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-5.4-mini`; name
+another model with `anthropic:MODEL` or `openai:MODEL`.
+`--assistants 1` or `2` gives each language-model manager assistant models
+(`claude-haiku-5-5` or `gpt-5.4-nano`) that send it a short note before each
+consultation. A
+language-model manager is asked about 25 times a team in a match of two
+three-minute halves, each time with about 1,000 tokens.
 A model that answers faster acts more often: each player asks its model again
 as soon as its last answer is applied, and keeps carrying out that answer
 while it waits.
@@ -66,14 +95,15 @@ while it waits.
 
 | Law | Status |
 |---|---|
-| Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players who are not in their own half after 5 s are moved there |
+| Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players out of place run back and the kick-off waits for them, for up to 10 s |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
 | Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
-| Goal kicks | Implemented. Opponents stay 9.15 m away; they are not yet kept out of the penalty area |
+| Goal kicks | Implemented. Opponents stay 9.15 m away and outside the penalty area until the kick is taken |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends. No added time |
 | Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
+| Saves and deflections | Implemented. A ball faster than 18 m/s bounces off any player it reaches; a goalkeeper at full stretch parries a shot instead of catching it, so a parry or block can give a corner |
 | Playing the ball twice at a restart | Not implemented yet |
 | Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick, corner or direct free kick) | Not implemented yet: such a goal currently counts. A goal straight from an indirect free kick does not count |
 | Fouls | Implemented for challenges on the player with the ball: running into it from behind, or without being able to reach the ball. Handball and fouls off the ball are not implemented yet |
@@ -81,7 +111,7 @@ while it waits.
 | Advantage | Not implemented: every foul stops play |
 | Offside | Implemented, judged when a teammate kicks the ball, with an indirect free kick. Interfering with an opponent without playing the ball is not judged yet |
 | Yellow and red cards | Implemented: a yellow for stopping a promising attack, a red for denying an obvious goal-scoring opportunity or a second yellow. A sent-off player leaves the match; a team with fewer than seven ends it |
-| Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage. The managers that ask for them are not built yet |
+| Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage, as the managers ask for them. A substitute takes the place and position of the player it replaces |
 
 ## Test it
 

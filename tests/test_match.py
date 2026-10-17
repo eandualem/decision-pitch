@@ -3,8 +3,8 @@ import math
 import pytest
 
 from decision_pitch import bots, pitch
-from decision_pitch.match import HALF_TIME, THROW_MAX, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import BALL_RADIUS, STEP
+from decision_pitch.match import HALF_TIME, KICKOFF_WAIT, OUT_OF_PLACE, THROW_MAX, Hold, KickTo, Match, MoveTo
+from decision_pitch.physics import BALL_RADIUS, STEP, TOP_SPEED
 
 
 def in_play(ball=(0.0, 0.0), velocity=(0.0, 0.0, 0.0), last_touch=0):
@@ -85,9 +85,20 @@ def test_opponents_keep_their_distance_at_a_corner():
     defender = next(p for p in m.players if p.team == 1)
     defender.x, defender.y = pitch.HALF_LENGTH - 2, pitch.HALF_WIDTH - 2
     m.command(defender.id, MoveTo(m.ball.x, m.ball.y))
-    run(m, 1)
+    run(m, 3)  # it runs back, then is held there
     assert math.hypot(defender.x - m.ball.x, defender.y - m.ball.y) >= 9.15 - 1e-9
     assert m.phase == "corner"
+
+
+def test_opponents_wait_outside_the_penalty_area_at_a_goal_kick():
+    m = in_play(ball=(pitch.HALF_LENGTH - 1, 15.0), velocity=(10.0, 0.0, 0.0), last_touch=0)
+    run(m, 0.5)
+    attacker = next(p for p in m.players if p.team == 0 and p.position == "FW")
+    attacker.x, attacker.y = pitch.HALF_LENGTH - 6, -10.0
+    m.command(attacker.id, MoveTo(attacker.x, attacker.y))
+    run(m, 3)  # it runs out, then is held there
+    assert attacker.x < pitch.HALF_LENGTH - pitch.PENALTY_DEPTH
+    assert m.phase == "goal_kick"
 
 
 def test_only_the_restarting_team_may_play_the_ball_and_its_kick_restarts_play():
@@ -143,13 +154,103 @@ def test_bots_play_a_whole_match():
     assert m.period == 2
 
 
+def test_a_pass_is_met_by_its_receiver_not_chased_by_its_passer():
+    m = in_play(ball=(0.5, 0.0), velocity=(12.0, 0.0, 0.0))
+    passer, receiver = m.player(7), m.player(8)
+    passer.x, passer.y = 0.0, 0.0
+    receiver.x, receiver.y = 15.0, 3.0
+    m.recovering[passer.id] = 0.25  # as the engine does once it kicks
+    assert bots.command(m, passer) == bots._shape(m, passer, bots._home(m, passer))
+    goes = bots.command(m, receiver)
+    assert isinstance(goes, MoveTo) and 5 < goes.x < 16 and abs(goes.y) < 0.5  # onto the ball's path
+
+
+def test_a_chaser_close_behind_a_rolling_ball_catches_it():
+    m = in_play(ball=(0.0, 0.0), velocity=(6.0, 0.0, 0.0))
+    chaser = m.player(9)
+    chaser.x, chaser.y, chaser.vx = -2.0, 0.5, 4.0  # 2 m behind, running after it
+    for _ in range(round(1.6 / STEP)):
+        bots.play(m)
+        m.step()
+    assert m.owner == chaser.id  # not alongside it until the ball slows down
+
+
+def test_the_team_shape_moves_up_with_the_ball_but_not_into_its_own_six_yard_box():
+    m = in_play(ball=(20.0, 0.0))
+    m.owner = 10  # a home forward has the ball 20 m into the opponents' half
+    midfielder, defender = m.player(7), m.player(3)
+    assert bots._home(m, midfielder, attacking=True)[0] > 15  # close behind the ball, not 17 m back
+    m.ball.place(-40.0, 0.0)
+    m.owner = 20  # an away forward near the home area
+    assert bots._home(m, defender)[0] == -pitch.HALF_LENGTH + bots.SHAPE_DEEPEST
+
+
+def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():
+    m = in_play(ball=(40.5, 0.0))
+    m.owner = 10  # a home forward has the ball in the opponents' half
+    keeper = m.player(1)
+    assert keeper.position == "GK"
+    assert bots.command(m, keeper) == bots._shape(m, keeper, bots._goal_line_spot(m, keeper))
+    m.phase, m.restart_team = "throw_in", 0
+    assert bots.command(m, keeper) == bots._shape(m, keeper, bots._goal_line_spot(m, keeper))
+
+
+def test_the_goalkeeper_gets_across_to_a_shot_but_lets_a_wide_one_go():
+    m = in_play(ball=(-30.0, 0.0), velocity=(-22.0, -3.0, 0.0))  # 3 m off centre at the line
+    keeper = m.player(1)
+    keeper.x, keeper.y = -51.0, 0.0
+    goes = bots.command(m, keeper)
+    assert goes.x == -51.0 and goes.y == pytest.approx(-3.0 * 21 / 22)
+    m.ball.vy = -6.0  # 6 m off centre at the line: wide
+    assert bots.command(m, keeper) == MoveTo(*bots._goal_line_spot(m, keeper), face=(m.ball.x, m.ball.y))
+
+
+@pytest.mark.parametrize("dives", [True, False])
+def test_a_goalkeeper_dives_to_keep_out_a_shot_it_could_not_reach_running(dives, monkeypatch):
+    m = in_play(ball=(-34.5, 0.0), velocity=(-23.4, 3.9, 0.0), last_touch=1)  # 18 m out, at the corner
+    keeper = m.player(1)
+    keeper.x, keeper.y, keeper.heading = -51.0, 0.0, 0.0
+    if not dives:
+        monkeypatch.setattr(Match, "_dives", lambda self, p: False)
+    events = []
+    for _ in range(round(1.5 / STEP)):
+        m.command(keeper.id, bots.command(m, keeper))
+        m.step()
+        events += [e["kind"] for e in m.drain_events()]
+    assert ("goal" in events) is not dives
+
+
+def test_the_player_on_the_ball_passes_only_when_an_opponent_is_close():
+    m = in_play(ball=(0.5, 0.0))
+    carrier, opponent = m.player(7), m.player(18)
+    carrier.x, carrier.y = 0.0, 0.0
+    m.owner = carrier.id
+    opponent.x, opponent.y = 3.0, 2.0  # 3.6 m away: it keeps dribbling
+    command = bots.command(m, carrier)
+    assert isinstance(command, MoveTo) and command.speed == bots.DRIBBLE_SPEED
+    opponent.x, opponent.y = 2.0, 1.0
+    assert isinstance(bots.command(m, carrier), KickTo)
+
+
+def test_a_pass_is_aimed_where_its_receiver_is_running_to():
+    m = in_play(ball=(0.5, 0.0))
+    carrier, receiver, opponent = m.player(7), m.player(8), m.player(18)
+    carrier.x, carrier.y = 0.0, 0.0
+    m.owner = carrier.id
+    opponent.x, opponent.y = 2.0, 1.0  # pressed: it passes
+    receiver.x, receiver.y, receiver.vx, receiver.vy = 15.0, 5.0, 0.0, 6.0
+    kick = bots.command(m, carrier)
+    travel = math.hypot(15.0, 5.0) / kick.speed
+    assert (kick.x, kick.y) == pytest.approx((15.0, 5.0 + 6.0 * travel))
+
+
 def test_a_snapshot_lists_every_player_and_the_ball():
     m = Match()
     m.command(1, Hold())
     snapshot = m.snapshot()
     assert snapshot["type"] == "snapshot" and snapshot["phase"] == "kickoff"
     assert len(snapshot["players"]) == 22
-    assert set(snapshot["ball"]) == {"x", "y", "z", "owner"}
+    assert set(snapshot["ball"]) == {"x", "y", "z", "owner", "touches"}
     assert snapshot["players"][0]["action"] == "hold"
 
 
@@ -175,16 +276,40 @@ def test_a_player_cannot_carry_the_ball_through_a_post():
     assert m.phase == "play" and m.ball.x < pitch.HALF_LENGTH
 
 
-def test_an_opponent_on_the_centre_spot_at_kick_off_is_moved_into_its_own_half():
+def test_an_opponent_on_the_centre_spot_at_kick_off_runs_into_its_own_half():
     m = Match()
     for p in m.players:  # nobody nearby to nudge the opponent off the spot
         if p.team == 0 and abs(p.x) < 2:
             p.x = -20.0
     opponent = next(p for p in m.players if p.team == 1)
     opponent.x, opponent.y = 0.0, 0.0
-    m.step()
+    run(m, 3)
     assert opponent.x * m.attack(1) <= 0
     assert math.hypot(opponent.x, opponent.y) >= pitch.CENTRE_RADIUS - 1e-9
+
+
+def test_players_run_back_for_a_kick_off_after_a_goal_and_it_waits_for_them():
+    m = Match()
+    m.phase, m.restart_team = "play", None
+    scorer = m.player(10)
+    scorer.x, scorer.y = pitch.HALF_LENGTH - 5, 0.0  # in the opponents' penalty area
+    m.ball.place(pitch.HALF_LENGTH, 0.0)
+    m.ball.vx = 10.0
+    m.step()
+    assert m.score == [1, 0]
+    assert m.phase == "kickoff" and m.restart_team == 1
+    for p in m.players:  # everyone else is in place, and the kick-off is ready to be taken
+        if p is not scorer:
+            p.x = -abs(p.x) if p.team == 0 else abs(p.x)
+    taker = next(p for p in m.players if p.team == 1 and p.position == "FW")
+    taker.x, taker.y = 0.6, 0.0
+    m.command(taker.id, KickTo(20.0, 0.0, 10.0))
+    m.command(scorer.id, Hold())
+    while m.phase == "kickoff":
+        x = scorer.x
+        m.step()
+        assert abs(scorer.x - x) <= TOP_SPEED * STEP + OUT_OF_PLACE  # no jump
+    assert scorer.x <= 0 and m.since_restart < KICKOFF_WAIT
 
 
 def test_a_goalkeeper_has_no_extra_reach_for_a_ball_outside_its_area():

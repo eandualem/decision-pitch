@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
 
 from decision_pitch import pitch
@@ -35,6 +36,7 @@ class MoveTo:
     x: float
     y: float
     speed: float = TOP_SPEED
+    face: tuple[float, float] | None = None  # a point to keep facing, such as the ball
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class KickTo:
     y: float
     speed: float  # m/s off the boot
     loft: float = 0.0  # radians above the ground
+    touch: str = "kick"  # how the page is told of it: "kick", or "knock" for a sprint's knock ahead
 
 
 Command = Hold | MoveTo | KickTo
@@ -51,12 +54,19 @@ CONTROL = 0.75  # m from a player's centre to the ball's within which it plays t
 CONTROL_HEIGHT = 0.9  # m, the highest ball a player can play
 KEEPER_CONTROL = 1.3  # a goalkeeper's reach in its own penalty area
 KEEPER_HEIGHT = 2.6
+CONTROL_SPEED = 18.0  # m/s, relative to a player, above which a loose ball bounces off it
+PARRY_SPEED = 10.0  # m/s above which a goalkeeper at full stretch parries a ball, not catches it
+DIVE_MARGIN = 0.5  # m outside a post within which a ball heading for the goal makes its keeper dive
+DEFLECT_PUSH = 0.4  # share of its speed a deflected ball leaves outwards from the player with
+DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected ball keeps
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
 KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
 KICK_RECOVERY = 0.25  # s after a kick before the kicker can play the ball again
 KICK_ERROR = 0.002  # radians of aim error per m/s of kick speed
-KICKOFF_WAIT = 5.0  # s players have to take their places before they are placed
+KICKOFF_WAIT = 10.0  # s players have to take their places for a kick-off before they are placed
+RETREAT_WAIT = 5.0  # s opponents have to retreat at any other restart before they are placed
+OUT_OF_PLACE = 0.2  # m out of place beyond which a player runs back instead of being put right
 SET_PIECE_WAIT = 1.5  # s before a free kick or penalty can be taken
 HALF_TIME = 3.0  # s
 RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick": 9.15, "throw_in": 2.0,
@@ -70,6 +80,7 @@ GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-s
 SUBSTITUTES = 5  # substitutions a team may make
 WINDOWS = 3  # stoppages it may make them in, half time not counted
 FEWEST = 7  # players a team needs to play on
+RECENT_TOUCHES = 0.1  # s of touches each snapshot repeats, so none falls between two of them
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -142,6 +153,8 @@ class Match:
         self.window_at: list[int | None] = [None, None]  # the stoppage of each team's latest
         self.stoppage = 0  # counts the restarts
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
+        self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
+        self.diving: set[int] = set()  # goalkeepers diving across their goal this step
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -183,19 +196,28 @@ class Match:
             "clock": self.clock(),
             "phase": self.phase,
             "score": list(self.score),
-            "ball": {"x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3), "owner": self.owner},
-            "players": [
-                {
-                    "id": p.id,
-                    "x": round(p.x, 3),
-                    "y": round(p.y, 3),
-                    "heading": round(p.heading, 3),
-                    "speed": round(p.speed, 2),
-                    "action": type(self.commands[p.id]).__name__.lower().removesuffix("to"),
-                }
-                for p in self.players
-            ],
+            "ball": {
+                "x": round(b.x, 3),
+                "y": round(b.y, 3),
+                "z": round(b.z, 3),
+                "owner": self.owner,
+                "touches": [dict(touch) for touch in self.touches if touch["t"] >= self.t - RECENT_TOUCHES],
+            },
+            "players": [self._player_snapshot(p) for p in self.players],
         }
+
+    def _player_snapshot(self, p: Player) -> dict:
+        entry = {
+            "id": p.id,
+            "x": round(p.x, 3),
+            "y": round(p.y, 3),
+            "heading": round(p.heading, 3),
+            "speed": round(p.speed, 2),
+            "action": type(self.commands[p.id]).__name__.lower().removesuffix("to"),
+        }
+        if p.id in self.diving:
+            entry["dive"] = True
+        return entry
 
     def drain_events(self) -> list[dict]:
         events, self.events = self.events, []
@@ -226,6 +248,7 @@ class Match:
         if self.phase == "full_time":
             return
         self.t += STEP
+        self.diving.clear()
         if self.phase == "half_time":
             self._substitute()
             self.since_restart += STEP
@@ -281,8 +304,14 @@ class Match:
 
     def _move(self, p: Player) -> None:
         command = self.commands[p.id]
-        if isinstance(command, MoveTo):
-            step_player(p, command.x, command.y, command.speed)
+        if self._out_of_place(p) > OUT_OF_PLACE:
+            # the laws ask it to retreat, whatever it was told
+            step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
+        elif isinstance(command, MoveTo):
+            dive = self._dives(p)
+            if dive:
+                self.diving.add(p.id)
+            step_player(p, command.x, command.y, command.speed, dive=dive, face=command.face)
         elif isinstance(command, KickTo) and self.owner != p.id:
             # run at the ball from behind, so the kick goes the right way
             angle = math.atan2(command.y - self.ball.y, command.x - self.ball.x)
@@ -290,6 +319,18 @@ class Match:
             step_player(p, tx, ty, TOP_SPEED)
         else:
             step_player(p, p.x, p.y, 0.0)
+
+    def _dives(self, p: Player) -> bool:
+        """Whether `p` is a goalkeeper in its own area with a loose ball heading into its
+        goal: it dives across rather than running (docs/decisions.md, section 2)."""
+        if self.phase != "play" or p.position != "GK" or self.owner is not None:
+            return False
+        if not self._in_own_penalty_area(p.x, p.y, p.team):
+            return False
+        b, goal_x = self.ball, -self.attack(p.team) * pitch.HALF_LENGTH
+        if (goal_x - b.x) * b.vx <= 0:
+            return False  # not moving towards the goal
+        return abs(b.y + b.vy * (goal_x - b.x) / b.vx) <= pitch.GOAL_WIDTH / 2 + DIVE_MARGIN
 
     # -- possession and kicks ---------------------------------------------------------------
 
@@ -317,30 +358,86 @@ class Match:
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
-            if self.penalty_live and self.elapsed >= self.half_length:
-                self._end_half()  # this touch completes the penalty the half waited for
+            deflects = self.owner is None and self._deflects(nearest)
+            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and self._saves(nearest)):
+                self._end_half()  # this touch completes the penalty the half waited for; a save does not
                 return
             if nearest.id in self.offside:
                 self._offside(nearest)
+                return
+            if deflects:
+                self._deflect(nearest)
                 return
             self.offside = set()  # someone onside played it
             self.penalty_live = False
             if nearest.id != self.indirect:
                 self.indirect = None
             self.last_touch = nearest.team
+            if nearest.id != self.owner:
+                self._touched(nearest, self._possession_kind(nearest))
         self.owner = nearest.id
 
+    def _possession_kind(self, p: Player) -> str:
+        """How `p` came to have the ball in play: a goalkeeper's catch in its own area, a
+        tackle off an opponent, or a first touch."""
+        if self._saves(p):
+            return "catch"
+        if self.owner is not None and self.player(self.owner).team != p.team:
+            return "tackle"
+        return "control"
+
+    def _deflects(self, p: Player) -> bool:
+        """Whether the loose ball comes at `p` too fast to control, or reaches a goalkeeper
+        only at full stretch (docs/decisions.md, section 8)."""
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
+        if speed > CONTROL_SPEED:
+            return True
+        if p.position != "GK" or speed <= PARRY_SPEED or vx == vy == 0:
+            return False
+        # its path passes beyond an outfield player's reach
+        return abs((b.x - p.x) * vy - (b.y - p.y) * vx) / math.hypot(vx, vy) > CONTROL
+
+    def _deflect(self, p: Player) -> None:
+        """The ball bounces off `p`: outwards from where it touched, keeping a little of its
+        speed along the body. It counts as `p` playing it, except for the opponents' offside."""
+        self._touched(p, "save" if self._saves(p) else "deflect")
+        b = self.ball
+        vx, vy = b.vx - p.vx, b.vy - p.vy
+        speed = math.sqrt(vx * vx + vy * vy + b.vz * b.vz)
+        dx, dy = b.x - p.x, b.y - p.y
+        dist = math.hypot(dx, dy)
+        nx, ny = (dx / dist, dy / dist) if dist > 0 else (-vx / speed, -vy / speed)
+        along = vx * nx + vy * ny
+        b.vx = p.vx + nx * speed * DEFLECT_PUSH + (vx - along * nx) * DEFLECT_KEEP
+        b.vy = p.vy + ny * speed * DEFLECT_PUSH + (vy - along * ny) * DEFLECT_KEEP
+        b.vz *= DEFLECT_KEEP
+        self.offside = self._offside_positions(p) | {q for q in self.offside if self.player(q).team != p.team}
+        if not self._saves(p):
+            self.penalty_live = False  # a goalkeeper's save does not complete a penalty
+        if p.id != self.indirect:
+            self.indirect = None
+        self.last_touch = p.team
+        self.owner = None
+        self.recovering[p.id] = KICK_RECOVERY
+
+    def _saves(self, p: Player) -> bool:
+        """Whether `p` is the goalkeeper defending the goal the ball is at."""
+        return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
+
     def _may_kick(self, p: Player) -> bool:
-        if self.phase in ("free_kick", "penalty"):
-            return self.since_restart >= SET_PIECE_WAIT
-        if self.phase != "kickoff":
+        if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
+            return False
+        if self.phase == "play":
             return True
-        if self.since_restart >= KICKOFF_WAIT:
-            self._place_for_kickoff()
+        if self.since_restart >= (KICKOFF_WAIT if self.phase == "kickoff" else RETREAT_WAIT):
+            self._keep_distance(everyone=True)  # anyone still out of place is placed
             return True
-        return self._kickoff_ready()
+        return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
+        self._touched(p, "throw" if self.phase == "throw_in" else command.touch)
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
         loft = max(command.loft, 0.3) if self.phase == "throw_in" else command.loft
         speed = max(0.0, min(command.speed, cap))
@@ -360,6 +457,17 @@ class Match:
         self.commands[p.id] = Hold()
         if self.phase != "play":
             self.phase, self.restart_team = "play", None
+
+    def _touched(self, p: Player, kind: str) -> None:
+        """Record `p`'s touch of the ball, where the ball is as it touches it, for the page
+        to show (docs/protocol.md). A kick straight after taking the ball, in the same step,
+        replaces the touch it follows. It changes nothing in play."""
+        b = self.ball
+        touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
+                 "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
+        if self.touches and (self.touches[-1]["t"], self.touches[-1]["player"]) == (touch["t"], p.id):
+            self.touches.pop()
+        self.touches.append(touch)
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:
         return self._in_own_penalty_area(self.ball.x, self.ball.y, team)
@@ -537,72 +645,81 @@ class Match:
         self._restart("kickoff", team, 0.0, 0.0)
         self.events.pop()  # a kick-off is not shown as an event
         if place_players:
-            self._place_for_kickoff(formation=True)
+            self._place_for_kickoff()
 
-    def _kickoff_ready(self) -> bool:
+    def _place_for_kickoff(self) -> None:
         for p in self.players:
             side = -self.attack(p.team)
-            if p.x * side < -0.5:
-                return False  # in the opponents' half
-            if p.team != self.restart_team and math.hypot(p.x, p.y) < pitch.CENTRE_RADIUS:
-                return False
-        return True
+            p.x, p.y = -side * p.home[0], -side * p.home[1]
+            p.vx = p.vy = 0.0
+            p.heading = 0.0 if side < 0 else math.pi
+            self.commands[p.id] = Hold()
+        self._keep_distance(everyone=True)
+        # the kicking team's most advanced player stands at the ball
+        team = [p for p in self.players if p.team == self.restart_team]
+        taker = max(team, key=lambda p: p.home[0])
+        side = -self.attack(taker.team)
+        taker.x, taker.y = side * 0.6, 0.0
 
-    def _place_for_kickoff(self, formation: bool = False) -> None:
+    def _keep_distance(self, everyone: bool = False) -> None:
+        """Put right the players only just out of place for the restart, or `everyone`;
+        the others are running back (see _move)."""
         for p in self.players:
-            side = -self.attack(p.team)
-            if formation:
-                p.x, p.y = -side * p.home[0], -side * p.home[1]
-                p.vx = p.vy = 0.0
-                p.heading = 0.0 if side < 0 else math.pi
-                self.commands[p.id] = Hold()
-            if p.x * side < 0:
-                p.x = 0.0
-        self._keep_distance()
-        if formation:  # the kicking team's most advanced player stands at the ball
-            team = [p for p in self.players if p.team == self.restart_team]
-            taker = max(team, key=lambda p: p.home[0])
-            side = -self.attack(taker.team)
-            taker.x, taker.y = side * 0.6, 0.0
+            if everyone or self._out_of_place(p) <= OUT_OF_PLACE:
+                p.x, p.y = self._allowed_spot(p)
 
-    def _keep_distance(self) -> None:
-        """Opponents of the restarting team keep their distance from the ball."""
+    def _allowed_spot(self, p: Player, margin: float = 0.0) -> tuple[float, float]:
+        """The nearest spot to `p` where the laws let it stand for this restart, `margin` m
+        clear of the line: in its own half at a kick-off, and as far from the ball as the
+        restart requires if it is an opponent of the restarting team; at a goal kick, also
+        outside the penalty area."""
         if self.phase == "penalty":
-            self._line_up_for_penalty()
-            return
-        distance = RESTART_DISTANCE[self.phase]
-        for p in self.players:
-            if p.team == self.restart_team:
-                continue
-            self._keep_away(p, distance)
+            return self._penalty_spot(p, margin)
+        x, y = p.x, p.y
+        if self.phase == "kickoff" and x * -self.attack(p.team) < 0:
+            x = -self.attack(p.team) * margin  # back over halfway
+        goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
+        if (self.phase == "goal_kick" and p.team != self.restart_team
+                and abs(x - goal) <= pitch.PENALTY_DEPTH and abs(y) <= pitch.PENALTY_HALF_WIDTH):
+            x = goal - math.copysign(pitch.PENALTY_DEPTH + 0.01 + margin, goal)  # just outside
+        if p.team != self.restart_team and self.phase in RESTART_DISTANCE:
+            x, y = self._away(p, x, y, RESTART_DISTANCE[self.phase] + margin)
+        return x, y
 
-    def _keep_away(self, p: Player, distance: float) -> None:
-        dx, dy = p.x - self.ball.x, p.y - self.ball.y
+    def _out_of_place(self, p: Player) -> float:
+        """How far `p` is from where the laws let it stand for this restart; 0 in play."""
+        if self.phase not in RESTARTS:
+            return 0.0
+        x, y = self._allowed_spot(p)
+        return math.hypot(x - p.x, y - p.y)
+
+    def _away(self, p: Player, x: float, y: float, distance: float) -> tuple[float, float]:
+        """(x, y), moved out to `distance` from the ball if it is nearer."""
+        dx, dy = x - self.ball.x, y - self.ball.y
         dist = math.hypot(dx, dy)
-        if dist < distance:
-            if dist == 0:
-                dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
-            p.x = self.ball.x + dx / dist * distance
-            p.y = self.ball.y + dy / dist * distance
+        if dist >= distance:
+            return x, y
+        if dist == 0:
+            dx, dy, dist = -self.attack(p.team), 0.0, 1.0  # towards its own half
+        return self.ball.x + dx / dist * distance, self.ball.y + dy / dist * distance
 
-    def _line_up_for_penalty(self) -> None:
-        """The defending goalkeeper on its goal line; everyone else but the taker outside the
-        penalty area and arc, and behind the penalty mark."""
+    def _penalty_spot(self, p: Player, margin: float) -> tuple[float, float]:
+        """Where `p` may stand for a penalty: the defending goalkeeper on its goal line between
+        the posts; everyone else but the taker outside the penalty area and arc, and behind
+        the penalty mark."""
+        if p.id == self.taker:
+            return p.x, p.y
         goal = math.copysign(pitch.HALF_LENGTH, self.ball.x)
         out = -math.copysign(1.0, goal)  # from the goal line towards halfway
-        for p in self.players:
-            if p.id == self.taker:
-                continue
-            if p.team != self.restart_team and p.position == "GK":
-                p.x = goal + out * PLAYER_RADIUS
-                p.y = max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, p.y))
-                p.vx = p.vy = 0.0
-                continue
-            if abs(p.x - goal) <= pitch.PENALTY_DEPTH and abs(p.y) <= pitch.PENALTY_HALF_WIDTH:
-                p.x = goal + out * (pitch.PENALTY_DEPTH + 1.0)
-            if (p.x - self.ball.x) * out < 0:
-                p.x = self.ball.x  # level with the mark at the nearest
-            self._keep_away(p, RESTART_DISTANCE["penalty"])
+        if p.team != self.restart_team and p.position == "GK":
+            return goal + out * PLAYER_RADIUS, max(-pitch.GOAL_WIDTH / 2, min(pitch.GOAL_WIDTH / 2, p.y))
+        x, y = p.x, p.y
+        if abs(x - goal) <= pitch.PENALTY_DEPTH and abs(y) <= pitch.PENALTY_HALF_WIDTH:
+            x = goal + out * (pitch.PENALTY_DEPTH + 0.01)  # just outside, so a step in is put right
+        if (x - self.ball.x) * out < 0:
+            x = self.ball.x  # level with the mark at the nearest
+        x += out * margin
+        return self._away(p, x, y, RESTART_DISTANCE["penalty"] + margin)
 
     def _end_half(self) -> None:
         self.owner = None

@@ -2,8 +2,10 @@
 
 A model answers with one of ACTIONS. The player keeps carrying the action out, turned
 into an engine command on every step by the rules below, until the model's next answer
-arrives. The rules are the same for both teams, and the state is told from the player's
-own side of the pitch, so a team attacking the other way sees the same text."""
+arrives. Each action is carried out as the moment allows, so a player whose model gives
+the same answer again and again still plays sensible football. The rules are the same for
+both teams, and the state is told from the player's own side of the pitch, so a team
+attacking the other way sees the same text."""
 
 from __future__ import annotations
 
@@ -12,85 +14,367 @@ import math
 from decision_pitch import pitch
 from decision_pitch.arena.models import Question
 from decision_pitch.bots import (
+    CLOSE_RANGE,
     DRIBBLE_SPEED,
-    JOG,
+    FREE_KICK_RANGE,
     PRESSURE,
+    SHOOTING_RANGE,
+    WALK,
+    _chase,
+    _dribble_spot,
     _goal_line_spot,
     _home,
+    _on_the_ball,
     _pass_or_clear,
+    _pass_to,
+    _press_spot,
+    _pressed,
+    _save_spot,
+    _shape,
     _space,
     _take_restart,
     _taker,
     _wall_spot,
 )
+from decision_pitch.bots import command as bot_command
 from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import Player
+from decision_pitch.physics import DIAGONAL, ROLLING, Player
 
 ACTIONS = {
+    "dribble": "run with the ball into space towards their goal",
+    "sprint": "knock the ball ahead and run on at full speed; an opponent can take it between touches",
+    "take_on": "run at the nearest defender and cut past it; it can win the ball",
+    "shield": "keep the ball with your back to the nearest opponent until a teammate is free; slow",
+    "pass": "pass to your best-placed open teammate, or clear if none is open",
+    "through_ball": "pass into the space ahead of a teammate further forward; it can be cut out",
+    "cross": "lift the ball into the penalty area from wide",
+    "shoot": "shoot at their goal",
+    "clear": "kick the ball long upfield",
     "press": "run at the ball to win it or collect it",
+    "tackle": "go straight in to win the ball now; it can be a foul",
     "hold": "keep your place in the team's shape",
     "support": "move into space ahead to offer a pass",
     "mark": "stay goal-side of the nearest opponent",
-    "dribble": "run with the ball towards their goal",
-    "pass": "pass to your best-placed open teammate, or clear if none is open",
-    "shoot": "shoot at their goal",
-    "clear": "kick the ball long upfield",
+    "run_behind": "sprint beyond their last defender for a through ball; you can be offside",
 }
-KICKS = ("pass", "shoot", "clear")  # spent once the ball is kicked
+ON_THE_BALL = ("dribble", "sprint", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear")
+OFF_THE_BALL = ("press", "tackle", "hold", "support", "mark", "run_behind")
+AT_A_RESTART = ("hold", "support", "mark", "run_behind")  # for the players not taking it
+KEEPER_ON_THE_BALL = ("pass", "through_ball", "clear")
+KEEPER_OFF_THE_BALL = ("hold", "press")
+KICKS = ("pass", "through_ball", "cross", "shoot", "clear")  # spent once the ball is kicked
 INSTRUCTIONS = (
     "Choose this soccer player's next action. It is carried out until your next answer "
-    "arrives, and the match does not wait for you. Dribble, pass, shoot and clear need the "
-    "ball: without it, you run to the ball first."
+    "arrives, and the match does not wait for you."
 )
-RESTART_WAIT = 8.0  # s a restart may wait for its taker before the taker's bot takes it
 NEARBY = 3  # teammates and opponents described, nearest first
 POSITIONS = {"GK": "goalkeeper", "DF": "defender", "MF": "midfielder", "FW": "forward"}
 RESTART_NAMES = {"kickoff": "kick off", "throw_in": "take a throw-in", "goal_kick": "take a goal kick",
                  "corner": "take a corner", "free_kick": "take a free kick",
                  "penalty": "take a penalty"}  # fmt: skip
+SHOT_ASKED = 30.0  # m from goal within which `shoot` is asked
+CROSS_WIDE = 14.0  # m from the centre line at which the ball is wide enough to cross
+CROSS_DEPTH = 36.0  # m from their goal line within which it is
+CROSS_LOFT = 0.35  # radians
+CROSS_SHORT = 2.0  # m short of its target that a cross lands, so it bounces up to the target low
+TAKE_ON_RANGE = 10.0  # m: an opponent ahead this close can be taken on
+TAKE_ON_CUT = 5.0  # m from it at which the dribbler cuts past
+TAKE_ON_WIDE = 2.5  # m to its side that the dribbler passes it
+TAKE_ON_BEYOND = 4.0  # m beyond it that the dribbler aims
+SHIELD_RANGE = 5.0  # m: an opponent this close can be shielded from
+LAY_OFF = 12.0  # m within which a shielding player lays the ball off to an open teammate
+KNOCK = 3.5  # m/s faster than the player that a sprint knocks the ball ahead
+SPRINT_THROUGH = 8.0  # m beyond a ball running away that a sprinting player aims, so it keeps its speed
+THROUGH_RANGE = 40.0  # m: the furthest teammate a through ball is played to
+THROUGH_LEAD = 6.0  # m ahead of the teammate's run that a through ball goes into space
+THROUGH_ROOM = 2.0  # m of room from every opponent that its spot needs
+RUN_BEYOND = 6.0  # m beyond the second-last defender that a run in behind aims
+RUN_LANE = 25.0  # m from the centre line, at most, that a run in behind keeps to
+RUN_REACH = 20.0  # m behind the offside line within which a player can run in behind
+RUN_ON = 4.0  # m/s: a runner beyond the line still going faster than this carries on
+
+
+def options(m: Match, p: Player) -> dict[str, str]:
+    """The actions `p`'s model is asked to choose from: those that apply to it now
+    (docs/decisions.md, section 4)."""
+    keeper = p.position == "GK"
+    if m.phase in RESTARTS and m.restart_team == p.team and p.id == _taker(m, p.team).id:
+        names = [a for a in KICKS if _applies(m, p, a)]
+    elif keeper and m.owner == p.id and m.phase == "play":
+        names = [a for a in KEEPER_ON_THE_BALL if _applies(m, p, a)]
+    elif keeper:
+        names = list(KEEPER_OFF_THE_BALL)
+    elif m.phase in RESTARTS:
+        names = [a for a in AT_A_RESTART if _applies(m, p, a)]
+    elif m.owner == p.id:
+        names = [a for a in ON_THE_BALL if _applies(m, p, a)]
+    else:
+        names = [a for a in OFF_THE_BALL if _applies(m, p, a)]
+    return {a: ACTIONS[a] for a in names}
+
+
+def _applies(m: Match, p: Player, action: str) -> bool:
+    """Whether a kick or a move on the ball can be made from here."""
+    goal = math.hypot(m.attack(p.team) * pitch.HALF_LENGTH - m.ball.x, m.ball.y)
+    if action == "shoot":
+        if m.phase == "penalty":
+            return True
+        if m.phase == "free_kick":
+            return not m.restart_indirect and goal < FREE_KICK_RANGE
+        return m.phase == "play" and goal < SHOT_ASKED
+    if action == "cross":
+        return _wide(m, p)
+    if action == "through_ball":
+        return _through(m, p) is not None
+    if action == "take_on":
+        return _ahead(m, p) is not None
+    if action == "shield":
+        return _space(m, p) < SHIELD_RANGE
+    if action == "run_behind":
+        return p.position != "GK" and _offside_line(m, p.team) - p.x * m.attack(p.team) <= RUN_REACH
+    return True
 
 
 def command(m: Match, p: Player, action: str) -> Command:
     """The engine command that carries out `action` for `p` now."""
     if m.phase == "half_time":
         return Hold()
+    direction = m.attack(p.team)
+    goal = math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y)
+    if action == "shoot" and goal >= SHOOTING_RANGE:
+        if m.phase == "play" and m.owner == p.id:
+            return _on_the_ball(m, p)  # into range first, passing when pressed
+        action = "dribble"
+    if action == "shoot" and m.phase == "play" and m.owner == p.id and goal >= CLOSE_RANGE and not _pressed(m, p):
+        return _on_the_ball(m, p)  # unpressed, it carries the ball closer first
     if m.phase in RESTARTS:
         taker = m.restart_team == p.team and p.id == _taker(m, p.team).id
-        if taker and m.since_restart >= RESTART_WAIT:
-            return _take_restart(m, p)  # so a model that never takes it cannot stall the match
-        if taker and action in ("press", "dribble"):
-            action = "pass"  # the ball is not carried at a restart
-        elif not taker and (wall := _wall_spot(m, p)):
-            return MoveTo(*wall, JOG)  # the wall lines up whatever the action
-        elif not taker and action in ("press", "dribble", *KICKS):
+        if taker and action not in KICKS:
+            return _take_restart(m, p)  # the ball is not carried, and nobody else can play it
+        if not taker and (wall := _wall_spot(m, p)):
+            return _shape(m, p, wall)  # the wall lines up whatever the action
+        elif not taker and action not in AT_A_RESTART:
             action = "hold"  # only the taker goes to the ball
-    direction = m.attack(p.team)
+    on_the_ball = m.owner == p.id
+    if on_the_ball and action in OFF_THE_BALL:
+        return _on_the_ball(m, p)  # it has the ball: it keeps playing it
+    if p.position == "GK" and action in ("press", "tackle", "mark", "run_behind"):
+        return bot_command(m, p)  # a keeper keeps its goal, coming for the ball as the bot does
+    if m.phase == "play" and not on_the_ball and action in ON_THE_BALL and action != "sprint":
+        return bot_command(m, p)  # the nearest goes for the ball; the others keep their places
+    if m.phase == "play" and m.owner is None and action in AT_A_RESTART and _chase(m, p.team)[0] is p:
+        return bot_command(m, p)  # keeping its place, it still collects a loose ball it reaches first
+    teammate = not on_the_ball and m.owner is not None and m.player(m.owner).team == p.team
+    if action in ("press", "sprint", "tackle") and teammate:
+        action = "support"  # a teammate has it
     if action == "hold":
         if p.position == "GK":
-            return MoveTo(*_goal_line_spot(m, p))
-        return MoveTo(*_home(m, p), JOG)
+            return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)), face=(m.ball.x, m.ball.y))
+        return _shape(m, p, _home(m, p))
     if action == "support":
         if p.position == "GK":
-            return MoveTo(*_goal_line_spot(m, p))
-        return MoveTo(*_home(m, p, attacking=True), JOG)
+            return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)), face=(m.ball.x, m.ball.y))
+        return _shape(m, p, _home(m, p, attacking=True))
     if action == "mark":
         opponents = [q for q in m.players if q.team != p.team and q.position != "GK"]
         q = min(opponents, key=lambda q: math.hypot(q.x - p.x, q.y - p.y))
         goal_x = -direction * pitch.HALF_LENGTH
         dist = math.hypot(goal_x - q.x, q.y) or 1.0
-        return MoveTo(q.x + (goal_x - q.x) / dist * 2, q.y - q.y / dist * 2)
-    if action == "dribble" and m.owner == p.id:
-        return MoveTo(direction * pitch.HALF_LENGTH, p.y * 0.8, DRIBBLE_SPEED)
+        return MoveTo(q.x + (goal_x - q.x) / dist * 2, q.y - q.y / dist * 2, face=(m.ball.x, m.ball.y))
+    if action == "run_behind":
+        return _run_behind(m, p)
+    if action == "dribble":
+        return MoveTo(*_dribble_spot(m, p), DRIBBLE_SPEED)
+    if action == "sprint" and on_the_ball:
+        x, y = _dribble_spot(m, p)
+        return KickTo(x, y, p.speed + KNOCK, touch="knock")
+    if action == "take_on":
+        return _take_on(m, p)
+    if action == "shield":
+        return _shield(m, p)
     if action == "pass":
         return _pass_or_clear(m, p)
+    if action == "through_ball":
+        spot = _through(m, p)
+        return _pass_or_clear(m, p) if spot is None else KickTo(*spot, _ground_speed(m, spot))
+    if action == "cross":
+        return _cross(m, p)
     if action == "shoot":
         return KickTo(direction * pitch.HALF_LENGTH, _far_post(m, p), 24.0, 0.06)
     if action == "clear":
         return KickTo(p.x + direction * 40, p.y * 0.5, 26.0, 0.5)
-    # press, and dribble without the ball
-    if m.owner == p.id:
-        return Hold()
-    return MoveTo(m.ball.x + m.ball.vx * 0.3, m.ball.y + m.ball.vy * 0.3)
+    if action == "tackle" and m.owner is not None:
+        c = m.player(m.owner)
+        return MoveTo(m.ball.x + c.vx * 0.2, m.ball.y + c.vy * 0.2)  # straight in, from any side
+    if action == "sprint" and m.owner is None:
+        return MoveTo(*_run_on(m, p))  # on to its knock, flat out
+    return MoveTo(*_press_spot(m, p))  # press, or sprint at an opponent on the ball
+
+
+def _run_on(m: Match, p: Player) -> tuple[float, float]:
+    """Where a sprinting player runs for a loose ball running away from it: SPRINT_THROUGH
+    beyond the ball along its path, so it keeps its speed instead of braking to arrive
+    beside it. For any other loose ball, where a presser runs."""
+    b = m.ball
+    speed = math.hypot(b.vx, b.vy)
+    if speed < 1 or b.vx * (b.x - p.x) + b.vy * (b.y - p.y) <= 0:
+        return _press_spot(m, p)
+    return b.x + b.vx / speed * SPRINT_THROUGH, b.y + b.vy / speed * SPRINT_THROUGH
+
+
+def _ahead(m: Match, p: Player) -> Player | None:
+    """The nearest opponent within 60° of straight upfield and within TAKE_ON_RANGE."""
+    direction = m.attack(p.team)
+    near = [
+        (dist, q) for q in m.players
+        if q.team != p.team and (dist := math.hypot(q.x - p.x, q.y - p.y)) < TAKE_ON_RANGE
+        and (q.x - p.x) * direction > 0.5 * dist
+    ]  # fmt: skip
+    return min(near, key=lambda pair: pair[0])[1] if near else None
+
+
+def _take_on(m: Match, p: Player) -> MoveTo:
+    """Run at the nearest opponent ahead, then cut past it on the side with more room,
+    keeping to the side it has started cutting to."""
+    q = _ahead(m, p)
+    if q is None:
+        return MoveTo(*_dribble_spot(m, p), DRIBBLE_SPEED)
+    dist = math.hypot(q.x - p.x, q.y - p.y)
+    if dist > TAKE_ON_CUT:
+        return MoveTo(q.x, q.y, DRIBBLE_SPEED)
+    ux, uy = (q.x - p.x) / dist, (q.y - p.y) / dist
+    leaning = ux * math.sin(p.heading) - uy * math.cos(p.heading)  # > 0: heading left of it
+    best, best_score = None, -math.inf
+    for side in (1.0, -1.0):
+        x = q.x - uy * side * TAKE_ON_WIDE + ux * TAKE_ON_BEYOND
+        y = q.y + ux * side * TAKE_ON_WIDE + uy * TAKE_ON_BEYOND
+        if abs(y) > pitch.HALF_WIDTH - 1:
+            continue
+        room = min([10.0] + [math.hypot(o.x - x, o.y - y) for o in m.players if o.team != p.team and o is not q])
+        score = room + (2.0 if leaning * side > 0 else 0.0)
+        if score > best_score:
+            best, best_score = (x, y), score
+    return MoveTo(*(best or (q.x, q.y)), DRIBBLE_SPEED)
+
+
+def _shield(m: Match, p: Player) -> Command:
+    """Keep the ball with its back to the nearest opponent, edging away at walking pace,
+    until a teammate within LAY_OFF is open to take it."""
+    q = min((q for q in m.players if q.team != p.team), key=lambda q: math.hypot(q.x - p.x, q.y - p.y))
+    dist = math.hypot(q.x - p.x, q.y - p.y)
+    if dist >= SHIELD_RANGE:
+        return _on_the_ball(m, p)
+    mates = [
+        r for r in m.players
+        if r.team == p.team and r is not p and r.position != "GK"
+        and math.hypot(r.x - p.x, r.y - p.y) < LAY_OFF and _space(m, r) >= PRESSURE
+    ]  # fmt: skip
+    if mates:
+        return _pass_to(m, p, max(mates, key=lambda r: _space(m, r)))
+    ux, uy = ((p.x - q.x) / dist, (p.y - q.y) / dist) if dist > 0 else (-m.attack(p.team), 0.0)
+    x = max(-pitch.HALF_LENGTH + 1, min(pitch.HALF_LENGTH - 1, p.x + ux))
+    y = max(-pitch.HALF_WIDTH + 1, min(pitch.HALF_WIDTH - 1, p.y + uy))
+    return MoveTo(x, y, WALK, face=(p.x + ux * 10, p.y + uy * 10))
+
+
+def _through(m: Match, p: Player) -> tuple[float, float] | None:
+    """The spot for a through ball: into the space ahead of a teammate further forward,
+    where it will be when the ball gets there, with room from every opponent; the one
+    furthest forward with the most room. None if there is none."""
+    direction = m.attack(p.team)
+    b = m.ball
+    best, best_score = None, -math.inf
+    for q in m.players:
+        if q.team != p.team or q is p or q.position == "GK" or (q.x - b.x) * direction < 3:
+            continue
+        dist = math.hypot(q.x - b.x, q.y - b.y)
+        if dist > THROUGH_RANGE:
+            continue
+        travel = dist / _ground_speed(m, (q.x, q.y))
+        x = q.x + q.vx * travel + direction * THROUGH_LEAD
+        y = q.y + q.vy * travel
+        x = max(-pitch.HALF_LENGTH + 3, min(pitch.HALF_LENGTH - 3, x))
+        y = max(-pitch.HALF_WIDTH + 2, min(pitch.HALF_WIDTH - 2, y))
+        room = min(math.hypot(o.x - x, o.y - y) for o in m.players if o.team != p.team)
+        score = min(room, 8.0) + 0.2 * x * direction
+        if room >= THROUGH_ROOM and score > best_score:
+            best, best_score = (x, y), score
+    return best
+
+
+def _ground_speed(m: Match, spot: tuple[float, float]) -> float:
+    """A ball played along the ground to `spot`, as hard as a pass that far."""
+    dist = math.hypot(spot[0] - m.ball.x, spot[1] - m.ball.y)
+    return min(24.0, math.sqrt(2 * ROLLING * dist) * 1.4 + 4)
+
+
+def _wide(m: Match, p: Player) -> bool:
+    """Whether the ball is wide in the final third of the pitch `p` attacks."""
+    b = m.ball
+    return abs(b.y) >= CROSS_WIDE and pitch.HALF_LENGTH - b.x * m.attack(p.team) <= CROSS_DEPTH
+
+
+def _cross(m: Match, p: Player) -> Command:
+    """Lift the ball into the penalty area: to the teammate there with the most room, or
+    the penalty mark. From inside, it first carries the ball wide; at a restart it passes."""
+    direction = m.attack(p.team)
+    if not _wide(m, p):
+        if m.phase in RESTARTS:
+            return _pass_or_clear(m, p)
+        side = 1.0 if p.y >= 0 else -1.0
+        return MoveTo(p.x + direction * 6, side * (pitch.HALF_WIDTH - 5), DRIBBLE_SPEED)
+    goal_x = direction * pitch.HALF_LENGTH
+    in_area = [
+        q for q in m.players
+        if q.team == p.team and q is not p and q.position != "GK"
+        and abs(goal_x - q.x) <= pitch.PENALTY_DEPTH and abs(q.y) <= pitch.PENALTY_HALF_WIDTH
+    ]  # fmt: skip
+    if in_area:
+        q = max(in_area, key=lambda q: _space(m, q))
+        x, y = q.x + q.vx, q.y + q.vy  # about where it will be when the ball comes down
+    else:
+        x, y = goal_x - direction * pitch.PENALTY_MARK, 0.0
+    dist = math.hypot(x - m.ball.x, y - m.ball.y)
+    land = max(5.0, dist - CROSS_SHORT)
+    return KickTo(x, y, 6.0 + 0.41 * land, CROSS_LOFT)  # lands `land` m away (docs/decisions.md, section 4)
+
+
+def _last_defender(m: Match, team: int) -> float:
+    """How far up the pitch the opponents' second-last player stands, in `team`'s frame
+    (towards the goal it attacks)."""
+    direction = m.attack(team)
+    xs = sorted((q.x * direction for q in m.players if q.team != team), reverse=True)
+    return xs[1] if len(xs) > 1 else 0.0
+
+
+def _offside_line(m: Match, team: int) -> float:
+    """How far up the pitch a player of `team` can be without being in an offside
+    position, in its frame: the second-last opponent, the ball or halfway."""
+    return max(0.0, m.ball.x * m.attack(team), _last_defender(m, team))
+
+
+def _run_behind(m: Match, p: Player) -> MoveTo:
+    """From onside, with a teammate on the ball ready to pass (unpressed and facing
+    upfield), sprint to RUN_BEYOND beyond the offside line, and carry on while still
+    running. Otherwise keep its place in the team's shape, no further up than onside, so
+    a runner that went beyond the line with no pass played checks back. A player further
+    than RUN_REACH from the line keeps its place. A loose ball it can reach first, such
+    as the through ball it ran for, it goes for, as `command` says."""
+    direction = m.attack(p.team)
+    line = _offside_line(m, p.team)
+    ours = m.phase == "play" and m.owner is not None and m.player(m.owner).team == p.team
+    hx, hy = _home(m, p, attacking=ours)
+    x = p.x * direction
+    if line - x > RUN_REACH:
+        return _shape(m, p, (hx, hy))
+    if ours:
+        c = m.player(m.owner)
+        ready = not _pressed(m, c) and math.cos(c.heading) * direction > DIAGONAL
+        running = x > line + 0.5 and p.vx * direction > RUN_ON
+        if running or (ready and x <= line + 0.5):
+            y = max(-RUN_LANE, min(RUN_LANE, p.y))
+            return MoveTo(direction * min(line + RUN_BEYOND, pitch.HALF_LENGTH - 6), y)
+    return _shape(m, p, (direction * min(hx * direction, line - 1.0), hy))
 
 
 def _far_post(m: Match, p: Player) -> float:
@@ -149,11 +433,14 @@ def question(
             for q in others
         ]
         parts.append(f"{label}: {'; '.join(described)}.")
+    if m.phase == "play" and p.position != "GK":
+        line = _last_defender(m, p.team) - x
+        parts.append(f"Their last defender {abs(line):.0f} m {'ahead' if line >= 0 else 'behind'}.")
     if instruction:
         parts.append(f"Manager: {instruction}")
     if answer is not None:
         parts.append(f"Your answers take {answer:.1f} s.")
-    return Question(" ".join(parts), ACTIONS, INSTRUCTIONS)
+    return Question(" ".join(parts), options(m, p), INSTRUCTIONS)
 
 
 def _offset(dx: float, dy: float, direction: int) -> str:

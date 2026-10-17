@@ -4,8 +4,8 @@ import pytest
 
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
-from decision_pitch.match import DRIBBLE, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
-from decision_pitch.physics import STEP
+from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
+from decision_pitch.physics import STEP, TOP_SPEED
 
 
 def in_play():
@@ -89,16 +89,55 @@ def test_a_slow_contact_is_not_a_foul():
     assert m.drain_events() == [] and m.phase == "play"
 
 
+@pytest.mark.parametrize("speed, running", [(2.0, 6.0), (0.0, 0.0)])
+def test_a_presser_behind_the_carrier_runs_round_it_and_wins_the_ball_fairly(speed, running):
+    m = in_play()
+    carrier = on_the_ball(m, 10, -20.0, 0.0)
+    carrier.vx = speed
+    challenge(m, 15, -24.0, 0.2, running, 0.0)
+    for _ in range(round(4 / STEP)):
+        m.command(10, MoveTo(pitch.HALF_LENGTH, 0.0, speed) if speed else Hold())
+        m.command(15, MoveTo(*bots._press_spot(m, m.player(15))))
+        m.step()
+        if m.owner != 10:
+            break
+    assert m.drain_events() == [] and m.owner == 15
+
+
+def test_a_presser_meets_a_ball_coming_at_it_as_fast_as_it_runs():
+    # 4 m apart, closing at twice its speed
+    assert bots._intercept(-4.0, 0.0, TOP_SPEED, 0.0, TOP_SPEED) == pytest.approx(4 / (2 * TOP_SPEED))
+
+
 def test_a_free_kick_waits_before_it_can_be_taken():
     m = in_play()
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
+    m.player(15).x = -30.0  # out of the way, so only the wait holds the kick
     m.command(10, KickTo(20.0, 0.0, 15.0))
     run(m, SET_PIECE_WAIT - 0.1)
     assert m.phase == "free_kick"
     run(m, 0.2)
     assert m.phase == "play" and m.ball.vx > 0
+
+
+def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
+    m = in_play()
+    on_the_ball(m, 10, 0.0, 0.0)
+    offender = challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
+    m.step()
+    assert m.phase == "free_kick"
+    m.command(10, KickTo(20.0, 0.0, 15.0))
+    m.command(15, MoveTo(m.ball.x, m.ball.y))  # told to stay at the ball
+    while m.phase == "free_kick":
+        x, y = offender.x, offender.y
+        m.step()
+        assert math.hypot(offender.x - x, offender.y - y) <= TOP_SPEED * STEP + OUT_OF_PLACE  # no jump
+        if m.phase == "free_kick":
+            assert m.since_restart < RETREAT_WAIT
+    assert math.hypot(offender.x - m.ball.x, offender.y - m.ball.y) >= 9.15 - 0.5  # kicked as it got there
+    assert m.since_restart > SET_PIECE_WAIT
 
 
 def test_a_free_kick_near_goal_gets_a_wall_of_three_beyond_the_required_distance():
@@ -125,7 +164,7 @@ def test_a_foul_in_the_penalty_area_is_a_penalty_taken_by_the_fouled_player():
     penalty = m.drain_events()[-1]
     assert (penalty["kind"], penalty["team"], penalty["player"]) == ("penalty", 0, 10)
     assert (m.ball.x, m.ball.y) == (pitch.HALF_LENGTH - pitch.PENALTY_MARK, 0.0)
-    run(m, 1.0)
+    run(m, 10.0)  # they run there, the goalkeeper from the far touchline
     for p in m.players:
         if p.id == 10:
             continue
@@ -146,7 +185,10 @@ def test_players_beside_the_penalty_area_wait_behind_the_mark():
     beside = m.player(9)
     beside.x, beside.y = 50.0, 25.0
     m.command(9, Hold())
-    m.step()
+    for _ in range(round(4.0 / STEP)):
+        x = beside.x
+        m.step()
+        assert x - beside.x <= TOP_SPEED * STEP + OUT_OF_PLACE  # it runs, not jumps
     assert beside.x <= m.ball.x
 
 
@@ -158,7 +200,7 @@ def test_a_half_waits_for_a_penalty_awarded_at_its_end():
     m.command(10, KickTo(pitch.HALF_LENGTH + 2, 2.0, 24.0))
     m.step()
     assert m.phase == "penalty"
-    run(m, 5.0)
+    run(m, RETREAT_WAIT + 3.0)  # the line-up, then the kick
     events = kinds(m.drain_events())
     assert events[-1] == "half_time" and events[-2] in ("goal", "goal_kick", "corner")
 
@@ -183,6 +225,22 @@ def test_a_touch_after_time_ends_the_half_before_that_player_can_score():
     m.player(10).x, m.player(10).y = 51.9, 2.0
     m.command(10, KickTo(pitch.HALF_LENGTH + 2, 2.0, 24.0))
     m.step()
+    assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
+
+
+def test_a_penalty_parried_after_time_can_still_go_in():
+    m = penalty_after_time((51.8, 0.0), 17.0)
+    keeper = m.player(12)
+    keeper.x, keeper.y = 52.1, -1.2
+    run(m, 1.0)
+    assert kinds(m.drain_events()) == ["goal", "half_time"]
+
+
+def test_a_penalty_deflected_by_the_attacking_goalkeeper_after_time_ends_the_half():
+    m = penalty_after_time((51.8, 0.0), 24.0)
+    keeper = m.player(1)
+    keeper.x, keeper.y = 51.6, -0.65
+    run(m, 1.0)
     assert kinds(m.drain_events()) == ["half_time"] and m.score == [0, 0]
 
 
@@ -328,6 +386,66 @@ def test_a_goal_cannot_be_scored_directly_from_an_indirect_free_kick(indirect, r
     m.command(10, KickTo(pitch.HALF_LENGTH + 2, 0.0, 20.0))
     run(m, 3.0)
     assert kinds(m.drain_events()) == [restart] and m.score == score
+
+
+# -- saves and deflections --------------------------------------------------------------------
+
+
+def shot_at_keeper(keeper_y, ball_y, speed):
+    """A ball rolling at the away goalkeeper (player 12), 1.5 m off its line at +x."""
+    m = in_play()
+    keeper = m.player(12)
+    keeper.x, keeper.y = 51.0, keeper_y
+    m.ball.place(45.0, ball_y)
+    m.ball.vx = speed
+    return m, keeper
+
+
+def test_the_goalkeeper_catches_a_shot_at_its_body():
+    m, keeper = shot_at_keeper(0.0, 0.0, 15.0)
+    run(m, 0.5)
+    assert m.owner == keeper.id
+
+
+def test_the_goalkeeper_parries_a_shot_too_fast_to_hold():
+    m, keeper = shot_at_keeper(0.0, 0.0, 20.0)
+    run(m, 0.5)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1
+
+
+def test_a_shot_parried_at_full_stretch_over_the_goal_line_is_a_corner():
+    m, keeper = shot_at_keeper(2.0, 3.2, 17.0)  # it would go in just inside the post
+    run(m, 2.0)
+    events = m.drain_events()
+    assert kinds(events) == ["corner"] and events[0]["team"] == 0 and m.score == [0, 0]
+
+
+def test_a_hard_ball_bounces_off_an_outfield_player_who_cannot_play_it_at_once():
+    m = in_play()
+    blocker = m.player(15)
+    blocker.x, blocker.y = 30.0, 0.0
+    m.ball.place(28.0, 0.0)
+    m.ball.vx = 24.0
+    run(m, 0.15)
+    assert m.owner is None and m.ball.vx < 0 and m.last_touch == 1 and blocker.id in m.recovering
+
+
+def test_a_ball_dropping_fast_onto_a_player_bounces_off_it():
+    m = in_play()
+    m.player(15).x, m.player(15).y = 30.0, 0.0
+    m.ball.place(29.4, 0.0)
+    m.ball.z, m.ball.vx, m.ball.vz = 0.8, 12.0, -16.0
+    m.step()
+    assert m.owner is None and m.last_touch == 1
+
+
+def test_a_deflection_off_an_opponent_leaves_an_offside_position_as_it_was():
+    m = through_ball((30.0, 10.0))
+    blocker = m.player(13)
+    m.ball.place(blocker.x - 0.6, blocker.y)
+    m.ball.vx, m.ball.vy = 24.0, 0.0
+    m.step()
+    assert m.owner is None and m.offside == {10}
 
 
 # -- substitutions ----------------------------------------------------------------------------

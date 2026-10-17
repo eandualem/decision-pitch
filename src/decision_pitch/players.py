@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from decision_pitch import actions, bots
 from decision_pitch.arena import apis, local
@@ -55,7 +56,8 @@ class OneAtATime:
 @dataclass
 class Seat:
     """A model-driven player: its model, the action it is carrying out, its model's most
-    recent answer time and its manager's instruction."""
+    recent answer time and its manager's instruction, with how its recent answers went
+    for the manager's feed."""
 
     model: Model
     action: str = "hold"
@@ -64,6 +66,9 @@ class Seat:
     answers: int = 0  # answers applied so far
     command: Command | None = None  # the command last given for its action
     commanded: int = 0  # how many answers had been applied when it was given
+    times: deque = field(default_factory=lambda: deque(maxlen=10))  # recent answer times, s
+    outcomes: deque = field(default_factory=lambda: deque(maxlen=5))  # recent answers: True if usable
+    failures: int = 0
 
 
 class Players:
@@ -73,6 +78,24 @@ class Players:
         self.match = match
         self.seats = {pid: Seat(model) for pid, model in (models or {}).items()}
         self.decisions: list[dict] = []  # for the page, drained by the server
+        self._loops: dict[int, asyncio.Task] | None = None  # while running
+
+    def seat(self, player_id: int, model: Model | None) -> None:
+        """Drive `player_id` with `model` from now on, or with the bot if None. A substitute
+        seated before it comes on starts asking once it is on."""
+        if self._loops is not None and player_id in self._loops:
+            self._loops.pop(player_id).cancel()
+        if model is None:
+            self.seats.pop(player_id, None)
+            return
+        self.seats[player_id] = Seat(model)
+        if self._loops is not None:
+            self._loops[player_id] = asyncio.create_task(self._ask(player_id))
+
+    def instruct(self, player_id: int, text: str) -> None:
+        """Give a model-driven player its manager's instruction; a bot reads none."""
+        if seat := self.seats.get(player_id):
+            seat.instruction = text
 
     def model_name(self, player_id: int) -> str | None:
         seat = self.seats.get(player_id)
@@ -101,12 +124,17 @@ class Players:
         return decisions
 
     async def run(self) -> None:
-        """Ask every seated player's model, each in its own loop, until full time."""
-        loops = [asyncio.create_task(self._ask(pid)) for pid in self.seats]
+        """Ask every seated player's model, each in its own loop, until full time. A
+        player seated while this runs gets its own loop too."""
+        self._loops = {pid: asyncio.create_task(self._ask(pid)) for pid in self.seats}
         try:
-            await asyncio.gather(*loops)
+            while self.match.phase != "full_time":
+                await asyncio.sleep(0.25)
+                for loop in list(self._loops.values()):
+                    if loop.done() and not loop.cancelled():
+                        loop.result()  # a loop that crashed fails the match loudly
         finally:
-            for loop in loops:
+            for loop in self._loops.values():
                 loop.cancel()
 
     async def _ask(self, player_id: int) -> None:
@@ -122,11 +150,15 @@ class Players:
                 answer = await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
                 ms = round((time.perf_counter() - start) * 1000)
+                seat.outcomes.append(False)
+                seat.failures += 1
                 self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
             seat.answer = time.perf_counter() - start
             seat.action, seat.answers = answer.move, seat.answers + 1
+            seat.times.append(seat.answer)
+            seat.outcomes.append(True)
             self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000)))
 
 
