@@ -5,6 +5,7 @@ const labels = {
   yellow: 'Yellow card', red: 'Red card', kickoff: 'Kick-off', throw_in: 'Throw-in',
   goal_kick: 'Goal kick', corner: 'Corner', half_time: 'Half-time', full_time: 'Full-time',
   substitution: 'Substitution', second_touch: 'Played twice', held: 'Held too long',
+  advantage: 'Advantage', handball: 'Handball', added_time: 'Added time',
 };
 const HOLD_LIMIT = 8; // s a goalkeeper may hold the ball; the referee counts the last five
 const make = (tag, className, text = '') => {
@@ -49,8 +50,9 @@ export function createMoments(scene, teams) {
   const show = (event, now) => {
     const player = roster.get(event.player);
     headline.textContent = event.kind === 'free_kick' && event.indirect ? 'Indirect free kick' : labels[event.kind];
-    const team = teams[(event.kind === 'foul' || event.kind === 'offside') && player ? player.team : event.team];
-    const who = event.kind === 'substitution' ? `${playerLabel(event.off)} → ${playerLabel(event.on)}` : (player ? playerLabel(event.player) : '');
+    const team = teams[(event.kind === 'foul' || event.kind === 'offside' || event.kind === 'handball') && player ? player.team : event.team];
+    const who = event.kind === 'substitution' ? `${playerLabel(event.off)} → ${playerLabel(event.on)}`
+      : event.kind === 'added_time' ? `+${event.minutes} min` : (player ? playerLabel(event.player) : '');
     detail.textContent = [team?.name, who].filter(Boolean).join(' / ');
     eyebrow.textContent = event.kind === 'goal' ? 'THE FINISH' : 'MATCH MOMENT';
     banner.dataset.kind = event.kind;

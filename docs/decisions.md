@@ -1160,7 +1160,7 @@ third-party model, motion capture, texture or asset pack is used.
 
 **Choice.** The remaining laws are judged by the engine from what it already
 simulates, by fixed rules that are the same for both teams, so each call can be
-set up in a test and checked. Every foul stops play: there is no advantage.
+set up in a test and checked.
 
 - **Fouls.** Only a challenge on the player with the ball is judged: a
   tackle, as below, or running into the carrier. An opponent who runs into
@@ -1193,6 +1193,47 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   - A carrier who loses the ball cannot play it for 0.4 s, so the ball does
     not change hands straight back. A fouled player goes down for 1.2 s:
     forwards if it was fouled from behind, sideways otherwise.
+- **Fouls off the ball.** A player that runs into an opponent without the
+  ball within 5 m of the ball, from behind it (more than 120° from where it
+  faces) and faster than 4 m/s, fouls it: a direct free kick, or a penalty in the offender's own
+  area, with the same cards as a foul on the ball. The fouled player goes
+  down. Running into an opponent from the front or side off the ball is
+  jostling for position and is not judged. Judged anywhere on the pitch at
+  2 m/s, as a foul on the carrier is, players keeping their shape ran into
+  each other's backs so often that there were about 27 fouls in a bot match
+  of two 180 s halves, against about 1; judged only where the ball is
+  contested, there are about 4.
+- **Handball.** Players are discs with no arms, so handball is judged from
+  where the ball meets a player. A loose ball between 0.9 m and 1.7 m off the
+  ground that passes within 0.6 m of an outfield player's centre (or a
+  goalkeeper's outside its own area) touches its upper body. More than
+  0.45 m to the side of the way the player faces, it touches an arm held
+  away from the body: handball, a direct free kick or a penalty, unless the
+  ball came from within 2 m, too close to react, or from the player's own
+  touch. Otherwise it bounces off the body as any deflection does. The
+  nearest such player meets the ball, whichever team it is on. Handball
+  that stops a ball heading into the goal (between the posts and under the
+  bar, as it flies) is a red card; within 27 m of the
+  player's own goal it is a yellow card.
+- **Advantage.** After a foul outside the offender's penalty area that is
+  not a red-card offence, when the ball is in the fouled team's attacking
+  half and the nearest player able to play it is on the fouled team, play
+  goes on: the referee signals advantage. A teammate in an offside position
+  does not count as able to play it. If the opponents win the ball
+  within 3 s, play comes back for the free kick, with the card the foul
+  earned. Otherwise play goes on, and only a card for a reckless challenge
+  is still given, at the next stoppage. While an advantage is played, the
+  offender's continued contact with the player it fouled is not judged again,
+  and any other foul stops play.
+- **Added time.** Each half has time added for time lost: a minute for each
+  goal and penalty, and half a minute for each substitution and card, in
+  match minutes, rounded up to a whole minute; no time is lost, none is
+  added. A match minute is a forty-fifth of the half's length. When the half
+  reaches its length the referee shows the added minutes, and the clock runs
+  on as 45+ or 90+. Time lost during added time is added on as well, but not
+  time lost once the half's time is up, such as a penalty the half waits for. No
+  player is injured or wastes time on purpose in the
+  engine, so neither adds time.
 - **Free kicks and penalties.** The fouled team takes a free kick where the
   foul happened, after a pause of 1.5 s, with opponents held 9.15 m from the
   ball; within 32 m of its goal, the defending team's three nearest outfield

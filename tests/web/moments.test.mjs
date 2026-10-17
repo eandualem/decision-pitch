@@ -110,3 +110,10 @@ test('the referee counts down the last five seconds a goalkeeper holds the ball'
   ui.snapshot([]);
   assert.equal(count.hidden, true, 'released');
 });
+
+test('added time shows the minutes the referee adds', () => {
+  const ui = setup();
+  ui.moments.handleEvent({ kind: 'added_time', team: null, minutes: 2 }, 1);
+  assert.equal(ui.banner.dataset.kind, 'added_time');
+  assert.equal(ui.banner.children[2].textContent, '+2 min');
+});
