@@ -9,18 +9,18 @@ from __future__ import annotations
 import math
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from decision_pitch import pitch
 from decision_pitch.physics import (
     BALL_RADIUS,
-    GRAVITY,
     PLAYER_RADIUS,
     STEP,
     TOP_SPEED,
     Ball,
     Player,
     brake,
+    _step_ball,
     carry,
     separate,
     step_ball,
@@ -121,6 +121,8 @@ ARM_HEIGHT = 1.7  # m: a ball between CONTROL_HEIGHT and this touches a player's
 ARM_REACH = 0.6  # m from a player's centre within which such a ball touches it
 BODY_SIDE = 0.45  # m to the side of the way it faces beyond which the ball meets an arm
 TOO_CLOSE = 2.0  # m from where it was last played within which a ball on the arm is not handball
+GOAL_LOOK = 3.0  # s of a ball's path followed to judge whether it is going into the goal
+LOOK_STEP = 0.02  # s between the points of that path
 OFF_BALL_RANGE = 5.0  # m from the ball within which running into a player off the ball is judged
 OFF_BALL_SPEED = 4.0  # m/s it must run into it at
 LOST = {"goal": 1.0, "penalty": 1.0, "substitution": 0.5, "yellow": 0.5, "red": 0.5}  # match minutes
@@ -751,9 +753,10 @@ class Match:
         self._event("foul", team, offender.id, fouled=fouled.id)
         goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
         red = goal <= GOAL_CHANCE and self._denies_goal(offender, fouled)
+        second = reckless and self.yellows.get(offender.id, 0) > 0  # a second yellow sends it off: no advantage
         x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
         y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
-        advantage = self.advantage is None and not red and not self._in_own_penalty_area(x, y, offender.team)
+        advantage = self.advantage is None and not red and not second and not self._in_own_penalty_area(x, y, offender.team)
         if advantage and self._plays_on(team):
             self._event("advantage", team, fouled.id)
             self.advantage = (team, offender.id, x, y, goal <= PROMISING_ATTACK or reckless, self.t + ADVANTAGE)
@@ -808,34 +811,31 @@ class Match:
         if not CONTROL_HEIGHT < b.z <= ARM_HEIGHT:
             return
         last = self.touches[-1] if self.touches else None
-        for p in self.players:
-            dx, dy = b.x - p.x, b.y - p.y
-            if math.hypot(dx, dy) > ARM_REACH or p.id in self.recovering:
-                continue
-            if p.position == "GK" and self._ball_in_own_penalty_area(p.team):
-                continue  # it may handle the ball there
-            if last is not None and last["player"] == p.id:
-                continue  # its own touch
-            if p.id in self.offside:
-                self._offside(p)
-                return
-            side = abs(-dx * math.sin(p.heading) + dy * math.cos(p.heading))
-            close = last is not None and math.hypot(last["x"] - p.x, last["y"] - p.y) <= TOO_CLOSE
-            if side > BODY_SIDE and not close:
-                self._handball(p)
-            else:
-                self._deflect(p)
+        near = [
+            p for p in self.players
+            if math.hypot(b.x - p.x, b.y - p.y) <= ARM_REACH and p.id not in self.recovering
+            and not (p.position == "GK" and self._ball_in_own_penalty_area(p.team))  # it may handle it there
+            and not (last is not None and last["player"] == p.id)  # its own touch
+        ]  # fmt: skip
+        if not near:
             return
+        p = min(near, key=lambda p: math.hypot(b.x - p.x, b.y - p.y))  # the nearest meets it
+        if p.id in self.offside:
+            self._offside(p)
+            return
+        dx, dy = b.x - p.x, b.y - p.y
+        side = abs(-dx * math.sin(p.heading) + dy * math.cos(p.heading))
+        close = last is not None and math.hypot(last["x"] - p.x, last["y"] - p.y) <= TOO_CLOSE
+        if side > BODY_SIDE and not close:
+            self._handball(p)
+        else:
+            self._deflect(p)
 
     def _handball(self, p: Player) -> None:
         team, b = 1 - p.team, self.ball
         self._event("handball", team, p.id)
         goal_x = -self.attack(p.team) * pitch.HALF_LENGTH
-        heading_in = False
-        if (goal_x - b.x) * b.vx > 0:
-            t = (goal_x - b.x) / b.vx  # when it reaches the goal line, as it flies
-            heading_in = abs(b.y + b.vy * t) <= pitch.GOAL_WIDTH / 2 and b.z + b.vz * t - GRAVITY * t * t / 2 < pitch.GOAL_HEIGHT
-        if heading_in:
+        if self._goal_bound(goal_x):
             self._card(p, red=True)
         elif math.hypot(goal_x - b.x, b.y) <= PROMISING_ATTACK:
             self._card(p)
@@ -849,6 +849,19 @@ class Match:
             self._restart("penalty", team, spot, 0.0, taker=nearest.id)
         else:
             self._restart("free_kick", team, x, y)
+
+    def _goal_bound(self, goal_x: float) -> bool:
+        """Whether the loose ball, left alone, would go into the goal on the line at
+        `goal_x`: its flight, bounces and roll followed for up to GOAL_LOOK seconds."""
+        ball = replace(self.ball)
+        for _ in range(round(GOAL_LOOK / LOOK_STEP)):
+            x0 = ball.x
+            _step_ball(ball, LOOK_STEP)
+            if (ball.x - goal_x) * (x0 - goal_x) <= 0:  # it reached the line
+                return abs(ball.y) <= pitch.GOAL_WIDTH / 2 and ball.z < pitch.GOAL_HEIGHT
+            if ball.vx == ball.vy == ball.vz == 0:
+                return False
+        return False
 
     def _half_end(self) -> float:
         """The `elapsed` at which this half ends: with the added time shown, and time lost

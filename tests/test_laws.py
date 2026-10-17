@@ -917,3 +917,37 @@ def test_time_lost_during_added_time_is_added_on_too():
     assert m.added == 1
     m._event("goal", 0)  # in added time
     assert m._half_end() == pytest.approx(m.half_length * (1 + 2 / 45))
+
+
+@pytest.mark.parametrize(("x", "vx", "expected"), [
+    (10.0, 1.0, ["handball", "free_kick"]),  # a slow ball far out: it would never reach the goal
+    (50.0, 20.0, ["handball", "red", "penalty"]),  # stopping a ball on its way in
+])
+def test_handball_is_a_red_card_only_when_the_ball_would_go_in(x, vx, expected):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = x, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = x - vx * STEP / 2, 0.55, 1.3, vx  # level with it after the step
+    m.step()
+    assert kinds(m.drain_events()) == expected
+
+
+def test_the_nearest_player_meets_a_chest_high_ball_whichever_team_it_is_on():
+    for near, far in ((16, 7), (7, 16)):
+        m = in_play()
+        m.ball.x, m.ball.y, m.ball.z = 10.0, 0.0, 1.3
+        a, b = m.player(near), m.player(far)
+        a.x, a.y, a.heading = 10.3, 0.0, math.pi  # facing it: the body
+        b.x, b.y, b.heading = 10.0, -0.55, 0.0  # an arm's length to the side
+        m.step()
+        assert m.drain_events() == [] and touch(m, near) == "deflect"
+
+
+def test_a_booked_players_reckless_slide_sends_it_off_with_no_advantage():
+    m = in_play()
+    on_the_ball(m, 10, 10.0, 0.0)
+    m.yellows[15] = 1
+    tackler(m, 15, 8.2, 0.3, slide=True)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "yellow", "red", "free_kick"]
+    assert 15 not in on_pitch(m)
