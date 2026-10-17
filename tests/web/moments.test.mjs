@@ -97,3 +97,16 @@ test('substitution banner resolves the incoming bench player', () => {
   ui.event('substitution', 1, { off: 1, on: 3 });
   assert.equal(ui.banner.children[2].textContent, 'Home / 1 · One → 12 · Reserve');
 });
+
+test('the referee counts down the last five seconds a goalkeeper holds the ball', () => {
+  const ui = setup();
+  const count = ui.root.children[0].children.at(-1);
+  const held = seconds => ui.moments.setSnapshot({ players: [], score: [0, 0], clock: '10:00', phase: 'play', period: 1, ball: { held: seconds } });
+  held(2.5);
+  assert.equal(count.hidden, true);
+  held(5.2);
+  assert.equal(count.hidden, false);
+  assert.equal(count.textContent, 'Keeper 3');
+  ui.snapshot([]);
+  assert.equal(count.hidden, true, 'released');
+});

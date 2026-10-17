@@ -4,8 +4,9 @@ const labels = {
   goal: 'GOAL', foul: 'Foul', free_kick: 'Free kick', penalty: 'Penalty', offside: 'Offside',
   yellow: 'Yellow card', red: 'Red card', kickoff: 'Kick-off', throw_in: 'Throw-in',
   goal_kick: 'Goal kick', corner: 'Corner', half_time: 'Half-time', full_time: 'Full-time',
-  substitution: 'Substitution',
+  substitution: 'Substitution', second_touch: 'Played twice', held: 'Held too long',
 };
+const HOLD_LIMIT = 8; // s a goalkeeper may hold the ball; the referee counts the last five
 const make = (tag, className, text = '') => {
   const node = document.createElement(tag);
   node.className = className;
@@ -22,7 +23,9 @@ export function createMoments(scene, teams) {
   const score = make('strong', 'score', '0 : 0');
   const clock = make('span', 'match-clock', '00:00');
   const phase = make('span', 'match-phase', 'Kick-off');
-  scorebar.append(brand, names[0], score, names[1], clock, phase);
+  const count = make('span', 'keeper-count');
+  count.hidden = true;
+  scorebar.append(brand, names[0], score, names[1], clock, phase, count);
   const banner = make('div', 'moment');
   banner.hidden = true;
   banner.setAttribute('role', 'status');
@@ -64,6 +67,9 @@ export function createMoments(scene, teams) {
       score.textContent = `${snapshot.score[0]} : ${snapshot.score[1]}`;
       clock.textContent = snapshot.clock;
       phase.textContent = snapshot.phase === 'play' ? `${snapshot.period === 2 ? '2ND' : '1ST'} HALF` : (labels[snapshot.phase] ?? snapshot.phase.replaceAll('_', ' '));
+      const held = snapshot.ball?.held;
+      count.hidden = !(held >= HOLD_LIMIT - 5);
+      if (!count.hidden) count.textContent = `Keeper ${Math.max(1, Math.ceil(HOLD_LIMIT - held))}`;
     },
     handleEvent(event, now) {
       if (!labels[event.kind]) return;

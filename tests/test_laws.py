@@ -653,3 +653,106 @@ def test_a_tackle_ends_the_same_whichever_team_makes_it():
         snapshot = {p["id"]: p for p in m.snapshot()["players"]}
         outcomes.append((kinds(m.drain_events()), snapshot[taker].get("move"), m.owner == carrier))
     assert outcomes[0] == outcomes[1]
+
+
+# -- restarts and goalkeepers' handling ------------------------------------------------------
+
+
+def take_free_kick(m, taker):
+    """A free kick for the home team at the centre, taken by `taker` with a short, slow kick."""
+    m._restart("free_kick", 0, 0.0, 0.0)
+    p = m.player(taker)
+    p.x, p.y = -0.4, 0.0
+    m.command(taker, KickTo(5.0, 0.0, 3.0))
+    while m.phase == "free_kick":
+        m.step()
+    m.drain_events()
+
+
+def test_the_taker_touching_the_ball_again_first_gives_an_indirect_free_kick():
+    m = in_play()
+    take_free_kick(m, 10)
+    m.command(10, MoveTo(4.0, 0.0))
+    run(m, 3.0)
+    assert kinds(m.drain_events())[:2] == ["second_touch", "free_kick"]
+    assert m.phase == "free_kick" and m.restart_team == 1 and m.restart_indirect
+
+
+def test_the_taker_may_play_the_ball_again_once_another_player_has():
+    m = in_play()
+    take_free_kick(m, 10)
+    mate = m.player(9)
+    mate.x, mate.y = 3.0, 0.0  # in the ball's path: it plays it first
+    m.command(10, MoveTo(4.0, 0.0))
+    run(m, 3.0)
+    assert "second_touch" not in kinds(m.drain_events())
+
+
+@pytest.mark.parametrize(
+    ("direct", "end", "goal", "restart"),
+    [
+        (("throw_in", 0), 1, False, "goal_kick"),  # a throw-in straight into their goal
+        (("throw_in", 0), -1, False, "corner"),  # and into its own
+        (("free_kick", 0), -1, False, "corner"),  # an own goal straight from a free kick
+        (("corner", 0), -1, False, "corner"),
+        (("free_kick", 0), 1, True, "kickoff"),  # a direct free kick into their goal counts
+        (("kickoff", 0), 1, True, "kickoff"),
+        (None, -1, True, "kickoff"),  # an own goal from open play counts
+    ],
+)
+def test_a_goal_straight_from_a_restart_counts_only_where_the_laws_allow(direct, end, goal, restart):
+    m = in_play()
+    m.direct, m.last_touch = direct, 0
+    m.ball.place(end * 52.4, 0.0)
+    m.ball.vx = end * 5.0
+    run(m, 0.2)  # over the line
+    assert (sum(m.score) == 1) == goal and m.phase == restart
+
+
+def keeper_with_ball_coming(m, distance, passed):
+    keeper = m.player(1)
+    keeper.x, keeper.y = -50.0, 0.0
+    m.passed = passed
+    m.ball.place(-50.0 + distance, 0.0)
+    return keeper
+
+
+def test_a_goalkeeper_handles_a_ball_in_its_area_but_not_a_teammates_kick_to_it():
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=None)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "catch" and "held" in m.snapshot()["ball"]
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=0)  # its own team's pass: only at its feet
+    m.step()
+    assert m.owner is None
+    keeper_with_ball_coming(m, 0.5, passed=0)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "control" and "held" not in m.snapshot()["ball"]
+
+
+def test_a_goalkeeper_holding_the_ball_more_than_eight_seconds_concedes_a_corner():
+    m = in_play()
+    keeper = keeper_with_ball_coming(m, 1.0, passed=None)
+    keeper.y = m.ball.y = 3.0  # on the left of its goal, as it faces the pitch
+    run(m, 7.9)
+    assert m.phase == "play" and m.snapshot()["ball"]["held"] == pytest.approx(7.9, abs=0.1)
+    run(m, 0.3)
+    assert kinds(m.drain_events())[-2:] == ["held", "corner"]
+    assert m.phase == "corner" and m.restart_team == 1 and (m.ball.x, m.ball.y) == (-52.5, 34.0)
+
+
+def test_a_goalkeeper_that_took_a_back_pass_with_its_feet_still_may_not_handle_it():
+    m = in_play()
+    keeper = keeper_with_ball_coming(m, 0.5, passed=0)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "control"
+    assert not m._handles(keeper)  # until another player touches the ball
+
+
+def test_the_referees_count_stops_when_the_half_ends_on_a_held_ball():
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=None)
+    m.elapsed = m.half_length - 0.05
+    run(m, 0.2)
+    assert m.phase == "half_time" and "held" not in m.snapshot()["ball"]

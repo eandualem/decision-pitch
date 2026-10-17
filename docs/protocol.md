@@ -75,6 +75,8 @@ The state of play, about 30 times a second.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
   `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
+- `ball.held`: while a goalkeeper holds the ball in its hands, the seconds it
+  has held it; absent otherwise. At more than eight it concedes a corner.
 - `ball.touches`: the touches of the ball in the last 0.1 s, oldest first, or
   `[]`. Each touch is repeated in the snapshots of that tenth of a second, so
   none falls between two snapshots. `player` touched it; `t` is the match time
@@ -90,8 +92,9 @@ The state of play, about 30 times a second.
   tackle knocks the ball loose from the opponent who has it), `deflect`
   (the ball comes too fast to control and bounces off the player), `save`
   (such a deflection off the goalkeeper defending the goal the ball is at, in
-  its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
-  area in play, even a slow ball from a teammate). There are no headers:
+  its penalty area) and `catch` (that goalkeeper takes the ball in its hands
+  in its penalty area, in play; a ball a teammate kicked or threw to it it
+  takes with its feet, a `control`). There are no headers:
   outfield players play the ball only up to 0.9 m high.
 - `heading`: the way the player faces, in radians anticlockwise from +x. It
   can differ from the way it moves: a player keeping its place faces the
@@ -129,16 +132,19 @@ restart, unless the list says otherwise, and is `null` for `half_time` and
 |---|---|
 | `goal` | `player`: the scorer; for now, the scoring team's player nearest the ball |
 | `throw_in`, `goal_kick`, `corner` | none |
-| `free_kick` | `indirect`: `true` after offside, when a goal cannot be scored from it directly |
+| `free_kick` | `indirect`: `true` after offside or a second touch, when a goal cannot be scored from it directly |
 | `penalty` | `player`: the taker |
 | `foul` | `player`: the offender; `fouled`: the player fouled. `team` is the fouled player's team |
 | `offside` | `player`: the player caught offside. `team` is the defending team |
+| `second_touch` | `player`: the taker of a restart who touched the ball again before anyone else. `team` is the other team |
+| `held` | `player`: the goalkeeper that held the ball for more than eight seconds. `team` is the other team |
 | `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
 | `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
 | `half_time`, `full_time` | `score`: the score at the whistle, home first, as in the snapshot |
 
 A foul is followed by any card it earns, then the `free_kick` or `penalty`; an
-offside by its `free_kick`. A second yellow card sends `yellow` then `red`. A
+offside or a second touch by its `free_kick`, and a goalkeeper holding the ball
+too long by its `corner`. A second yellow card sends `yellow` then `red`. A
 sent-off player leaves `players`; if it was the goalkeeper, a teammate takes
 over in goal without an event.
 

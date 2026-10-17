@@ -1114,6 +1114,29 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   player's place and position, and is played by the built-in bot until a
   manager chooses its model. A substituted or sent-off player cannot return,
   and a sent-off player cannot be replaced.
+- **Restarts.** The player who takes a kick-off, throw-in, goal kick, corner,
+  free kick or penalty may not touch the ball again until another player has:
+  if it does, the opponents take an indirect free kick there. A goal goes in
+  "straight from" a restart when no one has touched the ball since the
+  restart was taken. Straight from a throw-in no goal counts: into the
+  opponents' goal it is a goal kick, into the thrower's own goal a corner.
+  Straight from a kick-off, goal kick, corner or free kick a goal counts only
+  against the opponents; into the kicking team's own goal it is a corner. An
+  indirect free kick counts against neither goal, as before. A foul throw
+  cannot happen in the engine: the ball is placed where it went out and the
+  thrower throws it from there, with both hands from behind its head.
+- **Goalkeepers' handling.** A goalkeeper handles the ball in its own
+  penalty area: it reaches 1.3 m and up to 2.6 m high there, against an
+  outfield player's 0.75 m and 0.9 m, and its taking the ball is a catch. A
+  ball a teammate deliberately kicked to it (a pass, clearance or kick from a
+  restart, not a deflection), or threw to it from a throw-in, it may not
+  handle: it plays it with its feet, at an outfield player's reach, as
+  if outside its area. The laws give an indirect free kick if it handles
+  such a ball; the engine's goalkeeper never does. A goalkeeper holding the
+  ball, a catch it has not yet released, for more than eight seconds
+  concedes a corner to the opponents, on the side of the pitch it is on.
+  Each snapshot tells the page how long it has held it, and the page shows
+  the referee's count for the last five seconds.
 - **Saves and deflections.** A loose ball that comes at a player faster than
   18 m/s, relative to the player, bounces off it instead of being taken. A
   goalkeeper that reaches a ball faster than 10 m/s only at full stretch (the

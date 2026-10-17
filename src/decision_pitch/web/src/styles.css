@@ -13,6 +13,7 @@ body { -webkit-user-select: none; user-select: none; }
 .score { font-size: 23px; letter-spacing: .08em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .match-clock { border-left: 1px solid #ffffff24; padding: 0 15px; font-size: 15px; font-variant-numeric: tabular-nums; }
 .match-phase { padding: 0 16px 0 0; color: #b5c6be; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
+.keeper-count { padding: 0 16px 0 0; color: #f2c230; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; }
 /* A lower third at the bottom left: clear of the play in the middle of the wide shot and of
    the scorer framed in the close-up after a goal. */
 .moment { position: absolute; bottom: 4%; left: 3%; max-width: min(460px, 60vw); display: flex; flex-direction: column; align-items: flex-start; padding: 10px 22px 12px; background: #101d21ee; border-left: 3px solid #d6ff63; box-shadow: 0 12px 40px #0005; text-align: left; }
