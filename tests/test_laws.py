@@ -640,3 +640,16 @@ def test_a_kick_at_nothing_at_speed_ends_on_the_ground():
         assert m.moves[7][0] == "air_kick" and m.commands[7] == Hold()
         run(m, 0.6)
         assert 7 not in m.moves and (7 in m.down) == down
+
+
+def test_a_tackle_ends_the_same_whichever_team_makes_it():
+    outcomes = []
+    for carrier, taker in ((18, 7), (7, 18)):
+        m = in_play()
+        c = on_the_ball(m, carrier, 0.0, 0.0)
+        c.vx = 6.0
+        tackler(m, taker, 0.88, 0.5)
+        m.step()
+        snapshot = {p["id"]: p for p in m.snapshot()["players"]}
+        outcomes.append((kinds(m.drain_events()), snapshot[taker].get("move"), m.owner == carrier))
+    assert outcomes[0] == outcomes[1]

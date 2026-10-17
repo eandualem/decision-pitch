@@ -316,8 +316,11 @@ class Match:
             if self.t >= until:
                 del self.down[pid]
 
+        # tackles are judged on where everyone is as the step begins, before anyone moves,
+        # so the outcome does not depend on which team moves first
+        went_in = {p.id for p in list(self.players) if self._goes_in(p)}
         for p in self.players:
-            self._move(p)
+            self._move(p, went_in)
         self._judge_challenge()
         if self.phase == "full_time":
             return
@@ -353,7 +356,14 @@ class Match:
         if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time") and not waiting:
             self._end_half()
 
-    def _move(self, p: Player) -> None:
+    def _goes_in(self, p: Player) -> bool:
+        """Whether `p`, told to tackle and free to move, goes in for the ball now."""
+        command = self.commands[p.id]
+        if not isinstance(command, Tackle) or p.id in self.down or p.id in self.moves:
+            return False
+        return self._out_of_place(p) <= OUT_OF_PLACE and self._tackle(p, command)
+
+    def _move(self, p: Player, went_in: set[int]) -> None:
         command = self.commands[p.id]
         if p.id in self.down or p.id in self.moves:
             brake(p, BRAKE)  # swinging, stumbling, sliding or on the ground: it slows to a stop
@@ -362,9 +372,10 @@ class Match:
             step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
         elif isinstance(command, AirKick):
             self._air_kick(p)
+        elif isinstance(command, Tackle) and p.id in went_in:
+            brake(p, BRAKE)  # its standing tackle is made
         elif isinstance(command, Tackle):
-            if not self._tackle(p, command):
-                step_player(p, command.x, command.y, command.speed)
+            step_player(p, command.x, command.y, command.speed)
         elif isinstance(command, MoveTo):
             dive = self._dives(p)
             if dive:
