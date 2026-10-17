@@ -4,7 +4,7 @@ import pytest
 
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
-from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, AirKick, Hold, KickTo, Match, MoveTo, Tackle
+from decision_pitch.match import ADVANTAGE, DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, AirKick, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import STEP, TOP_SPEED
 
 
@@ -42,6 +42,12 @@ def challenge(m, pid, x, y, vx, vy):
     return q
 
 
+def no_advantage(m):
+    """Play stops at every foul, as when the fouled team cannot play on."""
+    m._plays_on = lambda team: False
+    return m
+
+
 def kinds(events):
     return [e["kind"] for e in events]
 
@@ -54,7 +60,7 @@ def on_pitch(m):
 
 
 def test_running_into_the_ball_carrier_from_behind_is_a_foul_and_a_free_kick():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -66,7 +72,7 @@ def test_running_into_the_ball_carrier_from_behind_is_a_foul_and_a_free_kick():
 
 
 def test_running_into_the_carrier_from_the_side_without_reaching_the_ball_is_a_foul():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, 0.0, 0.75, 0.0, -5.0)
     m.step()
@@ -110,7 +116,7 @@ def test_a_presser_meets_a_ball_coming_at_it_as_fast_as_it_runs():
 
 
 def test_a_free_kick_waits_before_it_can_be_taken():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -123,7 +129,7 @@ def test_a_free_kick_waits_before_it_can_be_taken():
 
 
 def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     offender = challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -141,7 +147,7 @@ def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
 
 
 def test_a_free_kick_near_goal_gets_a_wall_of_three_beyond_the_required_distance():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 25.0, 0.0)
     challenge(m, 15, 24.3, 0.0, 5.0, 0.0)
     m.step()
@@ -261,7 +267,7 @@ def test_the_bot_shoots_a_penalty():
 
 
 def test_a_foul_that_stops_a_promising_attack_is_a_yellow_card():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 30.0, 0.0)
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
     m.step()
@@ -272,7 +278,7 @@ def test_a_foul_that_stops_a_promising_attack_is_a_yellow_card():
 
 
 def test_a_second_yellow_card_is_a_red_and_the_player_leaves_the_pitch():
-    m = in_play()
+    m = no_advantage(in_play())
     m.yellows[15] = 1
     on_the_ball(m, 10, 30.0, 0.0)
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
@@ -756,3 +762,88 @@ def test_the_referees_count_stops_when_the_half_ends_on_a_held_ball():
     m.elapsed = m.half_length - 0.05
     run(m, 0.2)
     assert m.phase == "half_time" and "held" not in m.snapshot()["ball"]
+
+
+# -- advantage, fouls off the ball, handball and added time ------------------------------------
+
+
+def test_play_goes_on_when_the_fouled_team_keeps_the_ball_in_their_attacking_half():
+    m = in_play()
+    on_the_ball(m, 10, 10.0, 0.0)
+    challenge(m, 15, 9.3, 0.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "advantage"] and m.phase == "play"
+    m.command(15, Hold())  # it stops chasing
+    m.player(15).vx = 0.0
+    run(m, ADVANTAGE + 0.1)
+    assert m.phase == "play" and m.advantage is None  # it came
+
+
+def test_play_comes_back_for_the_free_kick_if_the_opponents_win_the_ball():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)  # within 27 m of goal: stopping it earns a yellow
+    challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
+    m.step()
+    m.drain_events()
+    m.player(10).x = 0.0  # gone, and an opponent at the ball
+    m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+
+
+def test_running_into_an_opponent_off_the_ball_from_behind_is_a_foul():
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(8.0, 5.0)  # contested: within 5 m
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "free_kick"] and m.down[9][0] == "front"
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    challenge(m, 17, 5.7, 5.0, -5.0, 0.0)  # from the front: jostling, not a foul
+    m.step()
+    assert m.drain_events() == []
+
+
+@pytest.mark.parametrize(("side", "last", "handball"), [(0.55, None, True), (0.1, None, False), (0.55, (9.0, 0.0), False)])
+def test_a_ball_on_an_arm_away_from_the_body_is_handball(side, last, handball):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, side, 1.3
+    if last:  # played from just beside it
+        m.touches.append({"player": 7, "kind": "kick", "t": 0.0, "x": last[0], "y": last[1], "z": 1.3})
+    m.step()
+    events = kinds(m.drain_events())
+    if handball:
+        assert events == ["handball", "free_kick"] and m.restart_team == 0
+    else:
+        assert events == [] and touch(m, 15) == "deflect"
+
+
+def test_running_into_an_opponent_off_the_ball_away_from_the_ball_is_not_judged():
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(30.0, 5.0)
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)
+    m.step()
+    assert m.drain_events() == []
+
+
+def test_time_lost_in_a_half_is_added_on_and_the_clock_runs_on():
+    m = in_play()
+    m._event("goal", 0)
+    m._event("substitution", 1)
+    m.drain_events()
+    assert m.lost == 1.5
+    m.elapsed = m.half_length - STEP / 2
+    m.step()
+    assert [(e["kind"], e.get("minutes")) for e in m.drain_events()] == [("added_time", 2)]
+    m.elapsed = m.half_length * (1 + 1 / 45)
+    assert m.clock() == "45+01:00"
+    run(m, m.half_length / 45 + 0.1)
+    assert m.phase == "half_time"

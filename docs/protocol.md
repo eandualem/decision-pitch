@@ -71,7 +71,8 @@ The state of play, about 30 times a second.
 }
 ```
 
-- `t`: match seconds since kick-off; `period`: 1 or 2.
+- `t`: match seconds since kick-off; `period`: 1 or 2. `clock`: the match
+  clock in minutes and seconds, as `45+01:20` or `90+00:35` in added time.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
   `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
@@ -138,6 +139,9 @@ restart, unless the list says otherwise, and is `null` for `half_time` and
 | `offside` | `player`: the player caught offside. `team` is the defending team |
 | `second_touch` | `player`: the taker of a restart who touched the ball again before anyone else. `team` is the other team |
 | `held` | `player`: the goalkeeper that held the ball for more than eight seconds. `team` is the other team |
+| `advantage` | `player`: the player fouled. `team` is its team, which plays on |
+| `handball` | `player`: the player the ball struck. `team` is the other team |
+| `added_time` | `minutes`: the minutes added to the half. `team` is `null` |
 | `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
 | `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
 | `half_time`, `full_time` | `score`: the score at the whistle, home first, as in the snapshot |
