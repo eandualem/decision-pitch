@@ -873,6 +873,15 @@ def test_touching_a_player_from_behind_at_its_own_pace_is_not_running_into_it(ca
     assert m.drain_events() == []
 
 
+def test_a_carrier_backing_into_an_opponent_standing_still_is_not_fouled_by_it():
+    m = no_advantage(in_play())
+    c = on_the_ball(m, 10, 45.0, 0.0)
+    c.vx = -3.0
+    challenge(m, 15, 44.25, 0.0, 0.0, 0.0)
+    m.step()
+    assert m.drain_events() == []
+
+
 @pytest.mark.parametrize(("side", "last", "handball"), [(0.55, None, True), (0.1, None, False), (0.55, (9.0, 0.0), False)])
 def test_a_ball_on_an_arm_away_from_the_body_is_handball(side, last, handball):
     m = in_play()

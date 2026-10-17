@@ -1189,13 +1189,15 @@ set up in a test and checked.
 
 - **Fouls.** Only a challenge on the player with the ball is judged: a
   tackle, as below, or running into the carrier. An opponent who runs into
-  the ball carrier (their discs touch while the two close on each other
-  faster than 2 m/s) commits a foul if it came from behind the carrier, or if
-  it could not reach the ball. An opponent who reaches the ball from the
-  front or side wins it fairly. The closing speed is the opponent's speed
-  towards the carrier less the carrier's own speed the same way, as for a
-  tackle, so a defender running beside a player at its pace does not run
-  into it by touching it.
+  the ball carrier (their discs touch while it runs towards the carrier, and
+  the two close on each other, faster than 2 m/s) commits a foul if it came
+  from behind the carrier, or if it could not reach the ball. An opponent who
+  reaches the ball from the front or side wins it fairly. Both speeds count:
+  the closing speed, the opponent's speed towards the carrier less the
+  carrier's own speed the same way, as for a tackle, so a defender running
+  beside a player at its pace does not run into it by touching it; and the
+  opponent's own speed, so a carrier backing into an opponent standing still
+  is not fouled by it.
 - **Tackles.** A player can go in for the ball an opponent has with a
   standing tackle or a slide, when it can play the ball (not still recovering
   from a kick, a miss or a fall). How each ends follows from where the
@@ -1223,7 +1225,7 @@ set up in a test and checked.
     forwards if it was fouled from behind, sideways otherwise.
 - **Fouls off the ball.** A player that runs into an opponent without the
   ball within 5 m of the ball, from behind it (more than 120° from where it
-  faces) and closing on it faster than 4 m/s, fouls it: a direct free kick, or a penalty in the offender's own
+  faces), running at it and closing on it faster than 4 m/s, fouls it: a direct free kick, or a penalty in the offender's own
   area, with the same cards as a foul on the ball. The fouled player goes
   down. Running into an opponent from the front or side off the ball is
   jostling for position and is not judged. Judged anywhere on the pitch at
@@ -1242,9 +1244,10 @@ set up in a test and checked.
   and 52 red cards in its 380 matches, 0.14 a game
   ([season statistics](https://extratime.com/stats/2129/2287/premier-league/)).
   With the closing speed and the card rules below, the same matches have
-  0.33 penalties and 0.12 red cards. Fouls fall from 7.4 to 2.8 a match, so
-  there are fewer penalties and free kicks to score from: goals fall from
-  1.15 to 0.79 a match, 0.25 of it penalties no longer given.
+  0.29 penalties and 0.10 red cards. Fouls fall from 7.4 to 2.3 a match and
+  stoppages from 20 to 17, so there are fewer penalties and free kicks to
+  score from: goals fall from 1.15 to 0.96 a match, while goals from
+  penalties fall from 0.50 to 0.21.
 - **Handball.** Players are discs with no arms, so handball is judged from
   where the ball meets a player. A loose ball between 0.9 m and 1.7 m off the
   ground that passes within 0.6 m of an outfield player's centre (or a

@@ -90,7 +90,7 @@ RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick":
                     "free_kick": 9.15, "penalty": 9.15}  # fmt: skip
 RESTARTS = tuple(RESTART_DISTANCE)
 NO_OFFSIDE = ("throw_in", "goal_kick", "corner")  # restarts no one can be offside from
-FOUL_SPEED = 2.0  # m/s a challenger closes on the ball carrier at for its challenge to be judged
+FOUL_SPEED = 2.0  # m/s a challenger runs at and closes on the ball carrier at for its challenge to be judged
 BEHIND = -0.5  # cosine: a challenger more than 120° from where the carrier faces is behind it
 PROMISING_ATTACK = 27.0  # m from goal within which a foul stops a promising attack: a yellow card
 GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-scoring chance
@@ -123,7 +123,7 @@ TOO_CLOSE = 2.0  # m from where it was last played within which a ball on the ar
 GOAL_LOOK = 3.0  # s of a ball's path followed to judge whether it is going into the goal
 LOOK_STEP = 0.02  # s between the points of that path
 OFF_BALL_RANGE = 5.0  # m from the ball within which running into a player off the ball is judged
-OFF_BALL_SPEED = 4.0  # m/s it must close on it at
+OFF_BALL_SPEED = 4.0  # m/s it must run at and close on it at
 LOST = {"goal": 1.0, "penalty": 1.0, "substitution": 0.5, "yellow": 0.5, "red": 0.5}  # match minutes
 
 # 4-4-2 for a team attacking towards +x, in its own half
@@ -744,7 +744,8 @@ class Match:
                     continue
                 if self.advantage is not None and (q.id, r.id) == self.advantage[1:3]:
                     continue  # the contact being played on from
-                towards = -((q.vx - r.vx) * dx + (q.vy - r.vy) * dy) / dist  # how fast they close
+                own = -(q.vx * dx + q.vy * dy) / dist  # how fast q runs at r
+                towards = min(own, own + (r.vx * dx + r.vy * dy) / dist)  # and how fast they close
                 behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
                 if not carrier and (towards <= OFF_BALL_SPEED or not self._near_ball(r)):
                     continue
