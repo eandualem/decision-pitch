@@ -663,6 +663,12 @@ class Match:
         if self.since_restart >= (KICKOFF_WAIT if self.phase == "kickoff" else RETREAT_WAIT):
             self._keep_distance(everyone=True)  # anyone still out of place is placed
             return True
+        if self.phase == "goal_kick":
+            # taken quickly: an opponent still leaving the penalty area may stay, as the laws
+            # allow one that had no time to leave, once none is near enough to the ball to
+            # challenge for it (docs/decisions.md, section 2)
+            b, near = self.ball, RESTART_DISTANCE["goal_kick"]
+            return all(math.hypot(q.x - b.x, q.y - b.y) >= near for q in self.players if q.team != self.restart_team)
         return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
