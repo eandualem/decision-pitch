@@ -108,6 +108,11 @@ around it. `figure.json` describes each clip for the page.
   `shot`, `cross`, `control`, `tackle` (the slide), `tackle_standing`,
   `header` and `throw_in`; the goalkeeper's `keeper_*`; `celebrate` and the
   touchline gestures.
+- **Mishaps**: `air_kick`, `stumble` (planted for a root running at 5 m/s,
+  `speeds`), `tackle_missed`, `tackle_L` (the slide on the left boot),
+  `fall_front`, `fall_back`, `fall_side_L`, `fall_side_R`, `get_up_front` and
+  `get_up_back`. The falls end lying in the poses the get-ups start from
+  (`PRONE` and `SUPINE`); see `docs/decisions.md`, "Mishaps".
 - **Transitions** keep a planted foot still on the grass while the engine
   turns and moves the root: `turn_L`/`turn_R` (`turn` degrees, the root
   turning evenly over the `turning` window), `cut_L`/`cut_R` (`turn`, the
