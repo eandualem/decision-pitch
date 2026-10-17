@@ -86,7 +86,8 @@ The state of play, about 30 times a second.
   knocks the ball a few metres ahead to run on to it), `throw` (the kick that
   takes a throw-in),
   `control` (a player takes a loose ball, or a teammate's, in play), `tackle`
-  (a player takes the ball from an opponent who has it, in play), `deflect`
+  (a player takes the ball from an opponent who has it, in play), `poke` (a
+  tackle knocks the ball loose from the opponent who has it), `deflect`
   (the ball comes too fast to control and bounces off the player), `save`
   (such a deflection off the goalkeeper defending the goal the ball is at, in
   its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
@@ -95,8 +96,18 @@ The state of play, about 30 times a second.
 - `heading`: the way the player faces, in radians anticlockwise from +x. It
   can differ from the way it moves: a player keeping its place faces the
   ball while it side-steps, backs off or moves diagonally.
-- `action`: the engine command the player is carrying out: `hold`, `move` or
-  `kick`. The decision model's own choice is in `decision` messages.
+- `action`: the engine command the player is carrying out: `hold`, `move`,
+  `kick`, `tackle` (running in to tackle) or `airkick` (a kick with no ball to
+  kick). The decision model's own choice is in `decision` messages.
+- `move`: on a player, a movement it makes without the ball, while it lasts:
+  `air_kick` (a kick that meets nothing), `stumble` (a missed standing
+  tackle) or `slide` (a slide tackle, from going in to stopping); absent
+  otherwise.
+- `down`: on a player, `{"way": "front" | "back" | "side", "until": T}` while
+  it is on the ground or getting up, where `T` is the match time it is back
+  on its feet and can play again; absent otherwise. A player goes down when
+  it is fouled, after a slide tackle, and when it kicks at nothing at speed
+  (docs/decisions.md, sections 4 and 8).
 - `dive`: on a player, `true` while it is a goalkeeper diving across its goal
   at a ball heading in (docs/decisions.md, section 2); absent otherwise.
 - `players`: only players on the pitch; a substituted or sent-off player
@@ -143,8 +154,12 @@ send none.
 A failed answer has `"error"` in place of `"action"`. `ms` is the time from
 asking to the answer, including any wait for a local model's turn. `action`
 is one of `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
-`cross`, `shoot`, `clear`, `press`, `tackle`, `hold`, `support`, `mark` and
-`run_behind` (see `docs/decisions.md`, section 4).
+`cross`, `shoot`, `clear`, `press`, `tackle`, `slide_tackle`, `jockey`,
+`hold`, `support`, `mark` and `run_behind` (see `docs/decisions.md`, section
+4). `note`, when present, says the answer came too late for the moment it was
+asked about: `"no ball"` (an action on the ball, carried out without it) or
+`"already played"` (the player passed, shot or cleared the ball itself before
+the answer came, so it holds its place).
 
 ### `manager`
 

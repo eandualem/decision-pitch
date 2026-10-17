@@ -93,7 +93,8 @@ export function createOverlay(teams) {
         if (!row) return;
         row.decided = true;
         row.model.textContent = message.model ?? 'Built-in bot';
-        row.action.textContent = message.error ? 'Answer failed' : (message.action ?? 'Waiting');
+        const action = message.action ?? 'Waiting';
+        row.action.textContent = message.error ? 'Answer failed' : (message.note ? `${action} · ${message.note}` : action);
         row.action.title = message.error ? String(message.error) : '';
         row.latency.textContent = Number.isFinite(message.ms) ? `${Math.round(message.ms)} ms` : '—';
       } else if (message.type !== 'manager' && (message.kind === 'substitution' || message.type === 'substitution')) {

@@ -203,7 +203,7 @@ story the game tells.
 
 ### The action set and the state text
 
-A model chooses one of fifteen actions, each described to it in a few words,
+A model chooses one of seventeen actions, each described to it in a few words,
 and is asked only the ones that apply: one set on the ball, one off it, and
 one at a restart. Each action that gains something has a downside the engine
 plays out, the same for both teams.
@@ -219,8 +219,10 @@ plays out, the same for both teams.
 | `cross` | on the ball wide in the final third, and the taker there | lifts the ball into the penalty area, to the teammate there with the most room or the penalty mark | a goalkeeper reaches higher, and there are no headers yet |
 | `shoot` | on the ball within 30 m of goal, and the taker of a penalty or a free kick in range | shoots inside the post further from the goalkeeper; from 16 m or more with no opponent within 2.5 m, or from 24 m or more, plays the ball as the built-in bot does (dribbles closer, passes when pressed out of range) | |
 | `clear` | on the ball, and the taker | kicks the ball long upfield | |
-| `press` | off the ball | runs at the ball at full speed to win it or collect it, coming round a carrier rather than into its back; supports a teammate who has it | |
-| `tackle` | off the ball | runs straight at the ball to win it now, from any side | running into the carrier from behind, or without reaching the ball, is a foul, with any card it earns |
+| `press` | off the ball, unless a teammate has it | runs at the ball at full speed to win it or collect it, coming round a carrier rather than into its back, and goes in with a standing tackle once it is in reach from the front or side (section 8) | a tackle can miss |
+| `tackle` | off the ball, while an opponent has it | runs straight at the ball and goes in with a standing tackle as soon as the ball is in reach, from any side (section 8) | a miss leaves it stumbling; from behind, or missing the ball and taking the player, it is a foul, with any card it earns |
+| `slide_tackle` | off the ball, an opponent on the ball within 15 m | runs at the ball and slides in from up to 2.5 m away (section 8) | a miss leaves it on the ground for about 1.5 s; from behind it is a foul and a yellow card |
+| `jockey` | off the ball, an opponent on the ball within 15 m | backs off facing the carrier, 2.5 m from it between the ball and its own goal, and takes a loose touch it reaches first | it gives ground and does not go in for the ball |
 | `hold` | off the ball, and at a restart | keeps its place in the team's shape (a goalkeeper guards its goal) | |
 | `support` | off the ball, and at a restart | moves into space ahead to offer a pass | |
 | `mark` | off the ball, and at a restart | stays goal-side of the nearest opponent | |
@@ -245,27 +247,52 @@ model often repeats the action its state says it is doing (Laya repeated its
 previous answer in 98% of a recorded match). So a repeated answer still plays
 sensible football, the same rules for both teams:
 
-- **On the ball**, `press`, `tackle`, `hold`, `support`, `mark` and
-  `run_behind` keep playing it as the built-in bot does (dribble, pass when pressed, shoot in range), instead
-  of standing on it. So does `shoot` out of range, instead of dribbling into
-  a tackle, and `shoot` from 16-24 m with no opponent within 2.5 m, which
-  carries the ball closer before shooting, as the bot does. Laya answers
-  `shoot` almost every time; with every outfielder answering it, the ball
-  changed hands by a tackle about 590 times a bot match of two 180 s halves,
-  and now about 16 (bots alone: 10), with passes made under pressure again.
+- **On the ball**, an answer for off the ball (`press`, `tackle`,
+  `slide_tackle`, `jockey`, `hold`, `support`, `mark` and `run_behind`) keeps
+  playing the ball as the built-in bot does (dribble, pass when pressed, shoot
+  in range) until the next answer, instead of standing on it. Such an answer
+  is not the model's mistake: the player was off the ball when it was asked
+  and came to have it, often through the loose-ball rule below. Carried out
+  as given, over 16 headless matches with late answers as Laya gives them,
+  the ball changed hands by a tackle 108 times a match instead of 43, shots
+  fell from 12.6 to 6.0 and fouls rose from 2.0 to 9.2.
+- **On the ball**, `shoot` out of range plays the ball as the built-in bot
+  does (dribble, pass when pressed), instead of dribbling into a tackle, and
+  `shoot` from 16-24 m with no opponent within 2.5 m carries the ball closer
+  before shooting, as the bot does. Laya answers `shoot` almost every time;
+  with every outfielder answering it, the ball changed hands by a tackle about
+  590 times a bot match of two 180 s halves, and now about 16 (bots alone:
+  10), with passes made under pressure again.
 - **An action that needs a moment that has passed** falls back to the
   nearest one that applies: `take_on` with no opponent ahead within 10 m
   dribbles; `shield` with no opponent within 5 m plays as the bot does;
   `through_ball` with no teammate ahead passes; `cross` from inside carries
   the ball towards the touchline and their goal line until it is wide.
-- **Off the ball**, `dribble`, `take_on`, `shield`, `pass`, `through_ball`,
-  `cross`, `shoot` and `clear` play as the built-in bot does: the one player
-  who can reach the ball first goes for it and the others keep their places,
-  instead of every one of them running at it. `sprint` runs at the ball at
-  full speed, as `press` does, so a sprinting dribbler runs on to its own
-  knock, and chases the ball if an opponent takes it. A player keeping its
-  place (`hold`, `support`, `mark` or `run_behind`) still goes for a loose
-  ball it can reach first, as a player keeping its shape collects a ball
+- **A late answer is carried out as given**, so the screen shows what each
+  model decided, mistakes included. A model answers about the moment it was
+  asked; by the time the answer arrives the player may have lost the ball,
+  or won it:
+  - A kick (`pass`, `through_ball`, `cross`, `shoot`, `clear`) while another
+    player has the ball is a kick at nothing where the player stands. The
+    swing takes 0.6 s, in which it cannot play the ball; then it holds its
+    place until its next answer. A player that swings at 6 m/s or more loses
+    its footing and goes down for 1.5 s more. With the ball loose, the player
+    runs at it to kick it, as a kick command does.
+  - `dribble`, `take_on` or `shield` while another player has the ball is a
+    run to where it would have dribbled, without the ball; with the ball
+    loose, it runs at the ball. `sprint` runs at the ball at full speed, as
+    `press` does, so a sprinting dribbler runs on to its own knock, and
+    chases the ball if an opponent takes it.
+  - An answer to a question asked while the player had the ball, arriving
+    after the player has itself passed, shot or cleared it, was overtaken by
+    its own kick, not by the match: the player holds its place. Without this,
+    nearly every kick would be followed by a kick at nothing, because the next
+    question is asked as soon as a kick is decided, before it is made.
+  - The `decision` message tells the page when an answer is carried out
+    without the ball or was overtaken, and the overlay shows it.
+- **Off the ball**, a player keeping its place (`hold`, `support`, `mark` or
+  `run_behind`) still goes for a loose ball it can reach first, as a player
+  keeping its shape collects a ball
   that comes to it; pressing an opponent on the ball stays a choice. Asked
   from these sets in a keyless match of two 90 s halves, Laya answered `hold`
   64% of 1,848 times, `run_behind` 23% (nearly every time it was offered),
@@ -1025,11 +1052,37 @@ third-party model, motion capture, texture or asset pack is used.
 simulates, by fixed rules that are the same for both teams, so each call can be
 set up in a test and checked. Every foul stops play: there is no advantage.
 
-- **Fouls.** Only a challenge on the player with the ball is judged. An
-  opponent who runs into the ball carrier (their discs touch while it moves
-  towards the carrier faster than 2 m/s) commits a foul if it came from behind
-  the carrier, or if it could not reach the ball. An opponent who reaches the
-  ball from the front or side wins it fairly.
+- **Fouls.** Only a challenge on the player with the ball is judged: a
+  tackle, as below, or running into the carrier. An opponent who runs into
+  the ball carrier (their discs touch while it moves towards the carrier
+  faster than 2 m/s) commits a foul if it came from behind the carrier, or if
+  it could not reach the ball. An opponent who reaches the ball from the
+  front or side wins it fairly.
+- **Tackles.** A player can go in for the ball an opponent has with a
+  standing tackle or a slide, when it can play the ball (not still recovering
+  from a kick, a miss or a fall). How each ends follows from where the
+  players are and how they move, so a test can set up each outcome:
+  - A **standing tackle** goes in once the ball is within 1.2 m of the
+    tackler. `tackle` goes in from any side; `press`, and the built-in bot
+    pressing, only from the front or side. From behind (more than 120° from
+    where the carrier faces) it is a foul. Otherwise it wins the ball if the
+    ball will still be within reach 0.25 s later, with both players moving
+    as they are: the tackler takes it if it closes on the carrier at 3 m/s
+    or less, and pokes it 4 m/s away from the carrier if faster. If the ball
+    will be out of reach but the two players would then touch, it took the
+    player and not the ball: a foul. Otherwise it misses: the tackler
+    stumbles, and cannot play the ball for 0.5 s while the carrier goes on.
+  - A **slide tackle** goes in from up to 2.5 m; the built-in bot slides in,
+    from the front or side, at a carrier within 25 m of its goal. The tackler slides 0.5 s
+    along the grass at where the ball will be, then is on the ground until
+    1.5 s after it went in. From behind it is a foul and a yellow card for a
+    reckless challenge. Otherwise it wins the ball if the ball will be
+    within 2.5 m of the tackler 0.5 s later, poking it 5 m/s on along the
+    slide; if the ball will be out of reach but the carrier will not, it
+    took the player: a foul. Otherwise it misses.
+  - A carrier who loses the ball cannot play it for 0.4 s, so the ball does
+    not change hands straight back. A fouled player goes down for 1.2 s:
+    forwards if it was fouled from behind, sideways otherwise.
 - **Free kicks and penalties.** The fouled team takes a free kick where the
   foul happened, after a pause of 1.5 s, with opponents held 9.15 m from the
   ball; within 32 m of its goal, the defending team's three nearest outfield
@@ -1050,6 +1103,7 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   the goal it attacks) is a yellow card. A foul that denies an obvious
   goal-scoring opportunity (the carrier within 25 m of goal with no outfield
   defender other than the offender nearer the goal line) is a red card. A
+  slide tackle from behind is a yellow card wherever it is. A
   second yellow is a red. A sent-off player leaves the pitch; if it was the
   goalkeeper, the teammate nearest its own goal goes in goal. A team reduced
   below seven players ends the match.
