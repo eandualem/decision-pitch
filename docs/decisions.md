@@ -471,8 +471,9 @@ and overlay ES modules, with one entry point owning the WebSocket and render
 loop. Each module disposes its scene objects, textures and listeners when a new
 hello resets the match. Match coordinates map to `(x, z, -y)` in the scene.
 
-The stadium uses striped grass, regulation pitch markings, netted goals,
-stands and floodlights built from shared geometry and materials. Shirt numbers
+The stadium uses grass with mowing stripes, regulation pitch markings, netted
+goals, stands on all four sides and floodlights built from shared geometry and
+materials (see "Real grass and the stands behind the goals" below). Shirt numbers
 are drawn into canvas textures using the system font. Keepers use the supplied
 keeper colour. Players and managers are human figures made in Blender, with
 animation clips, and the ball is drawn at its real size (see "Human figures
@@ -936,6 +937,71 @@ fit: a 6 m/s cut slowed to the 2.5 to 4 m/s most cuts start at plays in slow
 motion and its turn cannot match the engine's, and no fixed playback matches
 a stop at a different deceleration. A cut on any fast turn of the body at a
 run: cuts took 13% of all stances live, half of them sliding.
+
+### Real grass and the stands behind the goals
+
+**Choice.** The pitch and its surround are one grass surface drawn by a single
+material, built in the page from generated textures, with no photograph or
+third-party texture:
+
+- **Turf.** A tileable square metre of turf is generated once: tens of
+  thousands of short blades seen from above, each its own shade of green,
+  over darker thatch, in clumps of slightly different colour and height. Its
+  colour, the height of each blade and a normal map made from those heights
+  are sampled at two scales, with a low-frequency variation over tens of
+  metres, so no repeat shows from the broadcast camera.
+- **Mowing stripes.** Twenty bands across the pitch, as a mower cutting from
+  touchline to touchline leaves them: the blades in alternate bands lean
+  towards one touchline or the other. A band is lighter where the viewer
+  looks the way its blades lean and darker where it looks into them, so the
+  stripes are strongest from the main camera, fade as the camera looks along
+  them, and swap shade from the opposite side, as on a real pitch. The lean
+  also tilts the normal slightly, so the sun picks the bands out too.
+- **Light.** The grass is lit with a physically based material, rough and
+  non-metallic, so it takes a soft sheen at a grazing angle under the
+  floodlights without a plastic shine.
+- **Depth near the camera.** Within 10 m of the camera (the close-ups,
+  cutaways and managers' shots), the material traces each pixel's view ray
+  down through the blades' heights, in eight steps over a turf 3 cm deep, and
+  shades the first blade it meets (parallax occlusion). Blades in front hide
+  those behind, the tips lean with their band, and deeper in the turf is in
+  shade. The depth fades out from 4 m to 10 m, so the wide shot never pays
+  for it.
+- **Wear.** Goalmouths, penalty spots and the centre spot are lightly worn:
+  a patchy, drier and shorter turf.
+- **Painted lines.** The markings, including the technical areas, are kept
+  as one distance field: each texel holds its distance from the nearest
+  painted edge. The grass material paints them into the turf, slightly
+  mottled by the blades under the paint, so they read as paint on grass
+  rather than strips over it. Each pixel is painted by the share of its
+  footprint across the line that the line covers, so a distant line thins
+  and fades rather than breaking up. The distance field keeps the edges sharp
+  in a close-up at a fraction of the memory a painted texture would need.
+- **Stands.** The ends behind the goals have stands like the side stands,
+  with the same tiers and seats in the same instanced meshes, so they add no
+  draw call. The low wall in front of each stand stays.
+
+The textures are generated in the page as the first match is built and kept
+for the next one. The grass is one mesh, in place of the striped turf, the
+surround and the painted ribbons, so it saves two draw calls. Measured on an
+Apple M5 at 1600 by 900, it adds about 1 ms of GPU time per frame to the wide
+shot and 1.5 ms to a close-up at a pixel ratio of 1, and 3 ms to a close-up
+at the page's highest pixel ratio of 1.5, where the whole frame takes about
+6 ms.
+
+**Why.** Everything else on screen now looks real, so a flat, evenly coloured
+pitch was what gave the scene away. Real stripes come from the light caught by
+leaning blades, not from paint, so they must change with the angle they are
+seen from. A procedural turf keeps the project free of third-party assets.
+
+**Rejected.** Instanced blades: they would need tens of thousands of blades per
+square metre to match real turf, and fewer read as sparse. Stacked shells of
+turf near the camera: they look much the same, but each pixel is shaded once
+per shell, which added 2.4 to 5.7 ms of GPU time to a close-up at a pixel
+ratio of 1. A painted line texture over the whole pitch: it would need about
+32 million texels for sharp edges close up. Mipmaps of the distance field and
+its own screen derivatives for anti-aliasing: averaged distances, and pixels
+straddling a line's centre, broke distant lines into dashes.
 
 ## 7. References and licences
 
