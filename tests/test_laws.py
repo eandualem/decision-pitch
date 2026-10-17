@@ -740,3 +740,19 @@ def test_a_goalkeeper_holding_the_ball_more_than_eight_seconds_concedes_a_corner
     run(m, 0.3)
     assert kinds(m.drain_events())[-2:] == ["held", "corner"]
     assert m.phase == "corner" and m.restart_team == 1 and (m.ball.x, m.ball.y) == (-52.5, 34.0)
+
+
+def test_a_goalkeeper_that_took_a_back_pass_with_its_feet_still_may_not_handle_it():
+    m = in_play()
+    keeper = keeper_with_ball_coming(m, 0.5, passed=0)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "control"
+    assert not m._handles(keeper)  # until another player touches the ball
+
+
+def test_the_referees_count_stops_when_the_half_ends_on_a_held_ball():
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=None)
+    m.elapsed = m.half_length - 0.05
+    run(m, 0.2)
+    assert m.phase == "half_time" and "held" not in m.snapshot()["ball"]

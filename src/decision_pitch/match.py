@@ -668,7 +668,9 @@ class Match:
             self.restart_kicker = None
         if p.id != self.holder:
             self.holder = None
-        self.direct = self.passed = None
+        if not (p.position == "GK" and p.team == self.passed):
+            self.passed = None  # until another player touches it, its keeper still may not handle it
+        self.direct = None
         b = self.ball
         touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
                  "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
@@ -945,7 +947,7 @@ class Match:
         return self._away(p, x, y, RESTART_DISTANCE["penalty"] + margin)
 
     def _end_half(self) -> None:
-        self.owner = None
+        self.owner = self.holder = None
         if self.period == 1:
             self.phase, self.since_restart = "half_time", 0.0
             self._event("half_time", None)
