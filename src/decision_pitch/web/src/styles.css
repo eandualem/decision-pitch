@@ -24,8 +24,11 @@ body { -webkit-user-select: none; user-select: none; }
 .player-card { position: absolute; width: 15px; height: 22px; border: 1px solid #ffffffb0; border-radius: 2px; box-shadow: 0 3px 8px #0009; transform: translate(-50%, -100%) rotate(-8deg); }
 .player-card.yellow { background: #ffe140; }
 .player-card.red { background: #f44446; }
-.overlay-toggle { position: fixed; right: 24px; bottom: 16px; padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
-.overlay-toggle:hover, .overlay-toggle[aria-expanded="true"] { background: #d6ff63; color: #15221b; }
+.overlay-toggle, .play-again { padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.overlay-toggle { position: fixed; right: 24px; bottom: 16px; }
+.overlay-toggle:hover, .overlay-toggle[aria-expanded="true"], .play-again:hover { background: #d6ff63; color: #15221b; }
+.play-again { margin-top: 12px; pointer-events: auto; }
+.moment[data-kind="full_time"] { max-width: calc(100vw - 48px); }
 button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
 .decision-overlay { position: fixed; z-index: 2; right: 24px; top: 90px; bottom: 72px; width: min(760px, calc(100vw - 48px)); overflow: auto; overscroll-behavior: contain; padding: 24px; background: #101d21f5; border: 1px solid #ffffff20; border-radius: 6px; box-shadow: 0 20px 80px #0007; user-select: text; }
 .overlay-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
@@ -61,4 +64,5 @@ h1, h2, h3, p { margin: 0; }
   .overlay-header { display: block; }
   .overlay-header p { margin-top: 6px; }
   .moment { bottom: 3%; left: 16px; padding: 8px 16px 10px; }
+  .moment[data-kind="full_time"] { bottom: 76px; max-width: calc(100vw - 32px); }
 }

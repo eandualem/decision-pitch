@@ -544,6 +544,16 @@ This keeps the engine authoritative and the page usable offline, while shared
 geometry, capped pixel density and one shadow-casting light limit GPU work for
 smooth laptop recording. It replaces the scaffold's cylinders and fixed camera.
 
+### Full-time result and another match
+
+At full time, the existing lower-third banner stays visible with “Full-time”,
+the team names and final score, and one “Play again” button. It uses the same
+dark panel, lime accent and typography as the scorebar and decision toggle.
+The final snapshot also shows it, so a delayed full-time event cannot leave
+an apparently frozen match without its result. Old event banners cannot
+replace it. “Play again” reloads the page, which closes the old connection
+and starts a fresh match with the server's same models and settings.
+
 ### Managers on the touchline, smooth motion and contact
 
 **Managers.** Each team's manager stands in a technical area on the touchline

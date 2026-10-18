@@ -21,8 +21,9 @@ const source = readFileSync(new URL('../../src/decision_pitch/web/src/moments.js
   .replace(/^import .*;$/gm, '').replace('export function', 'function');
 
 function setup() {
+  let reloads = 0;
   const document = { body: new Element(), createElement: () => new Element() };
-  const context = { THREE, document };
+  const context = { THREE, document, location: { reload: () => reloads++ } };
   vm.createContext(context);
   vm.runInContext(source, context);
   const moments = context.createMoments(null, [
@@ -36,22 +37,47 @@ function setup() {
   camera.lookAt(0, 0, 0);
   camera.updateMatrixWorld();
   return {
-    moments, root, banner, document,
+    moments, root, banner, document, reloads: () => reloads,
     event: (kind, now, fields = {}) => moments.handleEvent({ kind, team: 0, player: 1, ...fields }, now),
     frame: now => moments.update(camera, { getPlayerPosition: () => null }, now),
     snapshot: players => moments.setSnapshot({ players, score: [0, 0], clock: '00:01', phase: 'play', period: 1 }),
   };
 }
 
-test('goals and full-time immediately supersede a full restart queue', () => {
-  for (const kind of ['goal', 'full_time']) {
+test('goals immediately supersede a full restart queue', () => {
+  const ui = setup();
+  ui.event('corner', 1);
+  for (let i = 0; i < 8; i++) ui.event('throw_in', 1.1);
+  ui.event('goal', 1.2);
+  assert.equal(ui.banner.dataset.kind, 'goal');
+  ui.frame(6.3);
+  assert.equal(ui.banner.hidden, true, 'old restarts must not replay after the decisive moment');
+});
+
+test('the final result persists after restarts and offers a fresh match, even without the event', () => {
+  for (const viaSnapshot of [false, true]) {
     const ui = setup();
+    const again = ui.banner.children[3];
+    assert.equal(again.hidden, true);
     ui.event('corner', 1);
-    for (let i = 0; i < 8; i++) ui.event('throw_in', 1.1);
-    ui.event(kind, 1.2);
-    assert.equal(ui.banner.dataset.kind, kind);
-    ui.frame(6.3);
-    assert.equal(ui.banner.hidden, true, 'old restarts must not replay after the decisive moment');
+    ui.event('throw_in', 1.1);
+    if (viaSnapshot) {
+      ui.moments.setSnapshot({ players: [], score: [1, 1], clock: '90+04:00', phase: 'full_time', period: 2 });
+    } else ui.event('full_time', 1.2, { score: [2, 1] });
+    ui.event('corner', 1.3); // a stale event must not replace the final result
+    ui.frame(600);
+    assert.equal(ui.banner.hidden, false);
+    assert.equal(ui.banner.dataset.kind, 'full_time');
+    assert.equal(ui.banner.children[0].textContent, 'FULL-TIME');
+    assert.equal(ui.banner.children[1].textContent, viaSnapshot ? 'Home 1 : 1 Away' : 'Home 2 : 1 Away');
+    assert.equal(ui.banner.children[2].hidden, true);
+    assert.equal(again.hidden, false);
+    assert.equal(again.textContent, 'Play again');
+    again.onclick();
+    assert.equal(again.disabled, true);
+    assert.equal(ui.reloads(), 1);
+    ui.moments.dispose();
+    assert.equal(ui.document.body.children.length, 0);
   }
 });
 
