@@ -1489,3 +1489,9 @@ adapted exporter carries the MIT notice in `src/decision_pitch/ENTUNE_LICENSE`.
 Only the trace transport is adapted; Entune's settings and storage are not reused.
 Langfuse's [OTLP attribute mapping](https://langfuse.com/integrations/native/opentelemetry)
 defines the generation input/output and model fields.
+
+The decisions table identifies players by formation role, shirt number and model,
+in that order, instead of generated names. The role comes from the engine's base
+formation slot (for example right back or centre back), follows a substitute into
+that slot, and updates if an outfield player takes over in goal. Unassigned bench
+players keep their broad position until they enter the match.

@@ -62,6 +62,7 @@ def test_manager_prompt_answer_and_group_are_exported_without_auth_material(expo
     [post] = exports
     assert str(post.url) == "https://traces.example.test/api/public/otel/v1/traces"
     assert post.headers['authorization'].startswith('Basic ')
+    assert post.headers['x-langfuse-ingestion-version'] == '4'
     assert 'other' not in post.headers
     assert b'provider-secret-test' not in post.content and b'unrelated-secret' not in post.content
     [span] = attributes(exports)

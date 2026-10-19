@@ -43,17 +43,24 @@ class Samples:
                 await asyncio.sleep(.1)
             if match.phase == "full_time":
                 return
-            start = time.perf_counter()
-            try:
+            async def timed(candidate):
+                start = time.perf_counter()
                 async with asyncio.timeout(6):
-                    answer = (await model.decide(questions[name], match) if isinstance(model, OneAtATime)
-                              else await model.decide(questions[name]))
+                    answer = await candidate.decide(questions[name])
                 if answer.move not in questions[name].options:
                     raise ValueError("invalid probe answer")
+                return time.perf_counter() - start
+
+            try:
+                if isinstance(model, OneAtATime):
+                    async with model.ready(match):
+                        if match.phase == "full_time":
+                            return
+                        elapsed = await timed(model.model)
+                else:
+                    elapsed = await timed(model)
             except Exception:
                 elapsed = None
-            else:
-                elapsed = time.perf_counter() - start
             result = self.results.setdefault(name, {"times": deque(maxlen=20), "ok": 0, "failed": 0})
             result["failed" if elapsed is None else "ok"] += 1
             if elapsed is not None:

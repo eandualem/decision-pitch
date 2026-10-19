@@ -12,6 +12,7 @@ import shutil
 import time
 from collections import Counter, deque
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 
 from decision_pitch import actions, bots, vision
@@ -52,10 +53,17 @@ class OneAtATime:
         self._turn = asyncio.Lock()
 
     async def decide(self, question: Question, match: Match | None = None) -> Answer:
+        async with self.ready(match):
+            return await self.model.decide(question)
+
+    @asynccontextmanager
+    async def ready(self, match: Match | None = None):
+        """Hold a dispatch slot; queueing and pause happen before request timing."""
         while True:
             async with self._turn:
                 if match is None or not match.paused:
-                    return await self.model.decide(question)
+                    yield
+                    return
             await asyncio.sleep(0.1)
 
 

@@ -106,3 +106,35 @@ def test_lineup_and_later_consultations_get_refreshed_candidate_measurements():
     assert "1 valid, 0 failed" in manager.feeds[0]
     assert "2 valid, 0 failed" in manager.feeds[1]
     assert "latest 0.0s ago" in manager.feeds[1]
+
+
+def test_paused_local_queue_does_not_start_probe_deadline(monkeypatch):
+    from decision_pitch.players import OneAtATime
+    real_timeout = asyncio.timeout
+    deadlines = []
+
+    def short_timeout(seconds):
+        deadlines.append(seconds)
+        return real_timeout(.03)
+
+    monkeypatch.setattr(telemetry.asyncio, 'timeout', short_timeout)
+
+    async def go():
+        m = Match()
+        candidate = Candidate()
+        local = OneAtATime(candidate)
+        samples = telemetry.Samples()
+        await local._turn.acquire()
+        task = asyncio.create_task(samples.measure(m, Players(m), 0, {'laya': local}))
+        await asyncio.sleep(.01)
+        m.paused = True
+        local._turn.release()
+        await asyncio.sleep(.08)  # longer than the test's request deadline
+        assert not deadlines and not candidate.questions and not samples.results
+        m.paused = False
+        await task
+        assert deadlines == [6]
+        assert samples.results['laya']['failed'] == 0
+        assert samples.results['laya']['ok'] == 1
+        assert samples.results['laya']['times'][0] < .03
+    asyncio.run(go())

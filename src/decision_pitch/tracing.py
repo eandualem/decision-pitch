@@ -54,6 +54,7 @@ def _exporter(endpoint, authorization):
         def __init__(self):
             self.client = httpx.Client(timeout=5, trust_env=False, headers={
                 "Authorization": authorization, "Content-Type": "application/x-protobuf",
+                "x-langfuse-ingestion-version": "4",
             })
 
         def export(self, spans):

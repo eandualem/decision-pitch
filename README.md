@@ -90,7 +90,7 @@ from the ones it may choose, and during the match it is consulted every 30
 seconds after its previous answer with a feed of the game: it can give a player a one-line instruction,
 which the player reads with its state, and substitute a player, bringing on a
 substitute with a model of its choice at the next stoppage. Press O on the
-page to see every player's model, latest decision and answer time, and the
+page to see every player's position, shirt number, model, latest decision and answer time, and the
 managers' instructions and substitutions. Lime highlights the ball carrier;
 blue highlights the nearest opposing defender, on the pitch and in the panel.
 Press P or click Pause to freeze the match and new model requests; press it
@@ -139,7 +139,8 @@ brief asks for a mixed team, including an image variant when available, and
 substitutions weigh football contributions alongside speed and reliability.
 Match telemetry accumulates continuously; the manager sees the latest snapshot
 when consulted. Sampling adds one decision request per candidate per team per
-consultation and up to six seconds before the manager request.
+consultation and a six-second deadline per dispatched probe. Local probes wait
+for their model's queue and for resume before that deadline starts.
 
 `--assistants 1` or `2` gives each language-model manager assistant models
 (Claude Haiku, or the same subscription model as the OpenAI manager)

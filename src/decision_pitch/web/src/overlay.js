@@ -5,6 +5,8 @@ const make = (tag, className, text = '') => {
   return node;
 };
 
+const identityLabel = player => `${player.role ?? player.position} · #${player.number}`;
+
 export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
   let paused = false;
   const pause = make('button', 'pause-toggle', 'Pause · P');
@@ -33,7 +35,7 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
     const table = make('table', 'roster-table');
     const head = document.createElement('thead');
     const tr = document.createElement('tr');
-    for (const title of ['Player / model', 'Decision', 'Latency']) {
+    for (const title of ['Position / player / model', 'Decision', 'Latency']) {
       const cell = make('th', '', title);
       cell.scope = 'col';
       tr.append(cell);
@@ -44,14 +46,14 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
       roster.set(player.id, { ...player, team: index });
       const row = document.createElement('tr');
       const identity = document.createElement('td');
-      const name = make('strong', 'player-name', `${player.number} ${player.name}`);
+      const name = make('strong', 'player-name', identityLabel(player));
       const model = make('span', 'player-model', player.model ?? (team.players.includes(player) ? 'Built-in bot' : 'Not assigned'));
       identity.append(name, model);
       const action = make('td', 'player-action', 'Waiting');
       const latency = make('td', 'player-latency', '—');
       row.append(identity, action, latency);
       body.append(row);
-      rows.set(player.id, { row, model, action, latency, decided: false });
+      rows.set(player.id, { row, name, model, action, latency, decided: false });
     }
     table.append(head, body);
     const feed = make('ol', 'manager-feed');
@@ -77,7 +79,7 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
   document.addEventListener('keydown', onKey);
   const playerLabel = id => {
     const p = roster.get(id);
-    return p ? `${p.number} ${p.name}` : `Player ${id}`;
+    return p ? identityLabel(p) : `Player ${id}`;
   };
   const appendFeed = (team, text) => {
     const feed = feeds[team];
@@ -103,6 +105,10 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
       const active = new Map(snapshot.players.map(p => [p.id, p]));
       for (const [id, row] of rows) {
         const player = active.get(id);
+        if (player?.role) {
+          roster.get(id).role = player.role;
+          row.name.textContent = identityLabel(roster.get(id));
+        }
         row.row.classList.toggle('off-pitch', !player);
         if (!player) row.action.textContent = 'Off pitch';
         else if (!row.decided) row.action.textContent = player.action;
@@ -120,6 +126,10 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
         row.latency.textContent = Number.isFinite(message.ms) ? `${Math.round(message.ms)} ms` : '—';
       } else if (message.type !== 'manager' && (message.kind === 'substitution' || message.type === 'substitution')) {
         const row = rows.get(message.on);
+        if (roster.has(message.on) && roster.has(message.off)) {
+          roster.get(message.on).role = roster.get(message.off).role;
+          row.name.textContent = identityLabel(roster.get(message.on));
+        }
         if (row) { row.model.textContent = message.model ?? 'Built-in bot'; row.decided = false; row.latency.textContent = '—'; }
         appendFeed(message.team, `${playerLabel(message.off)} → ${playerLabel(message.on)}${message.model ? ` · ${message.model}` : ''}`);
       } else if (message.type === 'manager') {

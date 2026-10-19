@@ -136,6 +136,20 @@ FORMATION = [
 BENCH = ("GK", "DF", "DF", "MF", "MF", "FW", "FW")
 
 
+def position_label(player: Player) -> str:
+    """The current formation slot, viewed in the team's attacking direction."""
+    if player.position == "GK":
+        return "Goalkeeper"
+    if player.home == (0.0, 0.0):
+        return {"DF": "Defender", "MF": "Midfielder", "FW": "Forward"}[player.position]
+    side = "Right" if player.home[1] < 0 else "Left"
+    if player.position == "DF":
+        return f"{side} back" if abs(player.home[1]) > 14 else "Centre back"
+    if player.position == "MF":
+        return f"{side} midfield" if abs(player.home[1]) > 14 else "Centre midfield"
+    return "Striker"
+
+
 @dataclass
 class Team:
     name: str
@@ -244,7 +258,8 @@ class Match:
 
     def hello_teams(self) -> list[dict]:
         def entry(p: Player) -> dict:
-            return {"id": p.id, "number": p.number, "name": p.name, "position": p.position, "model": None}
+            return {"id": p.id, "number": p.number, "name": p.name, "position": p.position,
+                    "role": position_label(p), "model": None}
 
         return [
             {
@@ -279,6 +294,7 @@ class Match:
     def _player_snapshot(self, p: Player) -> dict:
         entry = {
             "id": p.id,
+            "role": position_label(p),
             "x": round(p.x, 3),
             "y": round(p.y, 3),
             "heading": round(p.heading, 3),

@@ -357,3 +357,18 @@ def test_a_kicked_ball_leaves_before_a_nearby_opponent_can_claim_it():
     m.command(kicker.id, KickTo(-30.0, 0.0, 30.0))
     run(m, 3 * STEP)
     assert m.owner is None and m.ball.vx < -20
+
+
+def test_display_roles_follow_formation_slots_and_substitutions():
+    from decision_pitch.match import position_label
+    m = Match()
+    roles = [p['role'] for p in m.hello_teams()[0]['players']]
+    assert roles == ['Goalkeeper', 'Right back', 'Centre back', 'Centre back', 'Left back',
+                     'Right midfield', 'Centre midfield', 'Centre midfield', 'Left midfield',
+                     'Striker', 'Striker']
+    assert m.hello_teams()[1]['players'][1]['role'] == 'Right back'
+    assert position_label(m.player(24)) == 'Defender'
+    assert m.substitute(2, 24) is None
+    m._substitute()
+    assert position_label(m.player(24)) == 'Right back'
+    assert next(p for p in m.snapshot()['players'] if p['id'] == 24)['role'] == 'Right back'
