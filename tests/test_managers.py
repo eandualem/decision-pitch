@@ -456,7 +456,13 @@ def test_manager_sets_initial_defending_and_role_instructions_then_changes_appro
         assert 'Recovery target' in staff.feed(0)
         await staff.consult(0)
         assert staff.squad.defending[0] == 'zonal'
-        staff.apply(0, Advice(substitutions=[(2, 24, 'jev')]))
+        staff.match.phase = 'play'
+        staff.apply(0, Advice(substitutions=[(2, 24, 'jev')], instructions=[(2, 'Press higher.')]))
+        staff.apply(0, Advice(instructions=[(2, 'Protect the right channel.')]))
+        staff.match._restart('throw_in', 0, 0, 34)
+        staff.match.step()
+        staff.observe(staff.match.drain_events())
         assert staff.squad.seats[24].instruction == staff.squad.seats[2].instruction
+        assert staff.squad.seats[24].instruction == 'Protect the right channel.'
         await staff.aclose()
     asyncio.run(go())

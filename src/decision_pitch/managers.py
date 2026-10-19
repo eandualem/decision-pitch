@@ -487,6 +487,10 @@ class Staff:
         if m.owner is not None:
             self.held[m.player(m.owner).team] += 1
         for event in events:
+            if event["kind"] == "substitution":
+                previous = self.squad.seats.get(event["off"])
+                if previous and previous.instruction:
+                    self.squad.instruct(event["on"], previous.instruction)
             if event["kind"] in QUIET:
                 continue
             for team in (0, 1):
@@ -547,9 +551,6 @@ class Staff:
                 self.heard[team].append(f"Substitution of [{on}] for [{off}] refused: {refused}.")
                 continue
             squad.seat(on, self.options[team][model])
-            if previous := squad.seats.get(off):
-                if previous.instruction:
-                    squad.instruct(on, previous.instruction)
             text = f"{q.name} ({TRAITS[model].label}) to come on for {p.name}"
             if reason := _cut(advice.reasons.get(off, "")):
                 text += f": {reason}"

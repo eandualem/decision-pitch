@@ -265,6 +265,14 @@ def test_tactical_context_and_unique_marking_follow_both_teams_and_halves():
             move = actions.command(m, p, 'mark', 'man_to_man')
             assert math.hypot(move.x - target.x, move.y - target.y) == pytest.approx(2)
             assert (move.x - target.x) * m.attack(team) < 0
+            m.down[ours[1].id] = ('back', m.t + 2)
+            text = actions.question(m, p, 'hold', None, current_actions={ours[1].id: 'slide_tackle'}).state
+            assert 'Other teammates pressing/challenging: none.' in text
+            m.down.clear()
+            m.owner = ours[1].id
+            text = actions.question(m, p, 'hold', None, current_actions={ours[1].id: 'press'}).state
+            assert 'Other teammates pressing/challenging: none.' in text
+            m.owner = None
 
 
 def test_wait_stops_with_possession_and_recovers_shape_if_ball_is_lost():

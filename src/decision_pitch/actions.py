@@ -476,11 +476,13 @@ def question(
                          "Mark tracks this opponent goal-side; recover cover if chasing would expose goal.")
     else:
         parts.append("Protect your formation area; cover behind a teammate pressing the ball.")
-    teammates = [q for q in m.players if q.team == p.team and q.position != "GK"]
+    teammates = [q for q in m.players if q.team == p.team and q.position != "GK"
+                 and q.id not in m.down and q.id not in m.moves]
     if teammates:
         nearest = min(teammates, key=lambda q: (math.hypot(q.x - m.ball.x, q.y - m.ball.y), q.id))
         pressing = [f"#{q.number}" for q in teammates if q.id != p.id
-                    and (current_actions or {}).get(q.id) in CHALLENGES]
+                    and (current_actions or {}).get(q.id) in ("press", "tackle", "slide_tackle")
+                    and (current_actions or {})[q.id] in options(m, q)]
         parts.append(f"Nearest outfield teammate to ball: #{nearest.number}"
                      f"{' (you)' if nearest.id == p.id else ''}, "
                      f"{math.hypot(nearest.x - m.ball.x, nearest.y - m.ball.y):.0f} m away. "
