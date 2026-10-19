@@ -45,7 +45,7 @@ export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
       const row = document.createElement('tr');
       const identity = document.createElement('td');
       const name = make('strong', 'player-name', `${player.number} ${player.name}`);
-      const model = make('span', 'player-model', player.model ?? 'Built-in bot');
+      const model = make('span', 'player-model', player.model ?? (team.players.includes(player) ? 'Built-in bot' : 'Not assigned'));
       identity.append(name, model);
       const action = make('td', 'player-action', 'Waiting');
       const latency = make('td', 'player-latency', '—');
