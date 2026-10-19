@@ -37,10 +37,11 @@ from decision_pitch.bots import (
     _wall_spot,
 )
 from decision_pitch.bots import command as bot_command
-from decision_pitch.match import RESTARTS, AirKick, Command, Hold, KickTo, Match, MoveTo, Tackle
+from decision_pitch.match import RESTARTS, AirKick, Command, Hold, KickTo, Match, MoveTo, Tackle, position_label
 from decision_pitch.physics import DIAGONAL, ROLLING, Player
 
 ACTIONS = {
+    "wait": "stop with the ball at your feet and wait for support; opponents can tackle you",
     "dribble": "run with the ball into space towards their goal",
     "sprint": "knock the ball ahead and run on at full speed; an opponent can take it between touches",
     "take_on": "run at the nearest defender and cut past it; it can win the ball",
@@ -59,18 +60,20 @@ ACTIONS = {
     "mark": "stay goal-side of the nearest opponent",
     "run_behind": "sprint beyond their last defender for a through ball; you can be offside",
 }
-ON_THE_BALL = ("dribble", "sprint", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear")
+ON_THE_BALL = ("wait", "dribble", "sprint", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear")
 OFF_THE_BALL = ("press", "tackle", "slide_tackle", "jockey", "hold", "support", "mark", "run_behind")
 CHALLENGES = ("press", "tackle", "slide_tackle", "jockey")  # going for the ball an opponent has
 AT_A_RESTART = ("hold", "support", "mark", "run_behind")  # for the players not taking it
-KEEPER_ON_THE_BALL = ("pass", "through_ball", "clear")
+KEEPER_ON_THE_BALL = ("wait", "pass", "through_ball", "clear")
 KEEPER_OFF_THE_BALL = ("hold", "press")
 KICKS = ("pass", "through_ball", "cross", "shoot", "clear")  # spent once the ball is kicked
 INSTRUCTIONS = (
     "Choose this soccer player's next action. It is carried out until your next answer "
     "arrives, and the match does not wait for you."
+    " Play your assigned role. Off the ball, preserve spacing and defensive cover; do not all "
+    "chase the ball. Use the recovery target, teammate pressure and manager's defensive approach "
+    "to decide whether to press, mark, support or hold. Hold means recover your shape, not stand still."
 )
-NEARBY = 3  # teammates and opponents described, nearest first
 POSITIONS = {"GK": "goalkeeper", "DF": "defender", "MF": "midfielder", "FW": "forward"}
 RESTART_NAMES = {"kickoff": "kick off", "throw_in": "take a throw-in", "goal_kick": "take a goal kick",
                  "corner": "take a corner", "free_kick": "take a free kick",
@@ -149,11 +152,13 @@ def _applies(m: Match, p: Player, action: str) -> bool:
     return True
 
 
-def command(m: Match, p: Player, action: str) -> Command:
+def command(m: Match, p: Player, action: str, defending: str = "zonal") -> Command:
     """The engine command that carries out `action` for `p` now."""
     if m.phase == "half_time":
         return Hold()
     on_the_ball = m.owner == p.id
+    if action == "wait" and m.phase == "play":
+        return Hold() if on_the_ball else _shape(m, p, _home(m, p))
     if m.phase == "play" and not on_the_ball and action in ON_THE_BALL and action != "sprint":
         return _without_ball(m, p, action)
     direction = m.attack(p.team)
@@ -192,8 +197,9 @@ def command(m: Match, p: Player, action: str) -> Command:
             return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)), face=(m.ball.x, m.ball.y))
         return _shape(m, p, _home(m, p, attacking=True))
     if action == "mark":
-        opponents = [q for q in m.players if q.team != p.team and q.position != "GK"]
-        q = min(opponents, key=lambda q: math.hypot(q.x - p.x, q.y - p.y))
+        q = marking_target(m, p, defending)
+        if q is None:
+            return _shape(m, p, _home(m, p))
         goal_x = -direction * pitch.HALF_LENGTH
         dist = math.hypot(goal_x - q.x, q.y) or 1.0
         return MoveTo(q.x + (goal_x - q.x) / dist * 2, q.y - q.y / dist * 2, face=(m.ball.x, m.ball.y))
@@ -430,7 +436,8 @@ def _far_post(m: Match, p: Player) -> float:
 
 
 def question(
-    m: Match, p: Player, action: str, answer: float | None, instruction: str | None = None
+    m: Match, p: Player, action: str, answer: float | None, instruction: str | None = None,
+    defending: str = "zonal", current_actions: dict[int, str] | None = None,
 ) -> Question:
     """What `p`'s model is asked: the state as `p` sees it, with `action` the one it is
     carrying out, `answer` its model's recent answer time in seconds (None before its
@@ -459,6 +466,25 @@ def question(
     )
     parts.append(f"Your base formation position: {_offset(p.home[0] - x, p.home[1] - y, 1)}. "
                  "Ahead means toward their goal; left/right are from your team's attacking direction.")
+    parts.append(position_context(m, p))
+    parts.append(f"Team defending: {defending.replace('_', '-')}.")
+    if defending == "man_to_man" and p.position != "GK":
+        target = marking_target(m, p, defending)
+        if target:
+            parts.append(f"Your marking assignment: opponent #{target.number}, "
+                         f"{_offset(target.x - p.x, target.y - p.y, direction)}. "
+                         "Mark tracks this opponent goal-side; recover cover if chasing would expose goal.")
+    else:
+        parts.append("Protect your formation area; cover behind a teammate pressing the ball.")
+    teammates = [q for q in m.players if q.team == p.team and q.position != "GK"]
+    if teammates:
+        nearest = min(teammates, key=lambda q: (math.hypot(q.x - m.ball.x, q.y - m.ball.y), q.id))
+        pressing = [f"#{q.number}" for q in teammates if q.id != p.id
+                    and (current_actions or {}).get(q.id) in CHALLENGES]
+        parts.append(f"Nearest outfield teammate to ball: #{nearest.number}"
+                     f"{' (you)' if nearest.id == p.id else ''}, "
+                     f"{math.hypot(nearest.x - m.ball.x, nearest.y - m.ball.y):.0f} m away. "
+                     f"Other teammates pressing/challenging: {', '.join(pressing) or 'none'}.")
     b = m.ball
     if m.owner == p.id:
         held = "you have it"
@@ -473,7 +499,7 @@ def question(
         others = sorted(
             (q for q in m.players if q.team == team_index and q.id != p.id),
             key=lambda q: math.hypot(q.x - p.x, q.y - p.y),
-        )[:NEARBY]
+        )
         described = [
             f"{q.name} ({q.number}) {_offset(q.x - p.x, q.y - p.y, direction)}"
             + (" open" if label == "Teammates" and _space(m, q) >= PRESSURE else "")
@@ -488,6 +514,37 @@ def question(
     if answer is not None:
         parts.append(f"Your answers take {answer:.1f} s.")
     return Question(" ".join(parts), options(m, p), INSTRUCTIONS)
+
+
+def position_context(m: Match, p: Player) -> str:
+    direction = m.attack(p.team)
+    hx, hy = _home(m, p)
+    sx, sy = _home(m, p, attacking=True)
+    x = p.x * direction
+    third = "defensive" if x < -pitch.LENGTH / 6 else "attacking" if x > pitch.LENGTH / 6 else "middle"
+    duty = {"GK": "Protect your goal.", "DF": "Keep defensive cover; do not follow every attack to their goal.",
+            "MF": "Connect defence and attack while keeping space from teammates.",
+            "FW": "Offer a forward outlet without crowding the ball carrier."}[p.position]
+    return (f"Assigned role: {position_label(p)}; currently in the {third} third. {duty} "
+            f"Recovery target (hold): {_offset(hx - p.x, hy - p.y, direction)}, "
+            f"{math.hypot(hx - p.x, hy - p.y):.0f} m from your current position. "
+            f"Support target: {_offset(sx - p.x, sy - p.y, direction)}.")
+
+
+def marking_target(m: Match, p: Player, defending: str = "zonal") -> Player | None:
+    opponents = [q for q in m.players if q.team != p.team and q.position != "GK"]
+    if defending != "man_to_man":
+        return min(opponents, key=lambda q: (math.hypot(q.x - p.x, q.y - p.y), q.id), default=None)
+    direction = m.attack(p.team)
+    ours = [q for q in m.players if q.team == p.team and q.position != "GK"]
+    pairs = sorted((math.hypot(q.home[0] - r.x * direction, q.home[1] - r.y * direction), q.id, r.id)
+                   for q in ours for r in opponents)
+    assigned, taken = {}, set()
+    for _, own, other in pairs:
+        if own not in assigned and other not in taken:
+            assigned[own] = other
+            taken.add(other)
+    return m.player(assigned[p.id]) if p.id in assigned else None
 
 
 def _offset(dx: float, dy: float, direction: int) -> str:

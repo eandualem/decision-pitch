@@ -18,10 +18,10 @@ from typing import Protocol
 import anthropic
 import httpx
 
-from decision_pitch import telemetry, tracing
+from decision_pitch import actions, telemetry, tracing
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Model
-from decision_pitch.match import RESTARTS, Match
+from decision_pitch.match import RESTARTS, Match, position_label
 from decision_pitch.physics import Player
 from decision_pitch.players import BOT, Players
 from decision_pitch.performance import Performance
@@ -81,6 +81,14 @@ class Advice:
     instructions: list[tuple[int, str]] = field(default_factory=list)  # (player, text)
     substitutions: list[tuple[int, int, str]] = field(default_factory=list)  # (off, on, model)
     reasons: dict[int, str] = field(default_factory=dict)  # by the player leaving
+    defending: str | None = None
+
+
+@dataclass
+class Lineup:
+    models: dict[int, str]
+    defending: str = "zonal"
+    instructions: list[tuple[int, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -100,7 +108,7 @@ class Manager(Protocol):
     name: str
     assistants: tuple[str, ...]  # the model of each assistant helping it, for the page
 
-    async def lineup(self, situation: Situation) -> dict[int, str]: ...
+    async def lineup(self, situation: Situation) -> Lineup: ...
 
     async def advise(self, situation: Situation) -> Advice: ...
 
@@ -128,13 +136,13 @@ class BuiltIn:
         self._scheduled: set[int] = set()  # the minutes whose substitution is done
         self._told: dict[int, str] = {}
 
-    async def lineup(self, situation: Situation) -> dict[int, str]:
+    async def lineup(self, situation: Situation) -> Lineup:
         m, team = situation.match, situation.team
         chosen: dict[int, str] = {}
         players = sorted((p for p in m.players if p.team == team), key=lambda p: ORDER.index(p.position))
         for p in players:
             chosen[p.id] = _quickest(situation.options, list(chosen.values()))
-        return chosen
+        return Lineup(chosen)
 
     async def advise(self, situation: Situation) -> Advice:
         m, squad, team = situation.match, situation.squad, situation.team
@@ -232,6 +240,9 @@ LINEUP = (
     "team with the lowest historical latency estimate: speed is not decision quality. Off-pitch probes "
     "measure latency and reliability only; football skill is unknown until a model plays. Use the "
     "match to compare their football contributions and adapt through legal substitutions."
+    " Choose defending as zonal or man_to_man. Give each player a short starting instruction "
+    "for its assigned formation role: who presses, who covers, and who stays available. "
+    "Keep defensive cover instead of sending every player to the ball."
 )
 ADVICE = (
     BRIEF + " You are consulted every 30 seconds after your previous answer with a feed of the match. "
@@ -248,6 +259,8 @@ ADVICE = (
     "alone do not prove model quality, and a probe is not a football result. "
     "Give each substitution a reason of at most ten words. Change things only when it "
     "helps; empty lists are a good answer."
+    " Set defending to zonal or man_to_man, using each player's location and recovery target. "
+    "Coordinate pressure and cover so defenders do not all abandon their positions."
 )
 ASSISTANTS = (
     "You assist a soccer team's manager. Watch the decision models driving its players: "
@@ -286,14 +299,18 @@ class LanguageModel:
             transport=transport, headers={"Authorization": f"Bearer {self._key}"}, timeout=30.0
         )
 
-    async def lineup(self, situation: Situation) -> dict[int, str]:
+    async def lineup(self, situation: Situation) -> Lineup:
         ids = [p.id for p in situation.match.players if p.team == situation.team]
         schema = _object({"lineup": {"type": "array", "items": _object({
             "player": {"type": "integer", "enum": ids},
             "model": {"type": "string", "enum": list(situation.options)},
-        })}})  # fmt: skip
+        })}, "defending": {"type": "string", "enum": ["zonal", "man_to_man"]},
+            "instructions": {"type": "array", "items": _object({
+                "player": {"type": "integer", "enum": ids}, "text": {"type": "string"},
+            })}})  # fmt: skip
         answer = await self._ask(self._model, LINEUP, situation.feed, schema)
-        return {item["player"]: item["model"] for item in answer["lineup"]}
+        return Lineup({item["player"]: item["model"] for item in answer["lineup"]},
+                      answer["defending"], [(i["player"], i["text"]) for i in answer["instructions"]])
 
     async def advise(self, situation: Situation) -> Advice:
         feed = situation.feed
@@ -311,6 +328,7 @@ class LanguageModel:
         on_pitch = [p.id for p in m.players if p.team == team]
         bench = [q.id for q in m.bench if q.team == team] or [0]  # an empty enum is no schema
         schema = _object({
+            "defending": {"type": "string", "enum": ["zonal", "man_to_man"]},
             "instructions": {"type": "array", "items": _object({
                 "player": {"type": "integer", "enum": on_pitch}, "text": {"type": "string"},
             })},
@@ -326,6 +344,7 @@ class LanguageModel:
             [(s["off"], s["on"], s["model"]) for s in answer["substitutions"]],
         )
         advice.reasons = {s["off"]: s["reason"] for s in answer["substitutions"]}
+        advice.defending = answer["defending"]
         return advice
 
     async def aclose(self) -> None:
@@ -448,8 +467,8 @@ class Staff:
         answers = await asyncio.gather(*(choose(team, manager) for team, manager in enumerate(self.managers)),
                                        return_exceptions=True)
         for team, answer in enumerate(answers):
-            fallback = await BuiltIn().lineup(self.situation(team))
-            chosen = answer if isinstance(answer, dict) else {}
+            fallback = (await BuiltIn().lineup(self.situation(team))).models
+            chosen = answer.models if isinstance(answer, Lineup) else {}
             missing = sum(chosen.get(pid) not in self.options[team] for pid in fallback)
             if missing:
                 reason = f" ({_failure(answer)})" if isinstance(answer, Exception) else ""
@@ -458,6 +477,8 @@ class Staff:
             for pid, name in fallback.items():
                 pick = chosen.get(pid)
                 self.squad.seat(pid, self.options[team][pick if pick in self.options[team] else name])
+            if isinstance(answer, Lineup) and isinstance(self.managers[team], LanguageModel):
+                self.apply(team, Advice(instructions=answer.instructions, defending=answer.defending))
 
     def observe(self, events: list[dict]) -> None:
         self.performance.observe(events)
@@ -512,6 +533,10 @@ class Staff:
     def apply(self, team: int, advice: Advice) -> None:
         """Make the advice that keeps to the rules; tell the manager why the rest was not."""
         m, squad = self.match, self.squad
+        if advice.defending in ("zonal", "man_to_man"):
+            squad.defending[team] = advice.defending
+            self.messages.append({"type": "manager", "team": team, "kind": "tactics",
+                                  "text": f"Defending: {advice.defending.replace('_', '-')}"})
         for off, on, model in advice.substitutions:
             p, q = m.everyone.get(off), m.everyone.get(on)
             if p is None or p.team != team or model not in self.options[team]:
@@ -522,6 +547,9 @@ class Staff:
                 self.heard[team].append(f"Substitution of [{on}] for [{off}] refused: {refused}.")
                 continue
             squad.seat(on, self.options[team][model])
+            if previous := squad.seats.get(off):
+                if previous.instruction:
+                    squad.instruct(on, previous.instruction)
             text = f"{q.name} ({TRAITS[model].label}) to come on for {p.name}"
             if reason := _cut(advice.reasons.get(off, "")):
                 text += f": {reason}"
@@ -568,11 +596,13 @@ class Staff:
         ]
         if lineup:
             lines = [f"You manage {ours} against {theirs}. Kick-off is next. Your players:"]
-            lines.extend(f"- [{p.id}] {p.name}, {POSITIONS[p.position]}" for p in m.players if p.team == team)
+            lines.extend(f"- [{p.id}] #{p.number}, {position_label(p)}. {actions.position_context(m, p)}"
+                         for p in m.players if p.team == team)
             lines.extend(self.catalog(team))
             return "\n".join(lines)
         if self.heard[team]:
             lines.append("Since you last looked: " + " ".join(self.heard[team]))
+        lines.append(f"Team defending: {squad.defending[team]}.")
         lines.append("Observed football totals (kicks include passes, shots and clearances):")
         lines.append("Your team: " + self.performance.team(team))
         lines.append("Opponent team, aggregate only: " + self.performance.team(1 - team))
@@ -589,7 +619,8 @@ class Staff:
                         f"doing {seat.action}{_booked(m, p)}"
                         + (f", told: {seat.instruction}" if seat.instruction else ""))  # fmt: skip
             lines.append(f"- [{p.id}] {p.name}, {POSITIONS[p.position]}: {line}; " +
-                         self.performance.describe(self.performance.players[p.id]))
+                         self.performance.describe(self.performance.players[p.id]) + "; " +
+                         actions.position_context(m, p))
         bench = [q for q in m.bench if q.team == team]
         lines.append("Your bench: " + ("; ".join(f"[{q.id}] {q.name}, {POSITIONS[q.position]}"
                                                  for q in bench) or "empty") + ".")  # fmt: skip

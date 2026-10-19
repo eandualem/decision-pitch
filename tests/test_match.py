@@ -125,7 +125,10 @@ def test_only_the_restarting_team_may_play_the_ball_and_its_kick_restarts_play()
     thrower = next(p for p in m.players if p.team == 1)
     thrower.x, thrower.y = m.ball.x, m.ball.y - 0.5
     m.command(thrower.id, KickTo(10.0, 10.0, 25.0))
-    run(m, STEP)
+    for _ in range(150):
+        m.step()
+        if m.phase == "play":
+            break
     assert m.phase == "play" and m.last_touch == 1
     speed = math.sqrt(m.ball.vx**2 + m.ball.vy**2 + m.ball.vz**2)
     assert speed <= THROW_MAX + 1e-9
@@ -372,3 +375,28 @@ def test_display_roles_follow_formation_slots_and_substitutions():
     m._substitute()
     assert position_label(m.player(24)) == 'Right back'
     assert next(p for p in m.snapshot()['players'] if p['id'] == 24)['role'] == 'Right back'
+
+
+def test_throw_in_preparation_starts_on_collection_and_resets_for_next_throw():
+    from decision_pitch.match import THROW_PREPARE
+    m = in_play()
+    m._restart('throw_in', 0, 0, pitch.HALF_WIDTH)
+    m.t += 10  # walking to the ball does not consume preparation time
+    m.since_restart = 10
+    p = m.player(6)
+    p.x, p.y = 0, pitch.HALF_WIDTH - 0.3
+    m.command(p.id, KickTo(10, 20, 10))
+    m.step()
+    assert m.owner == p.id and m.phase == 'throw_in'
+    collected = m.t
+    for _ in range(round((THROW_PREPARE - 0.1) / STEP)):
+        m.step()
+    assert m.phase == 'throw_in' and m.ball.vx == m.ball.vy == 0
+    for _ in range(15):
+        m.step()
+        if m.phase == 'play':
+            break
+    assert m.phase == 'play' and m.t - collected >= THROW_PREPARE
+    assert any(t['kind'] == 'throw' for t in m.touches)
+    m._restart('throw_in', 1, 5, -pitch.HALF_WIDTH)
+    assert m.throw_ready is None
