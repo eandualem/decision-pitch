@@ -276,7 +276,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
     const at = touch.t - STEP;
     const actor = actors.get(touch.player);
     // Down, it plays the ball only once it is up again, at `until`: a touch seen ahead may be.
-    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT) || (actor.down && at < actor.down.until)) return;
+    if (!actor || at < time - 0.3 || !(touch.kind in WEIGHT) || (actor.down && touch.t < actor.down.until)) return;
     // The tackle a slide makes, judged as it goes in, is shown by the slide itself.
     if ((touch.kind === 'tackle' || touch.kind === 'poke')
       && (actor.mishap?.kind === 'slide' || snapshot.players.some(p => p.id === touch.player && p.move === 'slide'))) return;

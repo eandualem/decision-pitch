@@ -1129,11 +1129,11 @@ test('a slide goes in on the boot nearer the ball; one that ends down lies in it
   actors.dispose();
 });
 
-test('a touch just after a player is up again plays, seen while it is still getting up', () => {
+for (const delay of [0, 0.1]) test(`a touch ${delay}s after recovery plays, seen while still getting up`, () => {
   const { actors } = match();
-  const touch = { player: 1, kind: 'kick', t: 3.3, x: 10.6, y: 0, z: 0.11 };
+  const touch = { player: 1, kind: 'kick', t: 3.2 + delay, x: 10.6, y: 0, z: 0.11 };
   const at = (t) => snap(t, [player(1, 10, 0, t < 3.2 ? { down: { way: 'front', until: 3.2 } } : {}), player(3, 30, 30)],
-    { x: 10.6, y: 0, owner: t < 3.3 ? 1 : null, touches: t >= 3.3 && t < 3.4 ? [touch] : [] });
+    { x: 10.6, y: 0, owner: t < touch.t ? 1 : null, touches: t >= touch.t && t < touch.t + 0.1 ? [touch] : [] });
   for (let t = 2; t < 3.5; t += STEP) actors.update(at(t), at(t + STEP), 0.5, STEP, t + STEP / 2, at(t + 4 * STEP));
   assert.ok(shownBy(actors, 1).some(([name]) => name === 'pass'), `the kick plays: ${shownBy(actors, 1)}`);
   actors.dispose();

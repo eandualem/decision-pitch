@@ -750,10 +750,7 @@ class Match:
                 if not carrier and (towards <= OFF_BALL_SPEED or not self._near_ball(r)):
                     continue
                 if towards > FOUL_SPEED and (behind or (carrier and not self._reaches(q))):
-                    if carrier:
-                        self._foul(q, r)
-                    else:
-                        self._fouled(q, r, behind=True, reckless=False, tackle=False)  # off the ball
+                    self._fouled(q, r, behind=behind, reckless=False, tackle=False)
                     return
 
     def _foul(self, offender: Player, fouled: Player, reckless: bool = False, tackle: bool = False) -> None:
@@ -802,11 +799,11 @@ class Match:
         b = self.ball
         return bool(able) and min(able, key=lambda p: math.hypot(b.x - p.x, b.y - p.y)).team == team
 
-    def _check_advantage(self) -> None:
-        """Come back for the free kick if the opponents win the ball while an advantage is
-        played; once its time is up, play goes on."""
+    def _check_advantage(self, lost: bool = False) -> None:
+        """Recall advantage when the opponents win the ball or an out-of-play restart;
+        otherwise let it expire once its time is up."""
         team, offender, _, x, y, card, until = self.advantage
-        if self.owner is not None and self.player(self.owner).team != team:
+        if lost or (self.owner is not None and self.player(self.owner).team != team):
             self.advantage = None
             if offender in self.cards_due:
                 self.cards_due.remove(offender)
@@ -852,7 +849,7 @@ class Match:
         team, b = 1 - p.team, self.ball
         self._event("handball", team, p.id)
         goal_x = -self.attack(p.team) * pitch.HALF_LENGTH
-        if self._goal_bound(goal_x):
+        if self._counts(team) and self._goal_bound(goal_x):
             self._card(p, red=True)
         elif math.hypot(goal_x - b.x, b.y) <= PROMISING_ATTACK:
             self._card(p)
@@ -1028,6 +1025,10 @@ class Match:
     def _restart(
         self, kind: str, team: int, x: float, y: float, indirect: bool = False, taker: int | None = None
     ) -> None:
+        if (self.advantage is not None and self.t < self.advantage[-1]
+                and team != self.advantage[0] and kind in ("throw_in", "goal_kick", "corner")):
+            self._check_advantage(lost=True)
+            return
         self.advantage = None
         self._cards_due()
         if self.phase == "full_time":
