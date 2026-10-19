@@ -69,6 +69,7 @@ def test_running_into_the_ball_carrier_from_behind_is_a_foul_and_a_free_kick():
     assert (events[0]["team"], events[0]["player"], events[0]["fouled"]) == (0, 15, 10)
     assert (m.phase, m.restart_team) == ("free_kick", 0)
     assert (m.ball.x, m.ball.y) == (0.0, 0.0)  # where the fouled player was
+    assert m.down[10][0] == "front" and 10 in m.recovering
 
 
 def test_running_into_the_carrier_from_the_side_without_reaching_the_ball_is_a_foul():
@@ -77,6 +78,7 @@ def test_running_into_the_carrier_from_the_side_without_reaching_the_ball_is_a_f
     challenge(m, 15, 0.0, 0.75, 0.0, -5.0)
     m.step()
     assert kinds(m.drain_events()) == ["foul", "free_kick"]
+    assert m.down[10][0] == "side" and 10 in m.recovering
 
 
 def test_a_challenge_that_reaches_the_ball_from_the_front_wins_it_fairly():
@@ -818,6 +820,7 @@ def test_the_referees_count_stops_when_the_half_ends_on_a_held_ball():
 def test_play_goes_on_when_the_fouled_team_keeps_the_ball_in_their_attacking_half():
     m = in_play()
     on_the_ball(m, 10, 10.0, 0.0)
+    m.player(9).x, m.player(9).y = 11.0, 0.5  # a teammate can play on while 10 falls
     challenge(m, 15, 9.3, 0.0, 5.0, 0.0)
     m.step()
     assert kinds(m.drain_events()) == ["foul", "advantage"] and m.phase == "play"
@@ -830,14 +833,40 @@ def test_play_goes_on_when_the_fouled_team_keeps_the_ball_in_their_attacking_hal
 def test_play_comes_back_for_the_free_kick_if_the_opponents_win_the_ball():
     m = in_play()
     on_the_ball(m, 10, 30.0, 0.0)  # within 27 m of goal: stopping it earns a yellow
+    m.player(9).x, m.player(9).y = 31.0, 0.5
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
     m.step()
     m.drain_events()
     m.player(10).x = 0.0  # gone, and an opponent at the ball
+    m.player(9).x = 0.0
     m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
     m.step()
     assert kinds(m.drain_events()) == ["yellow", "free_kick"]
     assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+
+
+def test_advantage_is_recalled_when_the_loose_ball_goes_out_for_the_opponents():
+    m = in_play()
+    r = m.player(9)
+    r.x, r.y, r.heading = 30.0, 32.5, 0.0
+    challenge(m, 17, 29.3, 32.5, 5.0, 0.0)
+    m.player(10).x, m.player(10).y = 31.6, 33.7  # nearest, but cannot reach it before it goes out
+    m.ball.place(30.0, pitch.HALF_WIDTH + 0.1)
+    m.ball.vy = 10.0
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "advantage", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x, m.ball.y) == ("free_kick", 0, 30.0, 32.5)
+
+
+@pytest.mark.parametrize("kind", ["goal_kick", "corner"])
+def test_advantage_is_recalled_for_opposition_goal_line_restarts_only_within_its_window(kind):
+    m = in_play()
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t + ADVANTAGE)
+    m._restart(kind, 1, 50.0, 0.0)
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t)
+    m._restart(kind, 1, 50.0, 0.0)
+    assert (m.phase, m.restart_team) == (kind, 1)
 
 
 def test_running_into_an_opponent_off_the_ball_from_behind_is_a_foul():
@@ -926,10 +955,12 @@ def test_time_lost_in_a_half_is_added_on_and_the_clock_runs_on():
 def test_play_comes_back_even_when_the_opponent_kicks_the_ball_at_once():
     m = in_play()
     on_the_ball(m, 10, 30.0, 0.0)
+    m.player(9).x, m.player(9).y = 31.0, 0.5
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
     m.step()
     m.drain_events()
     m.player(10).x = 0.0
+    m.player(9).x = 0.0
     m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
     m.command(16, KickTo(-20.0, 0.0, 20.0))  # it would clear the ball in the same step
     m.step()
@@ -1004,6 +1035,21 @@ def test_handball_is_a_red_card_only_when_the_ball_would_go_in(x, vx, expected):
     m.ball.x, m.ball.y, m.ball.z, m.ball.vx = x - vx * STEP / 2, 0.55, 1.3, vx  # level with it after the step
     m.step()
     assert kinds(m.drain_events()) == expected
+
+
+@pytest.mark.parametrize("restart", ["indirect", "throw_in"])
+def test_handball_does_not_deny_a_goal_that_cannot_count_directly(restart):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 50.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 50.0 - 20 * STEP / 2, 0.55, 1.3, 20.0
+    if restart == "indirect":
+        m.indirect = 10
+    else:
+        m.direct = ("throw_in", 0)
+    m.step()
+    assert kinds(m.drain_events()) == ["handball", "yellow", "penalty"]
+    assert 15 in on_pitch(m)
 
 
 def test_the_nearest_player_meets_a_chest_high_ball_whichever_team_it_is_on():

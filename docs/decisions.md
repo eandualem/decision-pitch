@@ -1055,8 +1055,10 @@ a knee or a hand dips up to 7 cm into the grass for a frame or two as it lands
   opponent, holds the lying pose and plays the get-up so that the figure is
   on its feet at `until`. With less time than the fall and the get-up take
   (a fouled player is down 1.2 s, against 2 s for the clips) both play
-  faster, up to twice. A slide that ends down holds its own lying pose and
-  gets up from it: in the engine's 1.5 s from going in, at its own pace.
+  faster, up to twice. A touch at `until` is eligible to animate: recovery
+  uses the engine timestamp, before the visual contact offset is applied.
+  A slide that ends down holds its own lying pose and gets up from it: in
+  the engine's 1.5 s from going in, at its own pace.
   After a side fall the figure turns a quarter to get up from its back, which
   matches the side fall's end exactly, and turns back to its heading on its
   feet, at 3 rad/s, which the turn on the spot shows.
@@ -1268,16 +1270,17 @@ set up in a test and checked.
   touch. Otherwise it bounces off the body as any deflection does. The
   nearest such player meets the ball, whichever team it is on. Handball
   that stops a ball heading into the goal (between the posts and under the
-  bar, as it flies) is a red card; within 27 m of the
-  player's own goal it is a yellow card.
+  bar, as it flies), and legally able to count under the restart rules, is a
+  red card; within 27 m of the player's own goal it is a yellow card.
 - **Advantage.** After a foul outside the offender's penalty area that is
   not a red-card offence, when the ball is in the fouled team's attacking
   half and the nearest player able to play it is on the fouled team, play
   goes on: the referee signals advantage. A teammate in an offside position
   does not count as able to play it. If the opponents win the ball
-  within 3 s, play comes back for the free kick, with the card the foul
-  earned. Otherwise play goes on, and only a card for a reckless challenge
-  is still given, at the next stoppage. While an advantage is played, the
+  within 3 s, or the ball goes out for an opposition throw-in, goal kick or
+  corner during that window, play comes back for the free kick, with the
+  card the foul earned. Otherwise play goes on, and only a card for a
+  reckless challenge is still given, at the next stoppage. While an advantage is played, the
   offender's continued contact with the player it fouled is not judged again,
   and any other foul stops play.
 - **Added time.** Each half has time added for time lost: a minute for each
