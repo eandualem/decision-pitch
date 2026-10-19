@@ -188,7 +188,8 @@ test('events left behind by a stall only update the records', () => {
   assert.deepEqual(named(app.calls, 'overlay.message').map(([, m]) => m.kind), ['substitution', 'corner']);
   assert.deepEqual(named(app.calls, 'actors.event').map(([, m, , late]) => [m.kind, late]),
     [['substitution', true], ['corner', false]], 'the players keep their records, and know it is late');
-  assert.deepEqual(named(app.calls, 'moments.event').map(([, m]) => m.kind), ['corner']);
+  assert.deepEqual(named(app.calls, 'moments.event').map(([, m, , late]) => [m.kind, late]),
+    [['substitution', true], ['corner', false]], 'the notice keeps model records without replaying late moments');
   assert.deepEqual(named(app.calls, 'touchline.event').map(([, m]) => m.kind), ['corner']);
 });
 

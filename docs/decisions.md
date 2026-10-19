@@ -1499,3 +1499,12 @@ shape without possession. Goalkeepers retain their existing handling time limit.
 Throw-ins have a two-second preparation period after the taker collects the ball,
 so arrival at the touchline is not an immediate release. This is simulation pacing,
 not a claim that the laws require a two-second wait; other restarts are unchanged.
+
+## 16. Visible completed substitutions
+
+Completed substitutions have a separate eight-second notice, grouping changes
+made at the same stoppage and naming the outgoing and incoming players and models.
+They no longer wait behind routine restart banners or disappear when a goal clears
+that queue. The notice reports applied changes only; requests and their reasons
+remain in the Decisions panel. Manager consultation timing and substitution rules
+are unchanged.

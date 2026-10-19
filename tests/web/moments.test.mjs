@@ -118,10 +118,35 @@ test('dismissal between snapshots before first frame retains a visible card', ()
   assert.equal(ui.document.body.children.length, 0);
 });
 
-test('substitution banner resolves the incoming bench player', () => {
+test('completed substitutions show every incoming model without waiting for restart banners', () => {
   const ui = setup();
-  ui.event('substitution', 1, { off: 1, on: 3 });
-  assert.equal(ui.banner.children[2].textContent, 'Home / 1 · One → 12 · Reserve');
+  ui.event('throw_in', 1);
+  ui.event('substitution', 1, { off: 1, on: 3, model: 'Jev' });
+  ui.event('substitution', 1, { team: 1, off: 2, on: 4, model: 'Clef-flash' });
+  const notice = ui.root.children[2];
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.children[0].textContent, 'Substitutions made');
+  const rows = notice.children[1].children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children[2].textContent, 'IN 12 · Reserve · Jev');
+  assert.equal(rows[1].children[0].textContent, 'Away');
+  ui.event('goal', 1.2);
+  ui.frame(8.9);
+  assert.equal(notice.hidden, false, 'a goal must not erase the completed changes');
+  ui.frame(9.1);
+  assert.equal(notice.hidden, true);
+  ui.event('substitution', 10, { off: 3, on: 5, model: 'GPT-6 Luna' });
+  assert.equal(notice.children[1].children.length, 1, 'a later stoppage starts a new notice');
+  assert.equal(notice.children[1].children[0].children[1].textContent, 'OUT 12 · Reserve · Jev');
+});
+
+test('a late substitution updates model identity without showing an old notice', () => {
+  const ui = setup();
+  ui.moments.handleEvent({ kind: 'substitution', team: 0, off: 1, on: 3, model: 'Jev' }, 1, true);
+  const notice = ui.root.children[2];
+  assert.equal(notice.hidden, true);
+  ui.event('substitution', 10, { off: 3, on: 5, model: 'Clef-flash' });
+  assert.equal(notice.children[1].children[0].children[1].textContent, 'OUT 12 · Reserve · Jev');
 });
 
 test('the referee counts down the last five seconds a goalkeeper holds the ball', () => {

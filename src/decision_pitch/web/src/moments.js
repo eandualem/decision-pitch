@@ -40,12 +40,21 @@ export function createMoments(scene, teams) {
   again.onclick = () => { again.disabled = true; location.reload(); };
   banner.append(eyebrow, headline, detail, again);
   root.append(scorebar, banner);
+  const substitutions = make('section', 'substitution-notice');
+  substitutions.hidden = true;
+  substitutions.setAttribute('role', 'status');
+  substitutions.setAttribute('aria-live', 'polite');
+  const substitutionTitle = make('strong', 'substitution-title', 'Substitution made');
+  const substitutionRows = make('div', 'substitution-rows');
+  substitutions.append(substitutionTitle, substitutionRows);
+  root.append(substitutions);
   document.body.append(root);
   const roster = new Map(teams.flatMap((team, index) => [...team.players, ...(team.bench ?? [])].map(p => [p.id, { ...p, team: index }])));
   const markers = [];
   const lastPositions = new Map();
   const projected = new THREE.Vector3();
   let bannerUntil = 0;
+  let substitutionsUntil = 0;
   let finished = false;
   let lastScore = [0, 0];
   const pending = [];
@@ -92,9 +101,28 @@ export function createMoments(scene, teams) {
       count.hidden = !(held >= HOLD_LIMIT - 5);
       if (!count.hidden) count.textContent = `Keeper ${Math.max(1, Math.ceil(HOLD_LIMIT - held))}`;
     },
-    handleEvent(event, now) {
+    handleEvent(event, now, late = false) {
+      if (event.kind === 'substitution' && event.model && roster.has(event.on)) {
+        roster.get(event.on).model = event.model;
+      }
+      if (late) return;
       if (finished) return;
       if (event.kind === 'full_time') { finish(event.score ?? lastScore); return; }
+      if (event.kind === 'substitution') {
+        if (now >= substitutionsUntil) {
+          for (const row of [...substitutionRows.children]) row.remove();
+        }
+        const outgoing = roster.get(event.off);
+        const row = make('div', 'substitution-row');
+        row.append(make('span', 'substitution-team', teams[event.team]?.name ?? ''),
+          make('span', 'substitution-off', `OUT ${playerLabel(event.off)}${outgoing?.model ? ` · ${outgoing.model}` : ''}`),
+          make('span', 'substitution-on', `IN ${playerLabel(event.on)}${event.model ? ` · ${event.model}` : ''}`));
+        substitutionRows.append(row);
+        substitutionTitle.textContent = substitutionRows.children.length > 1 ? 'Substitutions made' : 'Substitution made';
+        substitutions.hidden = false;
+        substitutionsUntil = now + 8;
+        return;
+      }
       if (!labels[event.kind]) return;
       const player = roster.get(event.player);
       if (event.kind === 'yellow' || event.kind === 'red') {
@@ -115,6 +143,7 @@ export function createMoments(scene, teams) {
       } else show(event, now);
     },
     update(camera, actors, now) {
+      substitutions.hidden = now >= substitutionsUntil;
       for (const id of roster.keys()) {
         const position = actors.getPlayerPosition(id);
         if (position) {
