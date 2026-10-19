@@ -3,9 +3,8 @@
 The match server streams the match to the page over one WebSocket at `/ws`.
 The engine is the source of truth; the page draws what it is sent and
 interpolates between snapshots. Every message is one JSON object with a
-`type`. Messages marked *planned* are defined here so the engine, the
-decision layer and the graphics can be built against them; the server sends
-them once the work that produces them lands.
+`type`. This is the renderer protocol; player questions and manager inputs
+are described separately in [how decisions work](model-decisions.md).
 
 ## Coordinates
 
@@ -48,7 +47,7 @@ player's decision model, or `null` for the built-in bot; a substitute's is
 `Built-in`, or the language model's name. `managerEffort` is the actual
 configured reasoning effort, or `null` for a built-in manager. `assistants` lists the model of
 each assistant helping the team's manager, one entry per assistant (for
-example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
+example `["gpt-6-astra", "gpt-6-astra"]`); it is empty for the built-in
 manager and for a language-model manager with none.
 
 `role` is the readable formation position, such as `Right back` or `Centre back`.
@@ -71,8 +70,8 @@ The state of play, about 30 times a second.
   "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7,
            "touches": [{"player": 7, "kind": "control", "t": 734.183, "x": 11.8, "y": -3.0, "z": 0.11}]},
   "players": [
-    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
-    {"id": 1, "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
+    {"id": 7, "role": "Central midfielder", "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
+    {"id": 1, "role": "Goalkeeper", "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
   ]
 }
 ```
@@ -186,6 +185,15 @@ ready to show.
 {"type": "manager", "team": 0, "kind": "instruction", "player": 7, "text": "Stay wide and wait for the switch."}
 {"type": "manager", "team": 0, "kind": "substitution", "off": 8, "on": 26, "model": "laya", "text": "Heath (Laya) to come on for Brook: Faster midfield decisions."}
 ```
+
+A defending-style change is a team message:
+
+```json
+{"type": "manager", "team": 0, "kind": "tactics", "text": "Defending: man-to-man"}
+```
+
+Initial instructions and tactics use the same message kinds as later updates.
+There is no separate defending field in `hello` or `snapshot`.
 
 An `instruction` is for `player`, on the manager's team and on the pitch. A
 `substitution` is asked for here and made at the next stoppage, when its

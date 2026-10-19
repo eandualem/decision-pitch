@@ -4,6 +4,10 @@ Stack and design choices for Decision Pitch, with the reason for each and the
 alternative it replaced. Newest last. A decision is recorded here before it is
 implemented, and changed here when the implementation teaches us otherwise.
 
+For the current user-facing explanation, start with [how decisions work](model-decisions.md)
+and the [README](../README.md). Measurements below describe the stated test setup;
+they are engineering observations, not rankings of live models.
+
 ## 1. Stack: a Python match server and a three.js page
 
 **Choice.** One Python package (Python 3.12 or newer, managed with
@@ -70,7 +74,8 @@ a test or from the command line without a browser.
 - **Possession.** The nearest player within reach of a low ball has it and
   carries it as it runs. A goalkeeper reaches further and higher in its own
   penalty area. Kicks get a small aim error that grows with their power,
-  from a seeded random generator, so a match can be replayed exactly.
+  from a seeded random generator. Repeating a live-model match also depends
+  on model replies and their arrival times, so the seed alone is not a replay.
 - **Restarts.** Only the restarting team can play the ball, and opponents
   keep the required distance from it until it is played. A player out of
   place (inside that distance, at a kick-off in the wrong half, or at a
@@ -179,16 +184,17 @@ through the page.
 **Choice.** Decision Arena's model adapters (`apis.py`) and local model
 launcher (`local.py`) are copied into this package, unchanged except where
 noted, with Decision Arena's MIT licence notice kept beside them and the
-commit they came from recorded in the file header. The one planned change:
-the set of allowed moves becomes a parameter instead of the runner's fixed
-five, so the adapters validate soccer actions.
+commit they came from recorded in the file header. The allowed moves are
+parameterized instead of using the runner's fixed five, so the adapters
+validate the soccer actions available in the current state.
 
 - **Players.** Laya (local), Jev, GPT-6 Luna Decisions, Perplexity Decider,
-  Clef and Decision Arena's other registered models, plus built-in bots.
+  Clef and Decision Arena's other registered models. Built-in bots remain
+  internal engine/test fixtures and are not selectable player options.
   Keys come from the environment only, under the same variable names Decision
   Arena uses, so one `.env` serves both projects.
-- **Keyless by default.** With no keys set, Laya and the built-in bots play
-  a full match. Models whose keys are missing are not offered.
+- **Keyless by default.** With no keys set, Laya plays both teams with built-in
+  managers after its local engine is installed. Models whose keys are missing are not offered.
 - **Tests** use fake models and `httpx.MockTransport` recordings, as Decision
   Arena's do. No test calls a paid API.
 
@@ -367,7 +373,7 @@ and the tactical context described in section 15:
 > 11 m behind 1 m right. Their last defender 30 m ahead. Manager: Stay wide.
 > Your answers take 2.0 s.
 
-The manager line appears once managers can give instructions; the answer time
+The manager line appears when an instruction is set; the answer time
 appears after the player's first answer. The last defender is the opponents'
 second-last player, the one that sets the offside line, told to every outfield
 player in play so it can judge a run in behind.
@@ -389,121 +395,88 @@ match against Jev, Jev's players answered in a median 0.33 s and Laya's in
 
 ### Choosing models and checking keys
 
-For now a whole team plays one model, chosen with `--home` and `--away`
-(`bot` by default); the managers will choose a model per position. Keys are
-read from the environment, or from `.env` in the current folder as Decision
-Arena reads them; a variable set in the shell wins. At startup every API
-model whose key is set is asked one short question, and one that does not
-answer is reported with the key to check and is not offered.
+`--home` and `--away` set each manager's allowed model pool; both default to
+Laya. One model name puts the whole team on it, while comma-separated names
+allow a mixed lineup. Keys are read from the environment or `.env` in the
+current folder; an existing shell variable wins. Startup probes only explicitly
+requested API variants, including an image for vision models. `available`
+probes all configured API variants and excludes failures. A requested model
+that cannot answer stops startup with a diagnostic rather than silently using
+a different model. Local engines are started separately for each team.
 
 ## 5. Managers
 
-**Choice.** A manager interface with two implementations:
-
-- **A built-in manager**, with no model, picks a line-up from the models'
-  stated characteristics, and makes substitutions by simple rules. It is the
-  keyless default.
-- **A language-model manager** does the same through an LLM, with optional
-  assistant models feeding it summaries. It receives a continuous text feed
-  of the match (score, clock, events and each player's model, decisions and
-  latency), and answers with instructions to individual players or
-  substitutions, applied within the substitution rules. Instructions reach a
-  player as one line in that player's state.
-
-**Why.** The match must run with no keys, and a manager behind an interface
-lets an LLM manager and the built-in one be compared under the same rules.
-Which LLM providers are supported, and how often a manager is consulted, is
-decided in the managers issue; any run that spends beyond the keys already
-configured waits for the maintainer's go-ahead with its expected cost.
+**Choice.** A common manager interface supports a built-in policy and optional
+language models. Both select from the team's configured model pool and use the
+same substitution rules and consultation schedule. The fixed formation is 4-4-2;
+managers assign models to its positions rather than choosing a new formation.
 
 ### How a manager works
 
-- **The choice of models.** `--home` and `--away` now name the models each
-  team's manager may choose from, separated by commas (`bot` by default).
-  One name still means the whole team plays that model. Each model is
-  described to the manager by its stated characteristics: where it runs,
-  whether it answers one question at a time for the whole team, and its
-  typical answer time, measured in this project
-  (warm, one question at a time: Laya 0.2 s, Jev 0.3 s, Aplomb 0.3 s, GPT-6
-  Luna Decisions 0.33 s, Clef 0.4 s, Perplexity Decider 0.42 s; d1-3B and
-  the AI Gateway models are not measured yet).
-- **Line-up.** Before kick-off the manager is told its players and the
-  models, and names a model for each of its eleven. The match waits for it,
-  so the page's first frame already shows every player's model.
-- **Consultations.** During the match the manager is consulted every 30 s of
-  play (real time in a live match), one consultation at a time: the next one
-  starts 30 s after the previous answer was applied, so a slow manager is
-  consulted less often, as a slow player is. It is not consulted at half
-  time or after full time. A headless match with only bots and built-in
-  managers runs as fast as it can, consulting on the same match clock.
-- **The feed.** Each consultation gets the match from the team's own side, in
-  plain text: clock, half, score and phase; possession so far; the events
-  since its last consultation (goals, fouls, cards, offsides, corners,
-  penalties, substitutions and half time; throw-ins, goal kicks and free
-  kicks are left out, as too many to read) and any advice that was refused,
-  with why; each player on the pitch, named by its id, with its position,
-  model, answers and median answer time over its last ten answers, failed
-  answers, current action and instruction; the bench; substitutions and
-  stoppages used and any substitution waiting for a stoppage; and the models
-  it may choose from.
-- **Advice.** A manager answers with instructions and substitution requests.
-  An instruction is one line of up to 80 characters for one of its players
-  on the pitch; it replaces that player's previous instruction and appears
-  in the player's state as "Manager: ...". A substitution names the player
-  leaving, the substitute and the substitute's model. It is checked against
-  the substitution rules (section 8) when it is asked for and made at the
-  next stoppage; the substitute's model starts asking once it is on. Advice
-  that breaks a rule, or names a player or model the manager does not have,
-  is dropped and does not stop the rest. Both are shown in the overlay as
-  `manager` messages.
-- **Built-in manager.** Line-up: forwards first, then midfielders,
-  defenders and the goalkeeper, each player gets the model with the shortest
-  expected answer time, where a model that answers one question at a time is
-  expected to take its typical time once for every teammate already on it.
-  Substitutions, like for like at the same position: a player whose model
-  failed three of its last five answers is replaced at once; from the 60th
-  minute, a player on a yellow card is replaced; and at its first
-  consultation after each of the 55th, 65th and 75th minutes, the starting
-  outfield player with the slowest answers (the forwards first when all
-  answer equally) is replaced, early enough that a stoppage usually follows to
-  make it in. The bot is chosen only when no model is
-  offered, or every model is expected to take longer than 1.5 s. Instructions: from the 70th
-  minute, a losing team's forwards are told to shoot when they can and a
-  winning team's defenders to hold their shape and clear danger.
-- **Language-model manager.** OpenAI's Chat Completions API, with the
-  answer constrained to a JSON schema, model `gpt-5.4-mini` unless another
-  is named (`--home-manager openai:MODEL`). The key is `OPENAI_API_KEY`, from
-  the environment or `.env` only, and is never logged or shown; an error is
-  reported by its HTTP status. Each assistant model (`--assistants N`, by
-  default none, model `gpt-5.4-nano`) gets the same feed with its own brief
-  (one watches the decision models' answers and failures, the next the run
-  of play) and returns a short note; the notes reach the manager in the same
-  consultation. The schema lists the manager's own player ids and models, so
-  an answer cannot name anyone else's. A failed line-up falls back to the
-  built-in manager's, and a failed consultation changes nothing. Recorded on
-  14 October 2026: a consultation took 2 to 5 s and 800 to 1,400 tokens.
-- **Claude as the manager.** `--home-manager anthropic` (or
-  `anthropic:MODEL`) asks Claude on Anthropic's Messages API instead, through
-  the official `anthropic` Python SDK, with the same briefs, feed and schemas:
-  the answer is held to the schema by structured outputs
-  (`output_config.format`), at low effort. The model is `claude-haiku-5-5`
-  unless another is named, and assistants use `claude-haiku-5-5` too. The key
-  is `ANTHROPIC_API_KEY`, from the environment or `.env` only, and is never
-  logged or shown; an error is reported by its HTTP status, as for OpenAI.
+- **Model pool.** `--home` and `--away` name allowed decision models, comma
+  separated, with Laya as the default. `available` probes configured APIs and
+  offers working text/image variants. Built-in player bots are not CLI options.
+  The catalog describes modality, where the model runs and historical latency
+  estimates, explicitly not a ranking. LLM managers also receive fresh off-pitch
+  probes before lineup and each consultation (see Live model comparisons below).
+- **Lineup.** Before play, each manager assigns a model to each starting player.
+  LLM managers also select defending style and starting instructions. Their
+  prompt asks for positional choices and a mix of models, including an available
+  image variant. The match waits for lineup selection. Missing or invalid
+  assignments fall back to the built-in selector using the same allowed pool;
+  a status message makes this visible.
+- **Consultations.** The first is due after 30 match-seconds; each subsequent
+  one is due 30 match-seconds after the previous answer. One request per team
+  is active at a time. Statistics accumulate continuously, but the feed is a
+  snapshot at consultation time. Play continues during in-match requests.
+- **Feed.** The manager sees score, clock, phase, possession, significant
+  events, own-player actions, instructions, model health and football statistics,
+  bench availability and substitution limits. It also sees model-level summaries
+  and candidate samples. Opponent information is aggregate only; individual
+  assignments, performance and instructions are hidden. Kicks are all kicks,
+  not completed passes or shots. Individual scoring attribution is omitted.
+- **Advice.** An LLM returns `zonal` or `man_to_man` defending, one-line player
+  instructions and substitution requests with reasons. Instructions replace the
+  player's previous line and enter its next state. Players still choose actions.
+  In man-to-man defending, shared code assigns distinct opponents by formation
+  area and uses those assignments for `mark`. Illegal requests are rejected.
+  Accepted substitutions occur at the next stoppage; the replacement inherits
+  the outgoing player's formation slot and latest instruction when it enters.
+- **Built-in manager.** Assigns models to forwards first, then midfielders,
+  defenders and goalkeeper, minimizing estimated response time with local
+  queueing accounted for. It requests replacements for three failures in the
+  last five answers, bookings after the 60th displayed minute and slow starting
+  outfield players at consultations after the 55th, 65th and 75th minutes.
+  After the 70th minute it can tell a losing team's forwards to shoot or a
+  winning team's defenders to preserve shape. Defending defaults to zonal.
+- **OpenAI manager.** The CLI routes `openai` to the Codex ChatGPT subscription
+  transport, default `gpt-6-astra`; `openai:MODEL` overrides the model. It uses
+  the saved ChatGPT login, with no API-key fallback. Requests are ephemeral,
+  tools disabled, and bounded by a three-minute timeout. The older Chat
+  Completions implementation remains in the code as a base/test implementation;
+  it is not the CLI's OpenAI manager transport.
+- **Anthropic manager.** `anthropic` uses the Messages API with
+  `ANTHROPIC_API_KEY`, default `claude-haiku-5-5`; `anthropic:MODEL` overrides it.
+  It uses the same briefs and JSON schemas. Each team's `--home-effort` or
+  `--away-effort` sets low, medium or high effort, low by default, subject to
+  provider/model support. Both providers report failed consultations without
+  applying changes.
+- **Assistants.** `--assistants 1` or `2` adds short notes before each in-match
+  LLM consultation: first model responsiveness/reliability, then the run of play.
+  They see the same feed and run concurrently; successful notes go to the main
+  manager, which retains all authority. They do not assist lineup selection.
+  Anthropic assistants use `claude-haiku-5-5`; subscription assistants use the
+  selected manager model. A failed assistant note is omitted.
 
-**Why.** A fixed interval keeps an LLM manager's cost known in advance
-(roughly six consultations a team in a match of two 90-second halves,
-plus lineup selection; response time and stoppages affect the count) while
-it still sees each phase of play. A JSON schema makes every answer parseable
-without retries. OpenAI and Anthropic each need only their own request
-function behind the same interface. Claude Haiku 5.5 is the default for its
-low price ($0.10 and $0.50 per million input and output tokens), so a test
-match costs a few cents; a larger model can be named for a real match.
+**Why.** A periodic consultation bounds request frequency while the manager can
+respond to a changing match. Usage depends on model, response time, stoppages,
+assistants and candidate sampling; player calls are much more frequent and
+must be budgeted separately. JSON schemas constrain the response shape, and
+engine validation constrains what it can do.
 
-**Rejected.** Consulting the manager at every event: goals and cards come in
-bursts, and a manager that lags behind them would be asked again before it
-answered. Replacing a player's model without a substitution: the brief puts
-model changes within the substitution rules.
+**Rejected.** Consulting on every event: bursts of events would create a
+backlog. Replacing a running player's model without a football substitution:
+model changes must fit the match's substitution rules.
 
 ## 6. Look and feel
 
@@ -541,7 +514,7 @@ Players absent from the current snapshot are hidden. A damped broadcast camera
 tracks play and briefly frames the scorer after a goal. Score, clock and event
 moments remain visible; the optional decision panel shows model answers and
 latencies, manager instructions and substitutions. It opens with O or a button.
-The page accepts the protocol's planned events without inventing match state.
+The page draws the protocol's events without inventing match state.
 
 This keeps the engine authoritative and the page usable offline, while shared
 geometry, capped pixel density and one shadow-casting light limit GPU work for
@@ -1192,7 +1165,11 @@ their notices.
 | Project | Licence | Studied or reused | Where |
 |---|---|---|---|
 | [Decision Arena](https://github.com/eandualem/decision-arena) | MIT | Reused: model adapters and local model launcher (section 3); timing approach (section 4) | `src/decision_pitch/arena/`, copied from commit 770bb4a |
-| [three.js](https://threejs.org/) 0.186.0 addons: `GLTFLoader`, `SkeletonUtils`, `BufferGeometryUtils` | MIT | Reused unchanged, with notice | `src/decision_pitch/web/vendor/three/addons/` |
+| [three.js](https://threejs.org/) 0.186.0 core and addons: `GLTFLoader`, `SkeletonUtils`, `BufferGeometryUtils` | MIT | Reused unchanged, with notice | `src/decision_pitch/web/vendor/three/` |
+| [Entune](https://github.com/eandualem/entune) | MIT | Adapted: isolated OpenTelemetry exporter transport | `src/decision_pitch/tracing.py`; notice in `src/decision_pitch/ENTUNE_LICENSE` |
+
+Original project code and assets are licensed under [MIT](../LICENSE).
+Reused components retain their own notices.
 
 The human figure, its skeleton, clothing and animation are original work,
 made for this project by the scripts in `assets/figure/` in Blender 5.2. No
