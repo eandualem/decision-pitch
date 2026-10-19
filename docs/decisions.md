@@ -428,9 +428,9 @@ configured waits for the maintainer's go-ahead with its expected cost.
 - **Line-up.** Before kick-off the manager is told its players and the
   models, and names a model for each of its eleven. The match waits for it,
   so the page's first frame already shows every player's model.
-- **Consultations.** During the match the manager is consulted every 15 s of
+- **Consultations.** During the match the manager is consulted every 30 s of
   play (real time in a live match), one consultation at a time: the next one
-  starts 15 s after the previous answer was applied, so a slow manager is
+  starts 30 s after the previous answer was applied, so a slow manager is
   consulted less often, as a slow player is. It is not consulted at half
   time or after full time. A headless match with only bots and built-in
   managers runs as fast as it can, consulting on the same match clock.
@@ -490,7 +490,8 @@ configured waits for the maintainer's go-ahead with its expected cost.
   logged or shown; an error is reported by its HTTP status, as for OpenAI.
 
 **Why.** A fixed interval keeps an LLM manager's cost known in advance
-(about 25 consultations a team in a match of two three-minute halves) while
+(roughly six consultations a team in a match of two 90-second halves,
+plus lineup selection; response time and stoppages affect the count) while
 it still sees each phase of play. A JSON schema makes every answer parseable
 without retries. OpenAI and Anthropic each need only their own request
 function behind the same interface. Claude Haiku 5.5 is the default for its
@@ -1378,3 +1379,40 @@ and to explain.
 **Rejected.** A referee model that judges fouls from the snapshot stream: it
 would add a model call to every challenge and make the laws depend on a
 model's latency, which is the variable the game is about.
+
+## 9. Model-managed matches with visual player state
+
+**Choice.** A default match has two 90-second halves, plus stoppages and half
+time. Managers are consulted 30 seconds after their previous answer, with no
+concurrent consultation for one team. Player loops still ask immediately after
+each answer; failed requests retain the existing backoff.
+
+The existing Decision Arena image adapters are reused unchanged for OpenAI,
+Perplexity, Aplomb and Clef (`-image` variants). Pillow draws a fresh overhead
+JPEG from the same match state as each question, on the server, so headless and
+browser matches have identical inputs. Both teams attack right in their own
+image. Names and shirt numbers identify players; a yellow ring and YOU mark
+the deciding player. Team colours, movement arrows and the ball show the
+shape of play. Images contain no model identities or manager instructions.
+Text-only variants keep receiving text without an image. No football skill
+advantage is assumed for vision; managers may select either variant.
+
+Managers receive their own players' possession time, touches, kicks (not
+mislabelled as shots or completed passes), tackles, saves, goals and fouls,
+plus model decisions, latency and errors. Team totals and possession by pitch
+third describe both sides. Opponent model assignments, instructions, response
+times and individual statistics are excluded. Event summaries identify only
+the manager's own players. Statistics describe observed play, not inferred
+reasons for winning or losing.
+
+Player head labels show the selected model, including image variants, and
+update on substitution. Manager labels show the configured model and actual
+request effort (low by default, selectable per team). A failed or incomplete
+LLM lineup is visibly reported as a fallback; failed consultations are also
+shown. The configured manager's name alone is not evidence of a successful call.
+
+**Why.** The experiment needs observable model choices and enough football
+feedback for a manager to change its team, with opponent internals kept private.
+An overhead image makes team shape readable without a second 3D render or a
+browser round trip per player decision. Pillow is used only to draw this state;
+it adds no model call and reuses no external assets.

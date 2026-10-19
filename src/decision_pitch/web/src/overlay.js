@@ -23,6 +23,8 @@ export function createOverlay(teams) {
   teams.forEach((team, index) => {
     const section = make('section', 'team-panel');
     section.append(make('h2', '', team.name));
+    const manager = team.manager ?? 'Built-in';
+    section.append(make('p', 'manager-name', team.managerEffort ? `${manager} · ${team.managerEffort} effort` : manager));
     const table = make('table', 'roster-table');
     const head = document.createElement('thead');
     const tr = document.createElement('tr');

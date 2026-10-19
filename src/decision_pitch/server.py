@@ -51,6 +51,7 @@ def hello(match: Match, squad: Players | None = None, staff: Staff | None = None
     if staff:
         for team, manager in zip(teams, staff.managers, strict=True):
             team["manager"] = manager.name
+            team["managerEffort"] = getattr(manager, "effort", None)
             team["assistants"] = list(manager.assistants)
     return {"type": "hello", "version": VERSION, "pitch": PITCH, "teams": teams}
 
@@ -107,7 +108,7 @@ BOTS: Options = {players.BOT: None}
 
 
 def app(
-    half_length: float = 180.0,
+    half_length: float = 90.0,
     options: tuple[Options, Options] = (BOTS, BOTS),
     hire: tuple = (managers.BuiltIn, managers.BuiltIn),
 ) -> Starlette:
@@ -161,7 +162,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-browser", action="store_true", help="don't open the page")
     parser.add_argument(
-        "--half-length", type=_seconds, default=180.0, help="seconds per half (default: 180)"
+        "--half-length", type=_seconds, default=90.0, help="seconds per half (default: 90)"
     )
     parser.add_argument(
         "--headless", action="store_true", help="play one match as fast as it runs and print it"
@@ -171,12 +172,14 @@ def main(argv: list[str] | None = None) -> None:
         parser.add_argument(
             f"--{team}", type=_names, default=(players.BOT,), metavar="MODELS",
             help=f"the models the {team} team's manager may choose from, separated by commas "
-            f"(default: bot): {', '.join(players.NAMES)}",
+            f"(default: bot); available checks all configured API models: {', '.join(players.NAMES)}",
         )
         parser.add_argument(
             f"--{team}-manager", type=_manager, default="builtin", metavar="MANAGER",
             help=f"the {team} team's manager: builtin (default), openai, openai:MODEL, anthropic or anthropic:MODEL",
         )
+        parser.add_argument(f"--{team}-effort", choices=("low", "medium", "high"), default="low",
+                            help="reasoning effort sent to this team's LLM manager (default: low)")
     parser.add_argument(
         "--assistants", type=int, choices=range(len(managers.ASSISTANTS) + 1), default=0,
         help="assistant models helping each language-model manager (default: 0)",
@@ -184,7 +187,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     # API keys from .env in the current folder; a variable already set in the shell wins
     load_dotenv(Path.cwd() / ".env", override=False)
-    hire = tuple(_hire(parser, spec, args.assistants) for spec in (args.home_manager, args.away_manager))
+    hire = tuple(_hire(parser, spec, args.assistants, effort) for spec, effort in
+                 ((args.home_manager, args.home_effort), (args.away_manager, args.away_effort)))
     options = _models(parser, args.home, args.away)
     if args.headless:
         match = Match(half_length=args.half_length, seed=args.seed)
@@ -202,6 +206,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _names(text: str) -> tuple[str, ...]:
+    if text.strip().lower() == "available":
+        return ("available",)
     names = tuple(dict.fromkeys(name.strip().lower() for name in text.split(",") if name.strip()))
     if not names or any(name not in players.NAMES for name in names):
         raise argparse.ArgumentTypeError(f"choose from {', '.join(players.NAMES)}")
@@ -214,7 +220,7 @@ def _manager(text: str) -> str:
     return text
 
 
-def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int):
+def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int, effort: str = "low"):
     """What makes a team's manager for each match, checked now so a missing key shows at once."""
     if spec == "builtin":
         return managers.BuiltIn
@@ -222,10 +228,10 @@ def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int):
     kind = managers.Claude if provider == "anthropic" else managers.LanguageModel
     model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else managers.DEFAULT_MODEL)
     try:
-        asyncio.run(kind(model, assistants).aclose())
+        asyncio.run(kind(model, assistants, effort=effort).aclose())
     except MissingKey as exc:
         parser.error(str(exc))
-    return lambda: kind(model, assistants)
+    return lambda: kind(model, assistants, effort=effort)
 
 
 def _models(
@@ -234,7 +240,13 @@ def _models(
     """Check which models can play here, then start the ones each manager may choose. A
     local model gets one server per team, so neither team waits behind the other's
     questions; an API model is shared."""
-    reasons = asyncio.run(players.available())
+    auto = "available" in (*home, *away)
+    reasons = asyncio.run(players.available(None if auto else (*home, *away)))
+    offered = tuple(name for name in players.APIS if reasons.get(name) is None) if auto else ()
+    if auto and not offered:
+        parser.error("no configured API models answered; choose bot or a local model explicitly")
+    home = offered if home == ("available",) else home
+    away = offered if away == ("available",) else away
     print("Models: " + ", ".join(name for name, reason in reasons.items() if reason is None), flush=True)
     for name, reason in reasons.items():
         if reason and name in players.APIS and "did not answer" in reason:

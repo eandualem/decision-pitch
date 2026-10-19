@@ -35,7 +35,7 @@ uv run decision-pitch --home laya --away bot
 The page opens in your browser at `http://127.0.0.1:8000/` and a match starts
 each time it connects. Use `--port` to change the port, `--no-browser` to start
 without opening it and `--half-length` to set the length of each half in
-seconds (default 180).
+seconds (default 90): about three minutes of play, plus stoppages and half time.
 
 To play a match without the page and print what happens (with bots on both
 teams it runs as fast as it can):
@@ -69,14 +69,28 @@ uv run decision-pitch --home laya,jev,bot --away clef
 
 With no keys, Laya and the bots play a full match. To use the others, copy
 `.env.example` to `.env` and fill in the keys you have; the names are Decision
-Arena's, so one `.env` serves both. At startup each model with a key is asked
-one question, and one that does not answer is named with the key to check.
+Arena's, so one `.env` serves both. Startup checks only the requested models,
+with one question each (including a picture for image variants). A model that
+does not answer is named with the key to check.
+
+Add `-image` to `openai`, `perplexity`, `aplomb` or `clef` to offer its vision
+variant alongside its text-only model. Vision players receive a fresh overhead
+pitch image with every question: names and shirt numbers identify every player,
+a yellow ring and YOU mark the deciding player, team colours distinguish sides,
+and arrows show movement. The image always has the player's team attacking right.
+Text-only players receive no picture. Image and text variants use the same key.
+
+To give both managers every working API model configured in the environment,
+including image variants, use `--home available --away available`. This probes
+all configured APIs and excludes ones that fail. Local models such as Laya can
+be named explicitly. Above each player, the match shows its decision model;
+shirt numbers stay on the kits.
 
 ## Choose the managers
 
 Each team has a manager. Before kick-off it picks a model for every player
-from the ones it may choose, and during the match it is consulted every 15
-seconds with a feed of the game: it can give a player a one-line instruction,
+from the ones it may choose, and during the match it is consulted every 30
+seconds after its previous answer with a feed of the game: it can give a player a one-line instruction,
 which the player reads with its state, and substitute a player, bringing on a
 substitute with a model of its choice at the next stoppage. Press O on the
 page to see every player's model, latest decision and answer time, and the
@@ -92,12 +106,29 @@ uv run decision-pitch --home laya,bot --home-manager anthropic --away-manager bu
 ```
 
 `anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-5.4-mini`; name
-another model with `anthropic:MODEL` or `openai:MODEL`.
+another model with `anthropic:MODEL` or `openai:MODEL`. Set each manager's
+reasoning effort with `--home-effort low|medium|high` and `--away-effort` (default
+`low`; the selected provider/model must support it). The touchline label and
+decision panel show the exact manager model and effort.
+
+For example, two LLM managers choosing from the same configured API pool:
+
+```bash
+uv run decision-pitch --home available --away available \
+  --home-manager openai --away-manager anthropic
+```
+
+Managers receive individual football statistics and model health for their own
+players, and only aggregate opponent performance. Opponent model assignments,
+individual statistics and instructions are hidden. Possession by pitch third
+helps managers see where their team spends its time. Kicks count all passes,
+shots and clearances, not successful passes. Lineup fallbacks and failed
+consultations are shown in the decision panel.
 `--assistants 1` or `2` gives each language-model manager assistant models
 (`claude-haiku-5-5` or `gpt-5.4-nano`) that send it a short note before each
-consultation. A
-language-model manager is asked about 25 times a team in a match of two
-three-minute halves, each time with about 1,000 tokens.
+consultation. A three-minute match allows roughly six consultations per team,
+plus lineup selection; response time and stoppages affect the count. Player
+requests run much more often, so their cost must be budgeted separately.
 A model that answers faster acts more often: each player asks its model again
 as soon as its last answer is applied, and keeps carrying out that answer
 while it waits.

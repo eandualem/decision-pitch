@@ -22,9 +22,10 @@ from decision_pitch.arena.models import Model
 from decision_pitch.match import RESTARTS, Match
 from decision_pitch.physics import Player
 from decision_pitch.players import BOT, Players
+from decision_pitch.performance import Performance
 
 QUIET = ("throw_in", "goal_kick", "free_kick")  # restarts left out of the feed: too many to read
-CONSULT_EVERY = 15.0  # s of play between one consultation's answer and the next question
+CONSULT_EVERY = 30.0  # match seconds between one consultation's answer and the next question
 INSTRUCTION_LENGTH = 80  # characters
 UNMEASURED = 1.0  # s assumed for a model whose answer time is not measured yet
 SLOWEST_TO_PICK = 1.5  # s: the bot plays a position only when every model is expected slower
@@ -55,6 +56,11 @@ TRAITS = {
     "liquid": Traits("Liquid D1", "through Vercel's AI Gateway", None),
     "clef": Traits("Clef-flash", "on Cloudflare's API", 0.4),
 }  # fmt: skip
+
+for _base in ("openai", "perplexity", "aplomb", "clef"):
+    _text = TRAITS[_base]
+    TRAITS[_base + "-image"] = Traits(_text.label + " image", _text.runs +
+                                     "; text plus a fresh labelled overhead pitch image", None)
 
 
 def describe(name: str) -> str:
@@ -220,7 +226,10 @@ LINEUP = (
     "models listed, using their stated characteristics. Name every player once."
 )
 ADVICE = (
-    BRIEF + " You are consulted every 15 seconds with a feed of the match. Answer with any "
+    BRIEF + " You are consulted every 30 seconds after your previous answer with a feed of the match. "
+    "Use your players' football performance and model health, and team possession by pitch third, "
+    "to identify where your team struggles. Opponent data is aggregate only. "
+    "Kicks include passes, shots and clearances; they are not completed passes or shots. Answer with any "
     "instructions (one short line each, for a player on the pitch; it replaces that "
     "player's previous instruction and the player reads it with its state; bots read "
     "none) and substitutions (a player on the pitch, a substitute on your bench and the "
@@ -254,10 +263,12 @@ class LanguageModel:
         model: str = DEFAULT_MODEL,
         assistants: int = 0,
         transport: httpx.AsyncBaseTransport | None = None,
+        effort: str = "low",
     ) -> None:
         if not 0 <= assistants <= len(ASSISTANTS):
             raise ValueError(f"a manager can have up to {len(ASSISTANTS)} assistants")
         self.name, self._model, self._assistants = model, model, ASSISTANTS[:assistants]
+        self.effort = effort
         self._key = apis._key("OPENAI_API_KEY", "The OpenAI manager")
         self._http = httpx.AsyncClient(
             transport=transport, headers={"Authorization": f"Bearer {self._key}"}, timeout=30.0
@@ -311,7 +322,7 @@ class LanguageModel:
         request: dict = {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": feed}],
-            "reasoning_effort": "low",
+            "reasoning_effort": self.effort,
         }
         if schema:
             request["response_format"] = {
@@ -336,10 +347,12 @@ class Claude(LanguageModel):
         model: str = CLAUDE_MODEL,
         assistants: int = 0,
         http_client: anthropic.DefaultAsyncHttpxClient | None = None,
+        effort: str = "low",
     ) -> None:
         if not 0 <= assistants <= len(ASSISTANTS):
             raise ValueError(f"a manager can have up to {len(ASSISTANTS)} assistants")
         self.name, self._model, self._assistants = model, model, ASSISTANTS[:assistants]
+        self.effort = effort
         self._key = apis._key("ANTHROPIC_API_KEY", "The Anthropic manager")
         self._client = anthropic.AsyncAnthropic(api_key=self._key, http_client=http_client, timeout=30.0)
 
@@ -348,7 +361,7 @@ class Claude(LanguageModel):
 
     async def _ask(self, model: str, system: str, feed: str, schema: dict | None = None):
         """The model's answer to `feed`: an object held to `schema`, or else plain text."""
-        config: dict = {"effort": "low"}
+        config: dict = {"effort": self.effort}
         if schema:
             config["format"] = {"type": "json_schema", "schema": schema}
         try:
@@ -386,6 +399,7 @@ class Staff:
         self.heard: tuple[list[str], list[str]] = ([], [])  # what each feed has not told yet
         self.held = [0, 0]  # steps each team has had the ball
         self.messages: list[dict] = []  # for the page, drained by the server
+        self.performance = Performance(match)
 
     def situation(self, team: int, lineup: bool = False) -> Situation:
         return Situation(self.match, self.squad, team, tuple(self.options[team]), self.models(team),
@@ -410,11 +424,17 @@ class Staff:
         for team, answer in enumerate(answers):
             fallback = await BuiltIn().lineup(self.situation(team))
             chosen = answer if isinstance(answer, dict) else {}
+            missing = sum(chosen.get(pid) not in self.options[team] for pid in fallback)
+            if missing:
+                reason = f" ({_failure(answer)})" if isinstance(answer, Exception) else ""
+                self.messages.append({"type": "manager", "team": team, "kind": "status",
+                                      "text": f"Lineup fallback for {missing} players{reason}; built-in selection used."})
             for pid, name in fallback.items():
                 pick = chosen.get(pid)
                 self.squad.seat(pid, self.options[team][pick if pick in self.options[team] else name])
 
     def observe(self, events: list[dict]) -> None:
+        self.performance.observe(events)
         """Called after every step with the events it made."""
         m = self.match
         if m.owner is not None:
@@ -448,6 +468,8 @@ class Staff:
             advice = await self.managers[team].advise(situation)
         except Exception as exc:  # noqa: BLE001 - a failed consultation changes nothing
             self.heard[team].append(f"Your last consultation failed ({_failure(exc)}).")
+            self.messages.append({"type": "manager", "team": team, "kind": "status",
+                                  "text": f"Consultation failed ({_failure(exc)}); no changes applied."})
         else:
             self.apply(team, advice)
         self.next[team] = self.match.t + CONSULT_EVERY
@@ -507,6 +529,9 @@ class Staff:
             return "\n".join(lines)
         if self.heard[team]:
             lines.append("Since you last looked: " + " ".join(self.heard[team]))
+        lines.append("Observed football totals (kicks include passes, shots and clearances):")
+        lines.append("Your team: " + self.performance.team(team))
+        lines.append("Opponent team, aggregate only: " + self.performance.team(1 - team))
         lines.append("Your players ([id] name, position: model, answers, median answer time "
                      "of the last ten, failed answers, current action, your instruction):")  # fmt: skip
         models = self.models(team)
@@ -519,7 +544,8 @@ class Staff:
                 line = (f"{models[p.id]}, {seat.answers} answers, {median}, {seat.failures} failed, "
                         f"doing {seat.action}{_booked(m, p)}"
                         + (f", told: {seat.instruction}" if seat.instruction else ""))  # fmt: skip
-            lines.append(f"- [{p.id}] {p.name}, {POSITIONS[p.position]}: {line}")
+            lines.append(f"- [{p.id}] {p.name}, {POSITIONS[p.position]}: {line}; " +
+                         self.performance.describe(self.performance.players[p.id]))
         bench = [q for q in m.bench if q.team == team]
         lines.append("Your bench: " + ("; ".join(f"[{q.id}] {q.name}, {POSITIONS[q.position]}"
                                                  for q in bench) or "empty") + ".")  # fmt: skip
@@ -551,15 +577,19 @@ def _told(m: Match, event: dict, team: int) -> str:
     """One event in the words a manager reads it, from its team's side."""
     kind, side = event["kind"], event["team"]
     who = "" if side is None else ("you" if side == team else m.teams[side].name)
-    name = m.player(event["player"]).name if "player" in event else None
+    def visible_name(pid):
+        player = m.player(pid)
+        return player.name if player.team == team else "an opponent"
+
+    name = visible_name(event["player"]) if "player" in event else None
     if kind == "goal":
-        told = f"goal, {who} ({name})"
+        told = f"goal, {who}" + (f" ({name})" if side == team else "")
     elif kind == "foul":
-        told = f"foul by {name} on {m.player(event['fouled']).name}, free kick to {who}"
+        told = f"foul by {name} on {visible_name(event['fouled'])}, free kick to {who}"
     elif kind in ("yellow", "red"):
         told = f"{kind} card for {name} ({who})"
     elif kind == "substitution":
-        told = f"substitution, {who}: {m.player(event['on']).name} on for {m.player(event['off']).name}"
+        told = f"substitution, {who}" + (f": {visible_name(event['on'])} on for {visible_name(event['off'])}" if side == team else "")
     elif kind == "offside":
         told = f"offside, {name}"
     elif kind in RESTARTS:

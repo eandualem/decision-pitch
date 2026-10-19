@@ -45,7 +45,8 @@ start in `players` and its substitutes in `bench`, in the same shape. `id` is
 unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
 player's decision model, or `null` for the built-in bot; a substitute's is
 `null` until its manager chooses one. `manager` is the team's manager:
-`Built-in`, or the language model's name. `assistants` lists the model of
+`Built-in`, or the language model's name. `managerEffort` is the actual
+configured reasoning effort, or `null` for a built-in manager. `assistants` lists the model of
 each assistant helping the team's manager, one entry per assistant (for
 example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
 manager and for a language-model manager with none.
@@ -189,3 +190,6 @@ An `instruction` is for `player`, on the manager's team and on the pitch. A
 ## Page to server
 
 Nothing yet. The page only listens.
+
+Manager messages of kind `status` report lineup fallbacks and failed consultations;
+their `text` is safe to display like other manager messages.

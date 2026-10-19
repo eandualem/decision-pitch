@@ -155,7 +155,7 @@ TEAMS = (
 
 @dataclass
 class Match:
-    half_length: float = 180.0  # real seconds per half
+    half_length: float = 90.0  # real seconds per half
     seed: int = 0
     teams: tuple[Team, Team] = TEAMS
     t: float = 0.0  # seconds since kick-off, pauses included

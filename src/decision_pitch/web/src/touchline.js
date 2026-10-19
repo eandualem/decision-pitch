@@ -122,7 +122,8 @@ export function createTouchline(scene, teams, pitch, figure) {
   }
 
   teams.forEach((team, index) => {
-    managers.push(figureFor(index, 'manager', 0, team.manager ?? 'Manager'));
+    const name = team.manager ?? 'Manager';
+    managers.push(figureFor(index, 'manager', 0, team.managerEffort ? `${name} · ${team.managerEffort}` : name));
     // One label for each assistant model, on the first figure it helps, with how many.
     const assistants = team.assistants ?? [];
     assistants.forEach((name, i) => {
