@@ -804,7 +804,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
       }
       const move = placed ? null : player.move ?? null;
       if (move && move !== actor.moving && !actor.down) startMishap(actor, move, player, time, after.ball);
-      actor.moving = move;
+      if (!move || !actor.down) actor.moving = move;
       if (!placed && player.down && !actor.down) startDown(actor, player, player.down, time, after.players);
       if (actor.down) {
         if (player.down) actor.down.until = player.down.until;

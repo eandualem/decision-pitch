@@ -1139,6 +1139,16 @@ for (const delay of [0, 0.1]) test(`a touch ${delay}s after recovery plays, seen
   actors.dispose();
 });
 
+test('a new movement at recovery expiry waits for the last get-up frame', () => {
+  const { actors, play } = match();
+  play((t) => [[player(1, 10, 0, {
+    ...(t >= 2 && t < 3.2 ? { down: { way: 'front', until: 3.2 } } : {}),
+    ...(t >= 3.2 && t < 3.8 ? { move: 'air_kick' } : {}),
+  }), player(3, 30, 30)], { x: 40, y: 0 }], 2.4, 1);
+  assert.ok(shownBy(actors, 1).some(([name]) => name === 'air_kick'));
+  actors.dispose();
+});
+
 test('a slide faces the way the engine turns it as it goes in', () => {
   const { actors, play } = match();
   play((t) => [[player(3, 10, t < 2 ? 0 : 6 * (t - 2), { heading: t < 2 ? 0 : Math.PI / 2, ...(t >= 2 ? { move: 'slide' } : {}) }),

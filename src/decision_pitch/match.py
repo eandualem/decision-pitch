@@ -506,6 +506,9 @@ class Match:
         dist = math.hypot(dx, dy) or 1.0
         closing = ((p.vx - carrier.vx) * dx + (p.vy - carrier.vy) * dy) / dist
         if not slide and closing <= TAKE_SPEED:
+            if self.advantage is not None and self.t < self.advantage[-1] and p.team != self.advantage[0]:
+                self._check_advantage(lost=True)
+                return
             # the ball comes to the tackler's feet
             tx, ty = p.x + math.cos(p.heading) * DRIBBLE, p.y + math.sin(p.heading) * DRIBBLE
             speed = math.hypot(tx - b.x, ty - b.y) / TACKLE_LOOK

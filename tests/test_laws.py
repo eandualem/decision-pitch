@@ -967,6 +967,18 @@ def test_play_comes_back_even_when_the_opponent_kicks_the_ball_at_once():
     assert kinds(m.drain_events()) == ["yellow", "free_kick"]
 
 
+def test_a_controlled_tackle_recalls_advantage_before_the_ball_reaches_the_tackler():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)
+    tackler(m, 15, 31.6, 0.0, vx=-1.0)
+    m.advantage = (0, 17, 10, 30.0, 0.0, True, ADVANTAGE)
+    m.t = ADVANTAGE - 3 * STEP  # the ball would reach the tackler only after expiry
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+    assert m.yellows == {17: 1} and m.advantage is None
+
+
 def test_an_offside_player_hit_by_a_chest_high_ball_is_offside():
     m = in_play()
     p = m.player(10)

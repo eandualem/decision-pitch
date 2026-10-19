@@ -1057,6 +1057,8 @@ a knee or a hand dips up to 7 cm into the grass for a frame or two as it lands
   (a fouled player is down 1.2 s, against 2 s for the clips) both play
   faster, up to twice. A touch at `until` is eligible to animate: recovery
   uses the engine timestamp, before the visual contact offset is applied.
+  A new movement that arrives during the last get-up frame stays unconsumed
+  until it can start on the following frame.
   A slide that ends down holds its own lying pose and gets up from it: in
   the engine's 1.5 s from going in, at its own pace.
   After a side fall the figure turns a quarter to get up from its back, which
@@ -1277,7 +1279,8 @@ set up in a test and checked.
   half and the nearest player able to play it is on the fouled team, play
   goes on: the referee signals advantage. A teammate in an offside position
   does not count as able to play it. If the opponents win the ball
-  within 3 s, or the ball goes out for an opposition throw-in, goal kick or
+  within 3 s (including a controlled tackle before the ball reaches the
+  tackler's feet), or the ball goes out for an opposition throw-in, goal kick or
   corner during that window, play comes back for the free kick, with the
   card the foul earned. Otherwise play goes on, and only a card for a
   reckless challenge is still given, at the next stoppage. While an advantage is played, the
