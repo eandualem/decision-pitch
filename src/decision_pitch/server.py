@@ -157,7 +157,8 @@ def app(
                             await websocket.send_json({"type": "pause", "paused": match.paused})
             finally:
                 playing.cancel()
-                await asyncio.gather(playing, return_exceptions=True)
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.gather(playing, return_exceptions=True)
         finally:
             await staff.aclose()
 
