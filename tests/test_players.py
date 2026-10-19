@@ -69,6 +69,21 @@ def test_an_answer_with_the_runner_moves_is_unusable():
         asyncio.run(model.decide(actions.question(match, match.player(7), "hold", None)))
 
 
+def test_only_local_laya_requests_the_full_soccer_input_budget():
+    match = in_play(Match())
+    question = actions.question(match, match.player(7), "hold", .2, "Protect the right channel.")
+    for local, name in [(True, "laya"), (False, "laya"), (True, "d1-3B")]:
+        def handle(request):
+            body = json.loads(request.content)
+            assert body['state'] == question.state and 'Manager: Protect the right channel.' in body['state']
+            assert body.get('max_len') == (2048 if local and name == 'laya' else None)
+            return httpx.Response(200, json={'answers': {'move': {'choice': 'hold',
+                'probabilities': {move: int(move == 'hold') for move in question.options}}}})
+        model = apis.DecisionAPI('Local', 'http://localhost/v1', name, KEY, local=local,
+                                 transport=httpx.MockTransport(handle))
+        asyncio.run(model.decide(question))
+
+
 # -- the state each player is told ------------------------------------------------------------
 
 
@@ -506,4 +521,28 @@ def test_pause_holds_local_requests_already_waiting_in_the_queue():
             for loop in loops:
                 loop.cancel()
             await asyncio.gather(*loops, return_exceptions=True)
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_local_latency_keeps_queue_time_but_excludes_deliberate_pause_wait(fail):
+    async def check():
+        match = in_play(Match())
+        class Finish(Fake):
+            async def decide(self, question):
+                try:
+                    return await super().decide(question)
+                finally:
+                    match.phase = 'full_time'
+        model = players.OneAtATime(Finish(delay=.02, fail=fail))
+        squad = Players(match, {7: model})
+        await model._turn.acquire()
+        task = asyncio.create_task(squad._ask(7))
+        await asyncio.sleep(.05)  # ordinary queueing remains part of latency
+        match.paused = True
+        model._turn.release()
+        await asyncio.sleep(.4)
+        match.paused = False
+        await task
+        assert 50 <= squad.decisions[0]['ms'] < 250
     asyncio.run(check())

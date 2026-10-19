@@ -1508,3 +1508,18 @@ They no longer wait behind routine restart banners or disappear when a goal clea
 that queue. The notice reports applied changes only; requests and their reasons
 remain in the Decisions panel. Manager consultation timing and substitution rules
 are unchanged.
+
+## 17. Complete local state and observed timing
+
+The local Laya request uses its supported 2,048-token input budget so the expanded
+22-player state, positional context and manager instruction fit together with the
+choice descriptions. The copied adapter's request format is otherwise unchanged;
+other providers keep their own budgets. The installed English checkpoint uses
+ModernBERT, whose context supports this budget; its default 512-token request
+budget truncated the longer soccer state.
+
+Local decision latency includes ordinary queue time and inference, but excludes
+the deliberate wait for a paused match to resume. Manager model summaries count
+players only once they have entered the pitch, retaining those who have left.
+A bench player assigned a model for a pending substitution is not yet evidence
+of that model's football performance.
