@@ -51,9 +51,12 @@ class OneAtATime:
         self.model, self.name = model, model.name
         self._turn = asyncio.Lock()
 
-    async def decide(self, question: Question) -> Answer:
-        async with self._turn:
-            return await self.model.decide(question)
+    async def decide(self, question: Question, match: Match | None = None) -> Answer:
+        while True:
+            async with self._turn:
+                if match is None or not match.paused:
+                    return await self.model.decide(question)
+            await asyncio.sleep(0.1)
 
 
 @dataclass
@@ -155,7 +158,7 @@ class Players:
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
-                answer = await seat.model.decide(question)
+                answer = await seat.model.decide(question, m) if isinstance(seat.model, OneAtATime) else await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
                 ms = round((time.perf_counter() - start) * 1000)
                 seat.outcomes.append(False)

@@ -484,3 +484,26 @@ def test_unselected_api_models_are_not_probed(monkeypatch):
     for name in players.APIS:
         monkeypatch.setitem(players.APIS, name, unexpected)
     assert asyncio.run(players.available(('bot',)))['bot'] is None
+
+
+def test_pause_holds_local_requests_already_waiting_in_the_queue():
+    async def check():
+        match = in_play(Match())
+        underlying = Fake(delay=0.05)
+        model = players.OneAtATime(underlying)
+        squad = Players(match, {p.id: model for p in match.players[:3]})
+        loops = [asyncio.create_task(squad._ask(pid)) for pid in squad.seats]
+        try:
+            while not underlying.asked:
+                await asyncio.sleep(0)
+            match.paused = True
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) == 1
+            match.paused = False
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) > 1
+        finally:
+            for loop in loops:
+                loop.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+    asyncio.run(check())
