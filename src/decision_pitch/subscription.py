@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import tempfile
+import tomllib
 
 from decision_pitch.managers import ASSISTANTS, LanguageModel
 
@@ -23,12 +25,22 @@ def environment() -> dict[str, str]:
     ) if key in os.environ}
 
 
+def auth_options() -> list[str]:
+    """Keep the saved login's credential store while excluding other CLI settings."""
+    home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    config = home / "config.toml"
+    setting = tomllib.loads(config.read_text()).get("cli_auth_credentials_store", "file") if config.exists() else "file"
+    if setting not in ("file", "keyring", "auto", "ephemeral"):
+        raise RuntimeError("Invalid Codex credential-store setting; check your Codex configuration.")
+    return ["-c", f"cli_auth_credentials_store={setting}"]
+
+
 def check_login() -> None:
     if not shutil.which("codex"):
         raise RuntimeError("OpenAI managers need the Codex CLI; install it and run codex login.")
     try:
         result = subprocess.run(
-            ["codex", "login", "status"], env=environment(), capture_output=True,
+            ["codex", *auth_options(), "login", "status"], env=environment(), capture_output=True,
             text=True, timeout=15, check=False,
         )
     except subprocess.TimeoutExpired:
@@ -59,7 +71,7 @@ class SubscriptionManager(LanguageModel):
                 "required": ["text"], "additionalProperties": False,
             }))
             command = [
-                "codex", "exec", "--ignore-user-config", "--ephemeral",
+                "codex", "exec", *auth_options(), "--ignore-user-config", "--ephemeral",
                 "--skip-git-repo-check", "--sandbox", "read-only",
                 "--disable", "hooks", "--disable", "shell_snapshot",
                 "--disable", "shell_tool", "-c", "approval_policy=never",
@@ -72,6 +84,7 @@ class SubscriptionManager(LanguageModel):
             process = await asyncio.create_subprocess_exec(
                 *command, cwd=directory, env=environment(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=os.name == "posix",
             )
             try:
                 await asyncio.wait_for(process.communicate(prompt.encode()), TIMEOUT)
@@ -83,5 +96,12 @@ class SubscriptionManager(LanguageModel):
                 raise RuntimeError("Codex manager timed out.") from None
             finally:
                 if process.returncode is None:
-                    process.kill()
+                    if os.name == "posix":
+                        # npm's launcher has a native child; kill the whole request group.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        process.kill()
                     await process.wait()

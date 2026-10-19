@@ -10,7 +10,8 @@ from decision_pitch import subscription
 from decision_pitch.server import _hire
 
 
-def test_openai_manager_requires_subscription_not_game_api_key(monkeypatch):
+def test_openai_manager_requires_subscription_not_game_api_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.setenv("OPENAI_API_KEY", "test-player-key")
     monkeypatch.setattr(subscription.shutil, "which", lambda _: "/bin/codex")
     monkeypatch.setattr(subscription.subprocess, "run", lambda *a, **k:
@@ -24,7 +25,9 @@ def test_openai_manager_requires_subscription_not_game_api_key(monkeypatch):
     assert manager.assistants == ("gpt-6-sol",)
 
 
-def test_subscription_request_uses_schema_and_excludes_provider_credentials(monkeypatch):
+def test_subscription_request_uses_schema_and_excludes_provider_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "test-player-key")
     monkeypatch.setenv("CODEX_API_KEY", "test-api-key")
     monkeypatch.setenv("BACKBONE_AGENT", "test-agent")
@@ -34,6 +37,7 @@ def test_subscription_request_uses_schema_and_excludes_provider_credentials(monk
         calls.append((args, kwargs))
         assert not any(key in kwargs["env"] for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "BACKBONE_AGENT"))
         assert "forced_login_method=chatgpt" in args
+        assert "cli_auth_credentials_store=keyring" in args
         assert "model_reasoning_effort=high" in args
         assert "--ignore-user-config" in args and "read-only" in args
         shape = json.loads(Path(args[args.index("--output-schema") + 1]).read_text())
@@ -58,8 +62,10 @@ def test_subscription_request_uses_schema_and_excludes_provider_credentials(monk
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_pending_manager_is_terminated_on_timeout_or_disconnect(monkeypatch, cancel):
+def test_pending_manager_is_terminated_on_timeout_or_disconnect(monkeypatch, tmp_path, cancel):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     class Process:
+        pid = 123456
         returncode = None
         killed = False
 
@@ -76,10 +82,16 @@ def test_pending_manager_is_terminated_on_timeout_or_disconnect(monkeypatch, can
     process = Process()
 
     async def spawn(*args, **kwargs):
+        assert kwargs["start_new_session"] == (subscription.os.name == "posix")
         return process
 
     monkeypatch.setattr(subscription.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(subscription, "TIMEOUT", 0.01)
+    if subscription.os.name == "posix":
+        def kill_group(pid, sig):
+            assert pid == process.pid and sig == subscription.signal.SIGKILL
+            process.kill()
+        monkeypatch.setattr(subscription.os, "killpg", kill_group)
 
     async def run():
         task = asyncio.create_task(subscription.SubscriptionManager()._ask("gpt-6-astra", "brief", "feed"))
