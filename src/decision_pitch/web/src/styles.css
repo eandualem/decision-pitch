@@ -21,7 +21,7 @@ body { -webkit-user-select: none; user-select: none; }
 .moment-title { font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
 .moment[data-kind="goal"] .moment-title { font-size: 36px; letter-spacing: .1em; }
 .moment-detail { color: #c7d4cf; font-size: 12px; margin-top: 4px; }
-.substitution-notice { position: absolute; top: 90px; left: 24px; max-width: min(460px, calc(100vw - 48px)); padding: 14px 18px; background: #101d21f5; border-left: 3px solid #d6ff63; border-radius: 4px; box-shadow: 0 12px 40px #0005; }
+.substitution-notice { position: absolute; top: 90px; left: 24px; max-width: min(460px, calc(100vw - 48px)); max-height: calc(100vh - 270px); overflow-y: auto; pointer-events: auto; padding: 14px 18px; background: #101d21f5; border-left: 3px solid #d6ff63; border-radius: 4px; box-shadow: 0 12px 40px #0005; }
 .substitution-title { display: block; font-size: 17px; margin-bottom: 8px; }
 .substitution-row { display: grid; gap: 3px; padding: 7px 0; border-top: 1px solid #ffffff18; font-size: 12px; }
 .substitution-team { color: #a8bbb1; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }

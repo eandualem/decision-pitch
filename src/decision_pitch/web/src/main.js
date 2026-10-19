@@ -116,9 +116,9 @@ function receive(message, now = performance.now() / 1000) {
 // overlay's records and who takes the next throw-in: its moment has passed.
 function show(event, now, late) {
   actors.handleEvent(event, now, late);
+  moments.handleEvent(event, now, late);
   if (!late) {
     broadcast.handleEvent(event, now, actors, touchline);
-    moments.handleEvent(event, now);
     touchline.handleEvent(event, now);
   }
   overlay.handleMessage(event);

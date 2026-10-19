@@ -140,6 +140,15 @@ test('completed substitutions show every incoming model without waiting for rest
   assert.equal(notice.children[1].children[0].children[1].textContent, 'OUT 12 · Reserve · Jev');
 });
 
+test('a late substitution updates model identity without showing an old notice', () => {
+  const ui = setup();
+  ui.moments.handleEvent({ kind: 'substitution', team: 0, off: 1, on: 3, model: 'Jev' }, 1, true);
+  const notice = ui.root.children[2];
+  assert.equal(notice.hidden, true);
+  ui.event('substitution', 10, { off: 3, on: 5, model: 'Clef-flash' });
+  assert.equal(notice.children[1].children[0].children[1].textContent, 'OUT 12 · Reserve · Jev');
+});
+
 test('the referee counts down the last five seconds a goalkeeper holds the ball', () => {
   const ui = setup();
   const count = ui.root.children[0].children.at(-1);
