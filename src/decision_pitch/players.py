@@ -38,7 +38,7 @@ APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "clef-image": lambda: apis.clef(image=True),
 }
 LOCAL: dict[str, Callable[[], apis.DecisionAPI]] = {"laya": local.laya, "d1": local.d1}
-NAMES = (BOT, *LOCAL, *APIS)
+NAMES = (*LOCAL, *APIS)
 PROBE = Question("Decision Pitch is starting.", {"yes": "it is", "no": "it is not"}, "Is this a test?")
 
 
@@ -144,7 +144,7 @@ class Players:
         m, seat = self.match, self.seats[player_id]
         p = m.player(player_id)
         while m.phase != "full_time" and (p in m.players or p in m.bench):  # until it leaves
-            if m.phase == "half_time" or p in m.bench:
+            if m.paused or m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
             question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
@@ -163,7 +163,10 @@ class Players:
                 self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
-            seat.answer = time.perf_counter() - start
+            latency = time.perf_counter() - start
+            while m.paused:
+                await asyncio.sleep(0.1)
+            seat.answer = latency
             note = _late(m, p, answer.move, asked, had_ball)
             seat.action = "hold" if note == "already played" else answer.move
             seat.answers += 1

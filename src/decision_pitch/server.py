@@ -68,6 +68,10 @@ async def run(match: Match, send, squad: Players | None = None, staff: Staff | N
     steps = 0
     try:
         while match.phase != "full_time":
+            if match.paused:
+                await asyncio.sleep(0.02)
+                due = loop.time()
+                continue
             squad.play()
             match.step()
             steps += 1
@@ -141,7 +145,13 @@ def app(
             try:
                 with contextlib.suppress(WebSocketDisconnect):
                     while True:
-                        await websocket.receive_text()
+                        try:
+                            control = json.loads(await websocket.receive_text())
+                        except ValueError:
+                            continue
+                        if isinstance(control, dict) and control.get("type") == "pause" and isinstance(control.get("paused"), bool):
+                            match.paused = control["paused"]
+                            await websocket.send_json({"type": "pause", "paused": match.paused})
             finally:
                 playing.cancel()
         finally:
@@ -170,9 +180,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=0, help="for --headless")
     for team in ("home", "away"):
         parser.add_argument(
-            f"--{team}", type=_names, default=(players.BOT,), metavar="MODELS",
+            f"--{team}", type=_names, default=("laya",), metavar="MODELS",
             help=f"the models the {team} team's manager may choose from, separated by commas "
-            f"(default: bot); available checks all configured API models: {', '.join(players.NAMES)}",
+            f"(default: laya); available checks all configured API models: {', '.join(players.NAMES)}",
         )
         parser.add_argument(
             f"--{team}-manager", type=_manager, default="builtin", metavar="MANAGER",
@@ -246,10 +256,10 @@ def _models(
     reasons = asyncio.run(players.available(None if auto else (*home, *away)))
     offered = tuple(name for name in players.APIS if reasons.get(name) is None) if auto else ()
     if auto and not offered:
-        parser.error("no configured API models answered; choose bot or a local model explicitly")
+        parser.error("no configured API models answered; configure a key or choose a local decision model")
     home = offered if home == ("available",) else home
     away = offered if away == ("available",) else away
-    print("Models: " + ", ".join(name for name, reason in reasons.items() if reason is None), flush=True)
+    print("Models: " + ", ".join(dict.fromkeys((*home, *away))), flush=True)
     for name, reason in reasons.items():
         if reason and name in players.APIS and "did not answer" in reason:
             print(f"  {reason}", flush=True)

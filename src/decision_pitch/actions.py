@@ -457,6 +457,8 @@ def question(
         f"{abs(y):.0f} m {'left' if y > 0 else 'right'} of centre, {p.speed:.0f} m/s, "
         f"doing {action}; their goal {goal:.0f} m."
     )
+    parts.append(f"Your base formation position: {_offset(p.home[0] - x, p.home[1] - y, 1)}. "
+                 "Ahead means toward their goal; left/right are from your team's attacking direction.")
     b = m.ball
     if m.owner == p.id:
         held = "you have it"

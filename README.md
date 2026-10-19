@@ -11,7 +11,7 @@ where the same models race in a runner game.
 
 ![A match in play: Harbour in blue against Ridge in orange, seen from the main stand](docs/media/grass/wide.jpg)
 
-**Status:** early. Decision models or built-in bots play a full match on the
+**Status:** early. Decision models play a full match on the
 page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
 for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
 
@@ -23,13 +23,12 @@ You need [uv](https://docs.astral.sh/uv/).
 uv run decision-pitch
 ```
 
-With no keys, that match is played by the built-in bots. To watch a decision
-model play with no keys, install Laya once and give it a team. Laya runs on
-your computer, and its first start downloads about 850 MB:
+Both teams use Laya by default. Install it once before running without API
+keys. Laya runs on your computer; its first start downloads about 850 MB:
 
 ```bash
 uv tool install 'laya[serve]'
-uv run decision-pitch --home laya --away bot
+uv run decision-pitch --home laya --away laya
 ```
 
 The page opens in your browser at `http://127.0.0.1:8000/` and a match starts
@@ -37,8 +36,7 @@ each time it connects. Use `--port` to change the port, `--no-browser` to start
 without opening it and `--half-length` to set the length of each half in
 seconds (default 90): about three minutes of play, plus stoppages and half time.
 
-To play a match without the page and print what happens (with bots on both
-teams it runs as fast as it can):
+To play a match without the page and print what happens:
 
 ```bash
 uv run decision-pitch --headless --seed 1
@@ -46,18 +44,17 @@ uv run decision-pitch --headless --seed 1
 
 ## Choose the models
 
-Each team is played by the built-in bot unless you name the decision models its
-manager may choose from with `--home` and `--away`, separated by commas. One
+Each team uses Laya unless you name the decision models its manager may
+choose from with `--home` and `--away`, separated by commas. One
 name puts the whole team on that model:
 
 ```bash
-uv run decision-pitch --home laya --away bot
-uv run decision-pitch --home laya,jev,bot --away clef
+uv run decision-pitch --home laya --away laya
+uv run decision-pitch --home laya,jev --away clef
 ```
 
 | Name | Model | Needs |
 |---|---|---|
-| `bot` | The built-in bot | Nothing |
 | `laya` | Laya, run on this computer | `uv tool install 'laya[serve]'` once; its first start downloads about 850 MB |
 | `d1` | Liquid's d1-3B, run on this computer | llama.cpp's `llama-server`; its first start downloads about 2.9 GB |
 | `jev` | Jev at TypeSafe | `TYPESAFE_API_KEY` |
@@ -67,7 +64,7 @@ uv run decision-pitch --home laya,jev,bot --away clef
 | `microsoft`, `liquid` | Microsoft Decision-1 and Liquid D1, through Vercel's AI Gateway | `AI_GATEWAY_API_KEY` |
 | `clef` | Cloudflare's Clef-flash | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_AUTH_TOKEN` |
 
-With no keys, Laya and the bots play a full match. To use the others, copy
+With no keys, Laya plays both teams. Built-in bots are not selectable. To use the others, copy
 `.env.example` to `.env` and fill in the keys you have; the names are Decision
 Arena's, so one `.env` serves both. Startup checks only the requested models,
 with one question each (including a picture for image variants). A model that
@@ -94,7 +91,10 @@ seconds after its previous answer with a feed of the game: it can give a player 
 which the player reads with its state, and substitute a player, bringing on a
 substitute with a model of its choice at the next stoppage. Press O on the
 page to see every player's model, latest decision and answer time, and the
-managers' instructions and substitutions.
+managers' instructions and substitutions. Lime highlights the ball carrier;
+blue highlights the nearest opposing defender, on the pitch and in the panel.
+Press P or click Pause to freeze the match and new model requests; press it
+again to resume. Already pending answers wait until resume before application.
 
 The built-in manager (`builtin`, the default) needs nothing: it picks models
 by their typical answer times and substitutes by simple rules. A language
@@ -105,7 +105,7 @@ keys. Install the [Codex CLI](https://learn.chatgpt.com/docs/cli) before selecti
 an OpenAI manager:
 
 ```bash
-uv run decision-pitch --home laya,bot --home-manager anthropic --away-manager builtin
+uv run decision-pitch --home laya --home-manager anthropic --away-manager builtin
 ```
 
 `anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-6-astra`; name

@@ -167,6 +167,18 @@ export function createPlayers(scene, teams, figure, options = {}) {
   const actors = new Map();
   const previous = new Map();
   let previousSnapshot = null;
+  let inspecting = false;
+  let carrier = null;
+  let defender = null;
+  const markerShape = geometry(new THREE.RingGeometry(0.7, 0.86, 40));
+  const carrierMaterial = material(new THREE.MeshBasicMaterial({ color: '#d6ff63', depthWrite: false }));
+  const defenderMaterial = material(new THREE.MeshBasicMaterial({ color: '#71d8ff', depthWrite: false }));
+  function highlight() {
+    for (const [id, actor] of actors) {
+      actor.marker.visible = inspecting && (id === carrier || id === defender);
+      actor.marker.material = id === carrier ? carrierMaterial : defenderMaterial;
+    }
+  }
 
   function shadow(parent, size, surface = shadowMaterial) {
     const result = new THREE.Mesh(disc, surface);
@@ -217,8 +229,13 @@ export function createPlayers(scene, teams, figure, options = {}) {
       badge.position.y = person.height + 0.45 + teamIndex * 0.6;
       modelLabel(badge, player.model);
       group.add(badge);
+      const marker = new THREE.Mesh(markerShape, carrierMaterial);
+      marker.rotation.x = -Math.PI / 2;
+      marker.position.y = 0.04;
+      marker.visible = false;
+      group.add(marker);
       actors.set(player.id, {
-        group, person, badge, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
+        group, person, badge, marker, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
         vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
         // A move without the ball under way (air kick, stumble, slide), the `move` last seen,
@@ -1022,6 +1039,8 @@ export function createPlayers(scene, teams, figure, options = {}) {
 
   return {
     update,
+    highlight(carrierId, defenderId) { carrier = carrierId; defender = defenderId; highlight(); },
+    setInspectionVisible(visible) { inspecting = visible; highlight(); },
     ballPosition: ball.position,
     getPlayerPosition(id) {
       const actor = actors.get(id);

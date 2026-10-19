@@ -98,6 +98,25 @@ def test_the_state_says_what_the_player_is_doing_and_how_fast_it_answers():
     assert "Your answers" not in actions.question(match, match.player(10), "hold", None).state
 
 
+def test_pause_holds_pending_player_answer_and_stops_new_requests():
+    async def go():
+        match = in_play(Match())
+        model = Fake("support", delay=0.02)
+        squad = Players(match, {7: model})
+        task = asyncio.create_task(squad._ask(7))
+        await asyncio.sleep(0.01)
+        match.paused = True
+        await asyncio.sleep(0.15)
+        assert len(model.asked) == 1 and squad.seats[7].answers == 0
+        match.paused = False
+        await asyncio.sleep(0.12)
+        assert squad.seats[7].answers > 0 and len(model.asked) > 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(go())
+
+
 # -- answers turned into movement --------------------------------------------------------------
 
 

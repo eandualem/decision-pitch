@@ -328,7 +328,8 @@ def test_a_language_model_manager_without_its_key_says_which_key(manager, key, c
     assert key in capsys.readouterr().err
 
 
-def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys):
+def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys, monkeypatch):
+    monkeypatch.setattr("decision_pitch.server._models", lambda *args: ({"bot": None}, {"bot": None}))
     main(["--headless", "--half-length", "60", "--seed", "3"])
     out = capsys.readouterr().out
     assert "manager: " in out and "substitution Harbour" in out
@@ -407,3 +408,24 @@ def test_manager_effort_is_sent_and_shown(monkeypatch):
     team = hello(staff.match, staff.squad, staff)['teams'][0]
     assert team['manager'] == managers.DEFAULT_MODEL and team['managerEffort'] == 'high'
     asyncio.run(manager.aclose())
+
+
+def test_paused_manager_defers_advice_and_is_not_due():
+    async def go():
+        class Coach(BuiltIn):
+            async def advise(self, situation):
+                await asyncio.sleep(0.02)
+                return Advice(instructions=[(7, 'Keep your position.')])
+        staff = staffed(Coach(), options=({'jev': Fake('Jev')}, {'bot': None}))
+        await staff.line_up()
+        task = asyncio.create_task(staff.consult(0))
+        await asyncio.sleep(0.01)
+        staff.match.paused = True
+        staff.match.t = 60
+        await asyncio.sleep(0.15)
+        assert not staff.due(0)
+        assert staff.squad.seats[7].instruction is None
+        staff.match.paused = False
+        await task
+        assert staff.squad.seats[7].instruction == 'Keep your position.'
+    asyncio.run(go())

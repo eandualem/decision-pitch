@@ -1440,3 +1440,20 @@ signed in with ChatGPT. This follows the official authentication and
 non-interactive interfaces:
 https://learn.chatgpt.com/docs/auth and
 https://learn.chatgpt.com/docs/non-interactive-mode.
+
+## Decision-only rosters and match inspection
+
+The game launcher offers only decision models; Laya is the keyless default.
+Built-in bot behavior remains an internal engine/test fixture, not a selectable
+player or manager roster option. A failed LLM lineup may select from the same
+real-model pool using the existing fallback selector, but cannot introduce bots.
+Player context includes the base formation spot relative to the player, in
+addition to role, current location, ball ownership and nearby players.
+
+While the Decisions panel is open, the ball carrier and nearest opponent
+have distinct ground markers and highlighted decision rows. Loose balls have
+no carrier highlight; closing the panel hides the markers. Pause/resume is a server-side match
+control: it freezes simulation and scheduling of new model requests. Already
+pending answers wait before application; resuming does not catch up elapsed
+wall time. The browser freezes its presentation clock too. Each browser
+connection continues to own a separate match, so pausing affects that match.
