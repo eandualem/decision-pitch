@@ -162,6 +162,7 @@ class Match:
     elapsed: float = 0.0  # seconds played in this half
     period: int = 1
     phase: str = "kickoff"
+    paused: bool = False
     score: list[int] = field(default_factory=lambda: [0, 0])
     ball: Ball = field(default_factory=Ball)
     owner: int | None = None  # the player in possession

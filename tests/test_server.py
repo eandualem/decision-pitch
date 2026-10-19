@@ -60,3 +60,26 @@ def test_available_roster_is_shared_and_omits_failed_providers(monkeypatch):
     assert list(home) == ['jev', 'openai-image'] and list(away) == list(home)
     assert all(home[name] is away[name] for name in home)
     assert asked == [None]
+
+
+def test_game_launcher_rejects_builtin_bot_players():
+    with pytest.raises(SystemExit) as stopped:
+        main(["--home", "bot"])
+    assert stopped.value.code == 2
+
+
+def test_pause_acknowledges_and_freezes_the_match_clock():
+    import time
+    with TestClient(app()).websocket_connect("/ws", headers=HERE) as ws:
+        ws.receive_json()
+        before = ws.receive_json()
+        ws.send_json({"type": "pause", "paused": True})
+        while (message := ws.receive_json())["type"] != "pause":
+            if message["type"] == "snapshot":
+                before = message
+        assert message["paused"] is True
+        time.sleep(0.25)
+        ws.send_json({"type": "pause", "paused": False})
+        while (message := ws.receive_json())["type"] != "snapshot":
+            pass
+        assert message["t"] - before["t"] < 0.15

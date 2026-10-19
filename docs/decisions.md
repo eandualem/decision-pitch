@@ -1419,3 +1419,41 @@ feedback for a manager to change its team, with opponent internals kept private.
 An overhead image makes team shape readable without a second 3D render or a
 browser round trip per player decision. Pillow is used only to draw this state;
 it adds no model call and reuses no external assets.
+
+## Subscription-backed OpenAI managers
+
+OpenAI managers use the Codex CLI's saved ChatGPT login; decision players
+continue to use their existing provider API adapters and environment keys.
+The `openai:MODEL` manager selection runs `codex exec` with an explicit model
+and effort, ChatGPT-only authentication, and no inherited API keys. There is
+no API fallback. This separates manager subscription usage from the much more
+frequent decision-player calls without copying or handling OAuth tokens.
+
+Each consultation is an ephemeral request in a temporary directory, with
+read-only sandboxing, hooks and shell tools disabled, user configuration
+excluded, and the existing lineup/advice JSON schema supplied to the CLI.
+Requests time out after three minutes and are terminated on cancellation.
+The match continues while advice is pending. Assistants use the manager's
+subscription model. Authentication or invocation failures are visible through
+the existing manager-status messages. Codex must already be installed and
+signed in with ChatGPT. This follows the official authentication and
+non-interactive interfaces:
+https://learn.chatgpt.com/docs/auth and
+https://learn.chatgpt.com/docs/non-interactive-mode.
+
+## Decision-only rosters and match inspection
+
+The game launcher offers only decision models; Laya is the keyless default.
+Built-in bot behavior remains an internal engine/test fixture, not a selectable
+player or manager roster option. A failed LLM lineup may select from the same
+real-model pool using the existing fallback selector, but cannot introduce bots.
+Player context includes the base formation spot relative to the player, in
+addition to role, current location, ball ownership and nearby players.
+
+While the Decisions panel is open, the ball carrier and nearest opponent
+have distinct ground markers and highlighted decision rows. Loose balls have
+no carrier highlight; closing the panel hides the markers. Pause/resume is a server-side match
+control: it freezes simulation and scheduling of new model requests. Already
+pending answers wait before application; resuming does not catch up elapsed
+wall time. The browser freezes its presentation clock too. Each browser
+connection continues to own a separate match, so pausing affects that match.

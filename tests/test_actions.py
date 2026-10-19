@@ -78,6 +78,19 @@ def test_a_dribbler_cuts_away_from_a_defender_in_its_path():
 # -- what a model is asked ------------------------------------------------------------------------
 
 
+def test_position_context_includes_role_location_and_relative_formation_in_both_directions():
+    m = Match()
+    p = m.player(7)
+    p.home = (-10, 5)
+    for period in (1, 2):
+        m.period = period
+        direction = m.attack(p.team)
+        p.x, p.y = -5 * direction, 5 * direction
+        text = actions.question(m, p, "hold", None).state
+        assert "midfielder" in text and "You: 5 m into your half" in text
+        assert "Your base formation position: 5 m behind" in text
+
+
 def test_a_model_is_asked_only_the_actions_that_apply():
     m = in_play()
     p = on_the_ball(m, m.player(7))

@@ -98,6 +98,25 @@ def test_the_state_says_what_the_player_is_doing_and_how_fast_it_answers():
     assert "Your answers" not in actions.question(match, match.player(10), "hold", None).state
 
 
+def test_pause_holds_pending_player_answer_and_stops_new_requests():
+    async def go():
+        match = in_play(Match())
+        model = Fake("support", delay=0.02)
+        squad = Players(match, {7: model})
+        task = asyncio.create_task(squad._ask(7))
+        await asyncio.sleep(0.01)
+        match.paused = True
+        await asyncio.sleep(0.15)
+        assert len(model.asked) == 1 and squad.seats[7].answers == 0
+        match.paused = False
+        await asyncio.sleep(0.12)
+        assert squad.seats[7].answers > 0 and len(model.asked) > 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(go())
+
+
 # -- answers turned into movement --------------------------------------------------------------
 
 
@@ -465,3 +484,26 @@ def test_unselected_api_models_are_not_probed(monkeypatch):
     for name in players.APIS:
         monkeypatch.setitem(players.APIS, name, unexpected)
     assert asyncio.run(players.available(('bot',)))['bot'] is None
+
+
+def test_pause_holds_local_requests_already_waiting_in_the_queue():
+    async def check():
+        match = in_play(Match())
+        underlying = Fake(delay=0.05)
+        model = players.OneAtATime(underlying)
+        squad = Players(match, {p.id: model for p in match.players[:3]})
+        loops = [asyncio.create_task(squad._ask(pid)) for pid in squad.seats]
+        try:
+            while not underlying.asked:
+                await asyncio.sleep(0)
+            match.paused = True
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) == 1
+            match.paused = False
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) > 1
+        finally:
+            for loop in loops:
+                loop.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+    asyncio.run(check())

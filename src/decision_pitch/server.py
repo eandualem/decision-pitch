@@ -20,7 +20,7 @@ from starlette.routing import Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from decision_pitch import managers, pitch, players
+from decision_pitch import managers, pitch, players, subscription
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Model
 from decision_pitch.managers import Manager, Staff
@@ -68,6 +68,10 @@ async def run(match: Match, send, squad: Players | None = None, staff: Staff | N
     steps = 0
     try:
         while match.phase != "full_time":
+            if match.paused:
+                await asyncio.sleep(0.02)
+                due = loop.time()
+                continue
             squad.play()
             match.step()
             steps += 1
@@ -141,7 +145,13 @@ def app(
             try:
                 with contextlib.suppress(WebSocketDisconnect):
                     while True:
-                        await websocket.receive_text()
+                        try:
+                            control = json.loads(await websocket.receive_text())
+                        except ValueError:
+                            continue
+                        if isinstance(control, dict) and control.get("type") == "pause" and isinstance(control.get("paused"), bool):
+                            match.paused = control["paused"]
+                            await websocket.send_json({"type": "pause", "paused": match.paused})
             finally:
                 playing.cancel()
         finally:
@@ -170,9 +180,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=0, help="for --headless")
     for team in ("home", "away"):
         parser.add_argument(
-            f"--{team}", type=_names, default=(players.BOT,), metavar="MODELS",
+            f"--{team}", type=_names, default=("laya",), metavar="MODELS",
             help=f"the models the {team} team's manager may choose from, separated by commas "
-            f"(default: bot); available checks all configured API models: {', '.join(players.NAMES)}",
+            f"(default: laya); available checks all configured API models: {', '.join(players.NAMES)}",
         )
         parser.add_argument(
             f"--{team}-manager", type=_manager, default="builtin", metavar="MANAGER",
@@ -221,15 +231,17 @@ def _manager(text: str) -> str:
 
 
 def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int, effort: str = "low"):
-    """What makes a team's manager for each match, checked now so a missing key shows at once."""
+    """Check credentials before serving a match, then construct its manager."""
     if spec == "builtin":
         return managers.BuiltIn
     provider, _, model = spec.partition(":")
-    kind = managers.Claude if provider == "anthropic" else managers.LanguageModel
-    model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else managers.DEFAULT_MODEL)
+    kind = managers.Claude if provider == "anthropic" else subscription.SubscriptionManager
+    model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else subscription.DEFAULT_MODEL)
     try:
+        if provider == "openai":
+            subscription.check_login()
         asyncio.run(kind(model, assistants, effort=effort).aclose())
-    except MissingKey as exc:
+    except (MissingKey, RuntimeError) as exc:
         parser.error(str(exc))
     return lambda: kind(model, assistants, effort=effort)
 
@@ -244,10 +256,10 @@ def _models(
     reasons = asyncio.run(players.available(None if auto else (*home, *away)))
     offered = tuple(name for name in players.APIS if reasons.get(name) is None) if auto else ()
     if auto and not offered:
-        parser.error("no configured API models answered; choose bot or a local model explicitly")
+        parser.error("no configured API models answered; configure a key or choose a local decision model")
     home = offered if home == ("available",) else home
     away = offered if away == ("available",) else away
-    print("Models: " + ", ".join(name for name, reason in reasons.items() if reason is None), flush=True)
+    print("Models: " + ", ".join(dict.fromkeys((*home, *away))), flush=True)
     for name, reason in reasons.items():
         if reason and name in players.APIS and "did not answer" in reason:
             print(f"  {reason}", flush=True)

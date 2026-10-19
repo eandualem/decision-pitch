@@ -293,6 +293,8 @@ class LanguageModel:
             heard = [f"Assistant {i + 1}: {note}" for i, note in enumerate(notes) if isinstance(note, str)]
             if heard:
                 feed += "\n\n" + "\n".join(heard)
+            while situation.match.paused:
+                await asyncio.sleep(0.1)
         m, team = situation.match, situation.team
         on_pitch = [p.id for p in m.players if p.team == team]
         bench = [q.id for q in m.bench if q.team == team] or [0]  # an empty enum is no schema
@@ -447,7 +449,7 @@ class Staff:
 
     def due(self, team: int) -> bool:
         m = self.match
-        return m.phase not in ("half_time", "full_time") and m.t >= self.next[team]
+        return not m.paused and m.phase not in ("half_time", "full_time") and m.t >= self.next[team]
 
     async def run(self) -> None:
         """Consult each team's manager whenever it is due, until full time."""
@@ -471,6 +473,8 @@ class Staff:
             self.messages.append({"type": "manager", "team": team, "kind": "status",
                                   "text": f"Consultation failed ({_failure(exc)}); no changes applied."})
         else:
+            while self.match.paused:
+                await asyncio.sleep(0.1)
             self.apply(team, advice)
         self.next[team] = self.match.t + CONSULT_EVERY
 

@@ -1192,3 +1192,18 @@ test('player labels follow model decisions and substitutions, including vision v
   assert.ok(disposed);
   actors.dispose();
 });
+
+test('inspection rings mark only the carrier and defender while the panel is open', () => {
+  const { actors, group, forward } = setup();
+  const ring = parent => parent.children.find(child => child.geometry?.type === 'RingGeometry');
+  actors.highlight(1, 2);
+  assert.equal(ring(group).visible, false);
+  actors.setInspectionVisible(true);
+  assert.equal(ring(group).visible, true);
+  assert.equal(ring(forward.group).visible, true);
+  assert.notEqual(ring(group).material.color.getHex(), ring(forward.group).material.color.getHex());
+  actors.highlight(null, null);
+  assert.equal(ring(group).visible, false);
+  assert.equal(ring(forward.group).visible, false);
+  actors.dispose();
+});

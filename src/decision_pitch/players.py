@@ -38,7 +38,7 @@ APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "clef-image": lambda: apis.clef(image=True),
 }
 LOCAL: dict[str, Callable[[], apis.DecisionAPI]] = {"laya": local.laya, "d1": local.d1}
-NAMES = (BOT, *LOCAL, *APIS)
+NAMES = (*LOCAL, *APIS)
 PROBE = Question("Decision Pitch is starting.", {"yes": "it is", "no": "it is not"}, "Is this a test?")
 
 
@@ -51,9 +51,12 @@ class OneAtATime:
         self.model, self.name = model, model.name
         self._turn = asyncio.Lock()
 
-    async def decide(self, question: Question) -> Answer:
-        async with self._turn:
-            return await self.model.decide(question)
+    async def decide(self, question: Question, match: Match | None = None) -> Answer:
+        while True:
+            async with self._turn:
+                if match is None or not match.paused:
+                    return await self.model.decide(question)
+            await asyncio.sleep(0.1)
 
 
 @dataclass
@@ -144,7 +147,7 @@ class Players:
         m, seat = self.match, self.seats[player_id]
         p = m.player(player_id)
         while m.phase != "full_time" and (p in m.players or p in m.bench):  # until it leaves
-            if m.phase == "half_time" or p in m.bench:
+            if m.paused or m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
             question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
@@ -155,7 +158,7 @@ class Players:
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
-                answer = await seat.model.decide(question)
+                answer = await seat.model.decide(question, m) if isinstance(seat.model, OneAtATime) else await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
                 ms = round((time.perf_counter() - start) * 1000)
                 seat.outcomes.append(False)
@@ -163,7 +166,10 @@ class Players:
                 self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
-            seat.answer = time.perf_counter() - start
+            latency = time.perf_counter() - start
+            while m.paused:
+                await asyncio.sleep(0.1)
+            seat.answer = latency
             note = _late(m, p, answer.move, asked, had_ball)
             seat.action = "hold" if note == "already played" else answer.move
             seat.answers += 1

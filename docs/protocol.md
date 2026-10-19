@@ -185,11 +185,15 @@ ready to show.
 An `instruction` is for `player`, on the manager's team and on the pitch. A
 `substitution` is asked for here and made at the next stoppage, when its
 `substitution` event follows; `model` is the name the model is chosen with
-(see the README), or `bot`.
+(see the README).
 
 ## Page to server
 
-Nothing yet. The page only listens.
+Send `{"type":"pause","paused":true}` to pause this match, or the same
+message with `false` to resume. The server acknowledges with the same shape.
+While paused, simulation and new model requests stop. Pending answers wait
+before application; resuming excludes the paused wall time. Other browser
+connections have independent matches.
 
 Manager messages of kind `status` report lineup fallbacks and failed consultations;
 their `text` is safe to display like other manager messages.

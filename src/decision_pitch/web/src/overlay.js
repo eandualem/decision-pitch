@@ -5,7 +5,12 @@ const make = (tag, className, text = '') => {
   return node;
 };
 
-export function createOverlay(teams) {
+export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
+  let paused = false;
+  const pause = make('button', 'pause-toggle', 'Pause · P');
+  pause.type = 'button';
+  const requestPause = () => { pause.disabled = true; onPause(!paused); };
+  pause.addEventListener('click', requestPause);
   const button = make('button', 'overlay-toggle', 'Decisions · O');
   button.type = 'button';
   button.setAttribute('aria-controls', 'decision-overlay');
@@ -15,7 +20,7 @@ export function createOverlay(teams) {
   panel.hidden = true;
   panel.setAttribute('aria-label', 'Player decisions and managers');
   const header = make('div', 'overlay-header');
-  header.append(make('h1', '', 'Inside the match'), make('p', '', 'Every player. Every decision.'));
+  header.append(make('h1', '', 'Inside the match'), make('p', '', 'Lime: ball carrier · Blue: nearest defender'));
   const columns = make('div', 'roster-columns');
   const rows = new Map();
   const roster = new Map();
@@ -56,14 +61,16 @@ export function createOverlay(teams) {
     columns.append(section);
   });
   panel.append(header, columns);
-  document.body.append(panel, button);
+  document.body.append(panel, button, pause);
   const toggle = () => {
     panel.hidden = !panel.hidden;
     button.setAttribute('aria-expanded', String(!panel.hidden));
+    onInspect(!panel.hidden);
   };
   const onKey = event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName)) return;
     if (event.key.toLowerCase() === 'o') toggle();
+    if (event.key.toLowerCase() === 'p' && !pause.disabled) requestPause();
     if (event.key === 'Escape' && !panel.hidden) { toggle(); button.focus(); }
   };
   button.addEventListener('click', toggle);
@@ -80,6 +87,18 @@ export function createOverlay(teams) {
     while (feed.children.length > 6) feed.lastElementChild.remove();
   };
   return {
+    setPaused(value) {
+      paused = value;
+      pause.disabled = false;
+      pause.textContent = paused ? 'Resume · P' : 'Pause · P';
+      pause.setAttribute('aria-pressed', String(paused));
+    },
+    highlight(carrier, defender) {
+      for (const [id, item] of rows) {
+        item.row.classList.toggle('ball-carrier', id === carrier);
+        item.row.classList.toggle('active-defender', id === defender);
+      }
+    },
     setSnapshot(snapshot) {
       const active = new Map(snapshot.players.map(p => [p.id, p]));
       for (const [id, row] of rows) {
@@ -111,6 +130,7 @@ export function createOverlay(teams) {
       document.removeEventListener('keydown', onKey);
       panel.remove();
       button.remove();
+      pause.remove();
     },
   };
 }
