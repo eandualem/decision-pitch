@@ -186,7 +186,7 @@ choices, hardware, queueing, provider load and stochastic replies all contribute
 to the result. A fixed engine seed alone does not reproduce a live-model match.
 Kicks include passes, shots and clearances; they are not completed-pass counts.
 Individual goals are omitted from manager statistics because scorer attribution
-is approximate. The [README](../README.md#current-limits) lists current gameplay
+is approximate. The [README](../README.md#an-experiment-in-progress) lists current gameplay
 limits and the implementation status of each law.
 
 ## Follow it in the code

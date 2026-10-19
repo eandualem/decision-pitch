@@ -46,7 +46,7 @@ a test or from the command line without a browser.
 - **Rules.** The laws are implemented in stages, each with tests: kick-off,
   ball out of play, throw-ins, goal kicks, corners, goals, fouls and free
   kicks, offside, yellow and red cards, two halves and substitutions. Until a
-  law is implemented, the README's rule table lists it as not implemented
+  law is implemented, the [match rules](rules.md) table lists it as not implemented
   yet; play never skips it silently.
 - **Commands.** The engine is driven by one command per player, which lasts
   until it is replaced: hold, run to a point, or kick the ball towards a
