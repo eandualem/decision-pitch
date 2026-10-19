@@ -11,36 +11,76 @@ where the same models race in a runner game.
 
 ![A match in play: Harbour in blue against Ridge in orange, seen from the main stand](docs/media/grass/wide.jpg)
 
-**Status:** early. Decision models play a full match on the
-page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
-for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
+**Status: early experiment.** Two teams of eleven play complete matches, with
+model decisions, manager instructions, substitutions and answer times visible.
+The football is still developing: players can bunch up, attacks can stall, and
+some laws are simplified. This is a way to explore decisions under time pressure,
+not a validated model leaderboard.
 
-## Run it
+## Who decides what?
 
-You need [uv](https://docs.astral.sh/uv/).
+| Part | What it sees | What it decides |
+|---|---|---|
+| Each of the 22 player models | Ball, every player, its role and location, recovery/support targets, current action, recent latency and manager instruction; an overhead image for vision models | One action, such as `pass`, `press`, `mark`, `shoot` or `wait` |
+| Each team's LLM manager | Available model catalog and fresh latency/validity samples; its own players' performance and health; aggregate opponent performance | Models for the starting eleven, initial instructions, zonal or man-to-man defending, updated instructions and legal substitutions |
+| Optional assistants | The manager's match feed | Short advice to the manager about model performance or the run of play |
+| Shared match engine | The full match state | Action targets and movement, ball physics, possession, restarts, fouls, cards, offside, clock and substitution legality |
+| Browser | Match snapshots and decision/manager events | Presentation: camera, animation, labels and inspection controls |
+
+Players choose an **action**, not coordinates or a named pass recipient. Shared
+code turns that choice into football: for `pass`, it picks an open teammate and
+aims ahead of their movement. Managers influence players through instructions;
+they do not move them directly or change the fixed 4-4-2 formation.
+
+Each player asks again as soon as its last answer is applied. The match keeps
+running while answers are in flight, so speed changes how often a model can
+reconsider. Local models queue requests within each team; API limits and stale
+answers also affect play.
+
+Read [how decisions work](docs/model-decisions.md) for the full action set,
+manager inputs and outputs, timing, fallbacks and fairness limits.
+
+## Run it locally
+
+You need Git, [uv](https://docs.astral.sh/uv/) and a browser with WebGL support.
+The Python package requires Python 3.12 or newer; uv can install a suitable Python.
+The renderer is included, with no JavaScript build step.
 
 ```bash
+git clone https://github.com/eandualem/decision-pitch.git
+cd decision-pitch
+uv tool install 'laya[serve]'
 uv run decision-pitch
 ```
 
-Both teams use Laya by default. Install it once before running without API
-keys. Laya runs on your computer; its first start downloads about 850 MB:
+The default is **Laya players on both teams and two built-in managers**. No API
+key is needed. Laya runs on your computer; its first start downloads about
+850 MB, and each team gets a separate local model process. Allow time for the
+initial download and model startup. LLM managers are optional; configure them
+[below](#choose-the-managers).
 
-```bash
-uv tool install 'laya[serve]'
-uv run decision-pitch --home laya --away laya
-```
+The page opens at `http://127.0.0.1:8000/`. Each browser connection starts its
+own match, including new model requests. Stop the server with Ctrl+C.
 
-The page opens in your browser at `http://127.0.0.1:8000/` and a match starts
-each time it connects. Use `--port` to change the port, `--no-browser` to start
-without opening it and `--half-length` to set the length of each half in
-seconds (default 90): about three minutes of play, plus stoppages and half time.
+| Control | Effect |
+|---|---|
+| **O** | Show or hide player decisions, roles, model names, latency and manager messages |
+| **P** or **Pause** | Freeze play and new requests; pending answers wait for resume before application |
+| **Play again**, at full time | Start a new match |
 
-To play a match without the page and print what happens:
+Use `--port` to change the port, `--no-browser` to start without opening a page,
+and `--half-length` for seconds per half (default 90). A default match takes
+about three minutes of play, plus lineup selection, stoppages and half time.
+The displayed football clock maps each half to 45 minutes.
+
+To play without the page and print match events:
 
 ```bash
 uv run decision-pitch --headless --seed 1
 ```
+
+The seed controls engine randomness. Live model replies and arrival times can
+still change the outcome between runs.
 
 ## Choose the models
 
@@ -86,9 +126,10 @@ shirt numbers stay on the kits.
 ## Choose the managers
 
 Each team has a manager. Before kick-off it picks a model for every player
-from the ones it may choose, and during the match it is consulted every 30
-seconds after its previous answer with a feed of the game: it can give a player a one-line instruction,
-which the player reads with its state, and substitute a player, bringing on a
+from the allowed pool. An LLM manager also chooses `zonal` or `man_to_man`
+defending and starting instructions. During play it receives the latest match
+feed 30 match-seconds after its previous answer: it can give a player a one-line instruction,
+which the player reads with its state, change defending style, and substitute a player, bringing on a
 substitute with a model of its choice at the next stoppage. Press O on the
 page to see every player's position, shirt number, model, latest decision and answer time, and the
 managers' instructions and substitutions. Lime highlights the ball carrier;
@@ -96,7 +137,7 @@ blue highlights the nearest opposing defender, on the pitch and in the panel.
 Press P or click Pause to freeze the match and new model requests; press it
 again to resume. Already pending answers wait until resume before application.
 
-The built-in manager (`builtin`, the default) needs nothing: it picks models
+The built-in manager (`builtin`, the default) needs no model credentials: it picks models
 by their typical answer times and substitutes by simple rules. A language
 model can manage instead, through Anthropic's API with `ANTHROPIC_API_KEY`
 or OpenAI through the Codex CLI's ChatGPT subscription login (`codex login`).
@@ -171,6 +212,19 @@ authentication errors. Provider keys, login data and decision-player image
 payloads are excluded. Export problems are logged without stopping play.
 Remove the Langfuse keys and restart to turn tracing off.
 
+## Current limits
+
+- The formation is fixed at 4-4-2. Managers assign models to those slots and
+  guide them, but cannot redesign the formation or control movement directly.
+- Action execution uses shared football heuristics. A result reflects those
+  heuristics, provider latency and limits, lineups and manager choices together.
+- Headers, aerial duels and offside interference without playing the ball are
+  not implemented. Handball and contact use simplified player geometry.
+- Attacking flow and spacing remain experimental. One match is not evidence
+  that a model is better at football; probe latency is not a skill score.
+- Goals count correctly for the team, but the displayed scorer is a nearest-player
+  approximation. Manager statistics therefore omit individual goals.
+
 ## Laws of the game
 
 | Law | Status |
@@ -178,7 +232,7 @@ Remove the Langfuse keys and restart to turn tracing off.
 | Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players out of place run back and the kick-off waits for them, for up to 10 s |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
-| Throw-ins | Implemented. Opponents stay 2 m away. A foul throw cannot happen: the thrower always throws with both hands from where the ball went out |
+| Throw-ins | Implemented. Opponents stay 2 m away. The taker pauses for two seconds after collecting the ball for readable pacing. A foul throw cannot happen: the thrower always throws with both hands from where the ball went out |
 | Goal kicks | Implemented. Opponents leave the penalty area until the kick is taken; it is taken once none is within 9.15 m of the ball, and one that had no time to leave may stay |
 | Corners | Implemented. Opponents stay 9.15 m away |
 | Two halves and half time | Implemented, with a change of ends and added time for goals, penalties, substitutions and cards |
@@ -193,8 +247,33 @@ Remove the Langfuse keys and restart to turn tracing off.
 | Yellow and red cards | Implemented: a yellow for stopping a promising attack or a slide tackle from behind, a red for denying an obvious goal-scoring opportunity or a second yellow. A tackle in the offender's own penalty area is one card lower, as the penalty gives the chance back. A sent-off player leaves the match; a team with fewer than seven ends it |
 | Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage, as the managers ask for them. A substitute takes the place and position of the player it replaces |
 
-## Test it
+## Contribute and explore
+
+The default and integration branch is `develop`; changes arrive through reviewed
+pull requests into it. `main` contains promoted releases. Record design changes
+in [docs/decisions.md](docs/decisions.md) before implementing them. Keep credentials
+in your environment or ignored `.env` file; tests use fake or recorded responses.
 
 ```bash
 uv run pytest
+node --test tests/web/*.test.mjs
 ```
+
+Node.js is needed only for the browser-module tests, not to run the game.
+
+- [How decisions work](docs/model-decisions.md): player, manager and assistant responsibilities.
+- [Design decisions](docs/decisions.md): architecture, action tradeoffs and implementation rationale.
+- [Match protocol](docs/protocol.md): WebSocket messages for the renderer.
+- [Figure assets](assets/figure/README.md): rebuilding and restyling the original characters.
+- [Third-party notices](src/decision_pitch/web/THIRD_PARTY.md): renderer dependencies.
+
+## License and credits
+
+[MIT](LICENSE) covers the original project code and assets. Third-party code
+retains its own notices.
+
+The model adapters and timing approach come from
+[Decision Arena](https://github.com/eandualem/decision-arena), with its
+[MIT notice](src/decision_pitch/arena/LICENSE) retained. The manager tracing
+transport adapts Entune code with its [MIT notice](src/decision_pitch/ENTUNE_LICENSE).
+The figures, kits, animation and soccer engine are original project work.
