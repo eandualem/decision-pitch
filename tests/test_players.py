@@ -419,3 +419,49 @@ def test_choosing_a_model_without_its_key_says_which_key(capsys):
         main(["--headless", "--home", "jev"])
     assert stopped.value.code == 2
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('shape, image, field', [
+    ('openai', 'message', 'input'), ('systemone', 'part', 'state'),
+    ('systemone', 'images', 'images'), ('systemone', 'node', 'state'),
+])
+def test_vision_players_send_fresh_images_through_each_adapter(shape, image, field):
+    from decision_pitch.vision import overhead
+    from dataclasses import replace
+    match = in_play(Match())
+    model = apis.DecisionAPI('Vision', 'https://example.test', 'test', KEY, shape, image=image)
+    question = actions.question(match, match.player(7), 'hold', None)
+    picture = overhead(match, match.player(7))
+    body = model._request(replace(question, image=picture))
+    assert 'base64' in json.dumps(body[field]) or image == 'node'
+    assert 'data:image/jpeg;base64,' in picture
+    match.player(7).x += 10
+    assert overhead(match, match.player(7)) != picture
+    # Its text twin retains the same text and options, without any image payload.
+    model.image = None
+    assert model._request(question)[field if field != 'images' else 'state'] == question.state
+    asyncio.run(model.aclose())
+
+
+def test_the_player_loop_attaches_images_only_to_vision_seats():
+    async def go():
+        match = in_play(Match())
+        text, image = Fake(delay=0.01), Fake(delay=0.01)
+        image.image = 'message'
+        squad = Players(match, {7: text, 8: image})
+        running = asyncio.create_task(squad.run())
+        await asyncio.sleep(0.09)
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        assert len(image.asked) >= 2 and len(text.asked) >= 2
+        assert all(q.image is None for _, q in text.asked)
+        assert all(q.image.startswith('data:image/jpeg;base64,') and 'YOU' in q.state for _, q in image.asked)
+    asyncio.run(go())
+
+
+def test_unselected_api_models_are_not_probed(monkeypatch):
+    def unexpected():
+        pytest.fail('unselected API was instantiated')
+    for name in players.APIS:
+        monkeypatch.setitem(players.APIS, name, unexpected)
+    assert asyncio.run(players.available(('bot',)))['bot'] is None

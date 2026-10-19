@@ -12,9 +12,9 @@ import shutil
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from decision_pitch import actions, bots
+from decision_pitch import actions, bots, vision
 from decision_pitch.arena import apis, local
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Answer, Model, Question
@@ -23,8 +23,7 @@ from decision_pitch.match import Command, Match
 FAILURE_WAIT = 0.5  # s before asking again after a failed answer
 BOT = "bot"
 
-# Decision Arena's models, by the name they are chosen with. Image twins are left out: the
-# match has no picture to send.
+# Decision Arena's text and image adapters, using the same request formats.
 APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "jev": apis.jev,
     "openai": apis.openai,
@@ -33,6 +32,10 @@ APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "microsoft": apis.microsoft,
     "liquid": apis.liquid,
     "clef": apis.clef,
+    "openai-image": lambda: apis.openai(image=True),
+    "perplexity-image": lambda: apis.perplexity(image=True),
+    "aplomb-image": lambda: apis.aplomb(image=True),
+    "clef-image": lambda: apis.clef(image=True),
 }
 LOCAL: dict[str, Callable[[], apis.DecisionAPI]] = {"laya": local.laya, "d1": local.d1}
 NAMES = (BOT, *LOCAL, *APIS)
@@ -145,6 +148,10 @@ class Players:
                 await asyncio.sleep(0.1)
                 continue
             question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
+            if getattr(seat.model, "image", None):
+                question = replace(question, image=vision.overhead(m, p), state=question.state +
+                                   " Image: yellow ring and YOU mark you; names and shirt numbers identify players. "
+                                   "Your team attacks right. White dot is the ball; arrows show movement.")
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
@@ -202,7 +209,7 @@ def _decision(
 # -- which models can play --------------------------------------------------------------
 
 
-async def available() -> dict[str, str | None]:
+async def available(names=None) -> dict[str, str | None]:
     """Every model by name, with None if it can play here or else what to check. Each API
     model whose key is set is asked one question, so a wrong key shows up at startup."""
     reasons: dict[str, str | None] = {BOT: None}
@@ -215,19 +222,29 @@ async def available() -> dict[str, str | None]:
         except MissingKey as exc:
             return str(exc)
         try:
-            await model.decide(PROBE)
+            question = PROBE
+            if model.image:
+                match = Match()
+                question = replace(PROBE, image=vision.overhead(match, match.player(7)))
+            await model.decide(question)
             return None
         except Exception as exc:  # noqa: BLE001 - any failure: name the key to check
             return f"{model.name} did not answer ({_error(exc)[:80]}); check {model.key_name}"
         finally:
             await model.aclose()
 
-    answers = await asyncio.gather(*(probe(name) for name in APIS))
-    return reasons | dict(zip(APIS, answers, strict=True))
+    selected = [name for name in APIS if names is None or name in names]
+    answers = await asyncio.gather(*(probe(name) for name in selected))
+    return reasons | dict(zip(selected, answers, strict=True))
 
 
 def start(name: str) -> Model:
     """A model ready to play: local servers are started and answer one question at a time."""
     if name in LOCAL:
         return OneAtATime(LOCAL[name]())
-    return APIS[name]()
+    model = APIS[name]()
+    labels = {"openai": "GPT-6 Luna", "perplexity": "Perplexity Decider", "aplomb": "Aplomb 1",
+              "clef": "Clef-flash", "microsoft": "Microsoft Decision-1", "liquid": "Liquid D1"}
+    base = name.removesuffix("-image")
+    model.name = labels.get(base, model.name) + (" image" if name.endswith("-image") else "")
+    return model

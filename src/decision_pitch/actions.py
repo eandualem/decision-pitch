@@ -473,7 +473,7 @@ def question(
             key=lambda q: math.hypot(q.x - p.x, q.y - p.y),
         )[:NEARBY]
         described = [
-            f"{q.name} {_offset(q.x - p.x, q.y - p.y, direction)}"
+            f"{q.name} ({q.number}) {_offset(q.x - p.x, q.y - p.y, direction)}"
             + (" open" if label == "Teammates" and _space(m, q) >= PRESSURE else "")
             for q in others
         ]

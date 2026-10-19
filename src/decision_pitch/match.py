@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import random
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field, replace
 
 from decision_pitch import pitch
@@ -155,7 +155,7 @@ TEAMS = (
 
 @dataclass
 class Match:
-    half_length: float = 180.0  # real seconds per half
+    half_length: float = 90.0  # real seconds per half
     seed: int = 0
     teams: tuple[Team, Team] = TEAMS
     t: float = 0.0  # seconds since kick-off, pauses included
@@ -198,6 +198,8 @@ class Match:
         self.stoppage = 0  # counts the restarts
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
         self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
+        # Performance counters retain contacts that the animation history combines.
+        self.contacts: dict[int, Counter] = {pid: Counter() for pid in self.everyone}
         self.diving: set[int] = set()  # goalkeepers diving across their goal this step
         # movements without the ball (docs/protocol.md): kind, until when, and how it then
         # goes down and until when, if it does
@@ -720,6 +722,7 @@ class Match:
             if kind == "control":
                 return  # its tackle brought the ball to it: the tackle is the touch
             self.touches.pop()
+        self.contacts[p.id][kind] += 1
         self.touches.append(touch)
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:

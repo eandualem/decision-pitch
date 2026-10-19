@@ -337,3 +337,9 @@ test('a hello without a manager name or assistants still gets a labelled manager
     t.touchline.dispose();
   }
 });
+
+test('manager labels include the configured model and effort', () => {
+  const t = setup([{ ...TEAMS[0], manager: 'manager-model', managerEffort: 'high' }, TEAMS[1]]);
+  assert.ok(t.texts.includes('manager-model · high'));
+  t.touchline.dispose();
+});

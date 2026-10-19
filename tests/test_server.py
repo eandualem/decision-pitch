@@ -44,3 +44,19 @@ def test_the_half_length_must_be_a_positive_number_of_seconds(value):
     with pytest.raises(SystemExit) as stopped:
         main(["--headless", "--half-length", value])
     assert stopped.value.code == 2
+
+
+def test_available_roster_is_shared_and_omits_failed_providers(monkeypatch):
+    import argparse
+    from decision_pitch import players
+    from decision_pitch.server import _models
+    asked = []
+    async def available(names):
+        asked.append(names)
+        return {name: (None if name in ('jev', 'openai-image') else 'unavailable') for name in players.APIS}
+    monkeypatch.setattr(players, 'available', available)
+    monkeypatch.setattr(players, 'start', lambda name: object())
+    home, away = _models(argparse.ArgumentParser(), ('available',), ('available',))
+    assert list(home) == ['jev', 'openai-image'] and list(away) == list(home)
+    assert all(home[name] is away[name] for name in home)
+    assert asked == [None]
