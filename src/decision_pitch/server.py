@@ -20,7 +20,7 @@ from starlette.routing import Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from decision_pitch import managers, pitch, players
+from decision_pitch import managers, pitch, players, subscription
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Model
 from decision_pitch.managers import Manager, Staff
@@ -221,15 +221,17 @@ def _manager(text: str) -> str:
 
 
 def _hire(parser: argparse.ArgumentParser, spec: str, assistants: int, effort: str = "low"):
-    """What makes a team's manager for each match, checked now so a missing key shows at once."""
+    """Check credentials before serving a match, then construct its manager."""
     if spec == "builtin":
         return managers.BuiltIn
     provider, _, model = spec.partition(":")
-    kind = managers.Claude if provider == "anthropic" else managers.LanguageModel
-    model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else managers.DEFAULT_MODEL)
+    kind = managers.Claude if provider == "anthropic" else subscription.SubscriptionManager
+    model = model or (managers.CLAUDE_MODEL if provider == "anthropic" else subscription.DEFAULT_MODEL)
     try:
+        if provider == "openai":
+            subscription.check_login()
         asyncio.run(kind(model, assistants, effort=effort).aclose())
-    except MissingKey as exc:
+    except (MissingKey, RuntimeError) as exc:
         parser.error(str(exc))
     return lambda: kind(model, assistants, effort=effort)
 

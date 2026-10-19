@@ -1419,3 +1419,24 @@ feedback for a manager to change its team, with opponent internals kept private.
 An overhead image makes team shape readable without a second 3D render or a
 browser round trip per player decision. Pillow is used only to draw this state;
 it adds no model call and reuses no external assets.
+
+## Subscription-backed OpenAI managers
+
+OpenAI managers use the Codex CLI's saved ChatGPT login; decision players
+continue to use their existing provider API adapters and environment keys.
+The `openai:MODEL` manager selection runs `codex exec` with an explicit model
+and effort, ChatGPT-only authentication, and no inherited API keys. There is
+no API fallback. This separates manager subscription usage from the much more
+frequent decision-player calls without copying or handling OAuth tokens.
+
+Each consultation is an ephemeral request in a temporary directory, with
+read-only sandboxing, hooks and shell tools disabled, user configuration
+excluded, and the existing lineup/advice JSON schema supplied to the CLI.
+Requests time out after three minutes and are terminated on cancellation.
+The match continues while advice is pending. Assistants use the manager's
+subscription model. Authentication or invocation failures are visible through
+the existing manager-status messages. Codex must already be installed and
+signed in with ChatGPT. This follows the official authentication and
+non-interactive interfaces:
+https://learn.chatgpt.com/docs/auth and
+https://learn.chatgpt.com/docs/non-interactive-mode.

@@ -99,13 +99,16 @@ managers' instructions and substitutions.
 The built-in manager (`builtin`, the default) needs nothing: it picks models
 by their typical answer times and substitutes by simple rules. A language
 model can manage instead, through Anthropic's API with `ANTHROPIC_API_KEY`
-or OpenAI's API with `OPENAI_API_KEY`:
+or OpenAI through the Codex CLI's ChatGPT subscription login (`codex login`).
+OpenAI managers never use an API key; decision players still use their provider
+keys. Install the [Codex CLI](https://learn.chatgpt.com/docs/cli) before selecting
+an OpenAI manager:
 
 ```bash
 uv run decision-pitch --home laya,bot --home-manager anthropic --away-manager builtin
 ```
 
-`anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-5.4-mini`; name
+`anthropic` uses `claude-haiku-5-5` and `openai` uses `gpt-6-astra`; name
 another model with `anthropic:MODEL` or `openai:MODEL`. Set each manager's
 reasoning effort with `--home-effort low|medium|high` and `--away-effort` (default
 `low`; the selected provider/model must support it). The touchline label and
@@ -115,7 +118,8 @@ For example, two LLM managers choosing from the same configured API pool:
 
 ```bash
 uv run decision-pitch --home available --away available \
-  --home-manager openai --away-manager anthropic
+  --home-manager openai:gpt-6-astra --away-manager openai:gpt-6-sol \
+  --home-effort high --away-effort high
 ```
 
 Managers receive individual football statistics and model health for their own
@@ -126,10 +130,13 @@ shots and clearances, not successful passes. Goals are reported per team;
 individual scoring attribution is not yet reliable. Lineup fallbacks and failed
 consultations are shown in the decision panel.
 `--assistants 1` or `2` gives each language-model manager assistant models
-(`claude-haiku-5-5` or `gpt-5.4-nano`) that send it a short note before each
+(Claude Haiku, or the same subscription model as the OpenAI manager)
+that send it a short note before each
 consultation. A three-minute match allows roughly six consultations per team,
 plus lineup selection; response time and stoppages affect the count. Player
-requests run much more often, so their cost must be budgeted separately.
+requests run much more often, so their API cost must be budgeted separately.
+OpenAI managers consume subscription usage. Each request has a three-minute
+timeout; failures appear in the decision panel without switching to API billing.
 A model that answers faster acts more often: each player asks its model again
 as soon as its last answer is applied, and keeps carrying out that answer
 while it waits.
