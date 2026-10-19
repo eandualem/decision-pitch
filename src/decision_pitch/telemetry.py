@@ -83,7 +83,8 @@ def model_performance(staff, team, name):
     """Own-team evidence only, including players that have left the pitch."""
     model = staff.options[team][name]
     seats = [(pid, seat) for pid, seat in staff.squad.seats.items()
-             if staff.match.player(pid).team == team and seat.model is model]
+             if staff.match.player(pid).team == team and seat.model is model
+             and staff.match.player(pid) not in staff.match.bench]
     if not seats:
         return "match: not yet fielded; football quality unmeasured"
     counts, late = Counter(), Counter()

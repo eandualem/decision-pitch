@@ -108,6 +108,19 @@ def test_lineup_and_later_consultations_get_refreshed_candidate_measurements():
     assert "latest 0.0s ago" in manager.feeds[1]
 
 
+def test_pending_substitute_is_not_match_evidence_until_it_enters():
+    m = Match()
+    m.phase = 'play'
+    model = Candidate()
+    squad = Players(m)
+    staff = managers.Staff(m, squad, (managers.BuiltIn(), managers.BuiltIn()), ({'jev': model}, {'jev': model}))
+    staff.apply(0, managers.Advice(substitutions=[(7, 26, 'jev')]))
+    assert 'not yet fielded' in telemetry.model_performance(staff, 0, 'jev')
+    m.phase = 'free_kick'
+    m._substitute()
+    assert '1 currently on pitch, 1 players observed' in telemetry.model_performance(staff, 0, 'jev')
+
+
 def test_paused_local_queue_does_not_start_probe_deadline(monkeypatch):
     from decision_pitch.players import OneAtATime
     real_timeout = asyncio.timeout

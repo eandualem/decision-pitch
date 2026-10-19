@@ -59,12 +59,16 @@ class OneAtATime:
     @asynccontextmanager
     async def ready(self, match: Match | None = None):
         """Hold a dispatch slot; queueing and pause happen before request timing."""
+        paused_wait = 0.0
         while True:
             async with self._turn:
                 if match is None or not match.paused:
-                    yield
+                    yield paused_wait
                     return
-            await asyncio.sleep(0.1)
+            start = time.perf_counter()
+            while match.paused:
+                await asyncio.sleep(0.1)
+            paused_wait += time.perf_counter() - start
 
 
 @dataclass
@@ -164,16 +168,21 @@ class Players:
                                     self.defending[p.team], {pid: s.action for pid, s in self.seats.items()})
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
+            paused_wait = 0.0
             try:
-                answer = await seat.model.decide(question, m) if isinstance(seat.model, OneAtATime) else await seat.model.decide(question)
+                if isinstance(seat.model, OneAtATime):
+                    async with seat.model.ready(m) as paused_wait:
+                        answer = await seat.model.model.decide(question)
+                else:
+                    answer = await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
-                ms = round((time.perf_counter() - start) * 1000)
+                ms = round((time.perf_counter() - start - paused_wait) * 1000)
                 seat.outcomes.append(False)
                 seat.failures += 1
                 self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
-            latency = time.perf_counter() - start
+            latency = time.perf_counter() - start - paused_wait
             while m.paused:
                 await asyncio.sleep(0.1)
             seat.answer = latency
