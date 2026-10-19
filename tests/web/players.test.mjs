@@ -5,7 +5,7 @@ import test from 'node:test';
 import * as THREE from '../../src/decision_pitch/web/vendor/three/three.module.js';
 import { fixtureGltf, ONE_SHOTS, MORE_ONE_SHOTS } from './figure-fixture.mjs';
 
-globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {} }) }) };
+globalThis.document ??= { createElement: () => ({ getContext: () => ({ strokeText() {}, fillText() {}, fillRect() {} }) }) };
 const { prepareFigure } = await import('../../src/decision_pitch/web/src/figures.js');
 const { createPlayers, track, reach, touchClip, DRIBBLE } = await import('../../src/decision_pitch/web/src/players.js');
 const STEP = 1 / 30;
@@ -1175,5 +1175,35 @@ test('getting up turned across its heading, the stride runs the way the body sho
   assert.ok(Math.abs(shown) > 0.3, `still turned back: ${shown}`);
   const { travel } = actors.inspect(1);
   assert.ok(Math.abs(Math.atan2(Math.sin(travel + shown), Math.cos(travel + shown))) < 0.15, `running +x against a body facing ${shown}: ${travel}`);
+  actors.dispose();
+});
+
+test('player labels follow model decisions and substitutions, including vision variants', () => {
+  const { scene, actors } = setup();
+  const badge = scene.children[0].children[0].children.find(child => child.isSprite);
+  assert.equal(badge.userData.model, 'Built-in bot');
+  actors.handleDecision({ player: 1, model: 'GPT-6 Luna image', action: 'hold' }, 0);
+  assert.equal(badge.userData.model, 'GPT-6 Luna image');
+  const old = badge.material.map;
+  let disposed = false;
+  old.addEventListener('dispose', () => { disposed = true; });
+  actors.handleEvent({ kind: 'substitution', on: 1, model: 'Jev' }, 0);
+  assert.equal(badge.userData.model, 'Jev');
+  assert.ok(disposed);
+  actors.dispose();
+});
+
+test('inspection rings mark only the carrier and defender while the panel is open', () => {
+  const { actors, group, forward } = setup();
+  const ring = parent => parent.children.find(child => child.geometry?.type === 'RingGeometry');
+  actors.highlight(1, 2);
+  assert.equal(ring(group).visible, false);
+  actors.setInspectionVisible(true);
+  assert.equal(ring(group).visible, true);
+  assert.equal(ring(forward.group).visible, true);
+  assert.notEqual(ring(group).material.color.getHex(), ring(forward.group).material.color.getHex());
+  actors.highlight(null, null);
+  assert.equal(ring(group).visible, false);
+  assert.equal(ring(forward.group).visible, false);
   actors.dispose();
 });

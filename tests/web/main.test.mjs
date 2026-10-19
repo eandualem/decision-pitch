@@ -33,6 +33,8 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     update: (...args) => calls.push(['actors.update', ...args]),
     handleEvent: (...args) => calls.push(['actors.event', ...args]),
     handleDecision: (...args) => calls.push(['actors.decision', ...args]),
+    highlight: (...args) => calls.push(['actors.highlight', ...args]),
+    setInspectionVisible: (...args) => calls.push(['actors.inspect', ...args]),
     showNumbers: (...args) => calls.push(['actors.numbers', ...args]),
     dispose: () => calls.push(['actors.dispose']),
   });
@@ -41,6 +43,8 @@ function setup(protocol = 'http:', loadFigure = loaded) {
     update: (...args) => calls.push([`${name}.update`, ...args]),
     handleEvent: (...args) => calls.push([`${name}.event`, ...args]),
     handleMessage: (...args) => calls.push([`${name}.message`, ...args]),
+    highlight: (...args) => calls.push([`${name}.highlight`, ...args]),
+    setPaused: (...args) => calls.push([`${name}.paused`, ...args]),
     setSnapshot: (...args) => calls.push([`${name}.snapshot`, ...args]),
     showLabels: (...args) => calls.push([`${name}.labels`, ...args]),
   });
@@ -184,7 +188,8 @@ test('events left behind by a stall only update the records', () => {
   assert.deepEqual(named(app.calls, 'overlay.message').map(([, m]) => m.kind), ['substitution', 'corner']);
   assert.deepEqual(named(app.calls, 'actors.event').map(([, m, , late]) => [m.kind, late]),
     [['substitution', true], ['corner', false]], 'the players keep their records, and know it is late');
-  assert.deepEqual(named(app.calls, 'moments.event').map(([, m]) => m.kind), ['corner']);
+  assert.deepEqual(named(app.calls, 'moments.event').map(([, m, , late]) => [m.kind, late]),
+    [['substitution', true], ['corner', false]], 'the notice keeps model records without replaying late moments');
   assert.deepEqual(named(app.calls, 'touchline.event').map(([, m]) => m.kind), ['corner']);
 });
 
@@ -288,7 +293,7 @@ test('a hello arriving again while the figure loads replaces the one held', () =
   const app = setup('http:', figure);
   app.send({ ...hello, teams: [{ name: 'old' }] });
   app.send(snapshot(1));
-  app.send({ ...hello, teams: [{ name: 'new' }] });
+  app.send({ ...hello, teams: [{ name: 'new', players: [] }] });
   figure.resolve();
   const creates = named(app.calls, 'actors.create');
   assert.equal(creates.length, 1);
@@ -326,4 +331,36 @@ test('the numbers above the players and the managers\' labels follow the shot of
   assert.deepEqual(order.slice(-4), shown);
   assert.equal(named(app.calls, 'actors.numbers').at(-1)[1], false, 'the camera is not on the wide shot');
   assert.equal(named(app.calls, 'touchline.labels').at(-1)[1], true, 'but on the managers');
+});
+
+
+test('pause freezes presentation time and resume excludes paused wall time', () => {
+  const app = setup();
+  app.send(hello);
+  app.send(snapshot(1));
+  app.wait(100);
+  app.send(snapshot(1.1));
+  app.tick(50);
+  app.send({ type: 'pause', paused: true });
+  app.tick(5000);
+  const frozen = named(app.calls, 'actors.update').at(-1);
+  assert.equal(frozen[4], 0);
+  assert.equal(frozen[5], 1.15);
+  app.send({ type: 'pause', paused: false });
+  app.tick(20);
+  const resumed = named(app.calls, 'actors.update').at(-1);
+  assert.ok(Math.abs(resumed[5] - 1.17) < 1e-9);
+  assert.equal(named(app.calls, 'overlay.paused').at(-1)[1], false);
+});
+
+test('inspection follows possession and the nearest opponent, clearing on a loose ball', () => {
+  const app = setup();
+  app.send({ ...hello, teams: [{players:[{id:1},{id:2}]},{players:[{id:3},{id:4}]}] });
+  const frame = { ...snapshot(1), players: [{id:1,x:0,y:0},{id:2,x:1,y:0},{id:3,x:2,y:0},{id:4,x:5,y:0}], ball:{owner:1} };
+  app.send(frame);
+  app.tick(200);
+  assert.deepEqual(named(app.calls, 'actors.highlight').at(-1).slice(1), [1,3]);
+  app.send({...frame,t:1.2,ball:{owner:null}});
+  app.tick(200);
+  assert.deepEqual(named(app.calls, 'actors.highlight').at(-1).slice(1), [null,null]);
 });

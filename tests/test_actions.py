@@ -2,6 +2,7 @@
 what each action makes the player do, and the downside the engine plays out."""
 
 import math
+import pytest
 
 from decision_pitch import actions, bots, pitch
 from decision_pitch.match import KickTo, Match, MoveTo
@@ -76,6 +77,19 @@ def test_a_dribbler_cuts_away_from_a_defender_in_its_path():
 
 
 # -- what a model is asked ------------------------------------------------------------------------
+
+
+def test_position_context_includes_role_location_and_relative_formation_in_both_directions():
+    m = Match()
+    p = m.player(7)
+    p.home = (-10, 5)
+    for period in (1, 2):
+        m.period = period
+        direction = m.attack(p.team)
+        p.x, p.y = -5 * direction, 5 * direction
+        text = actions.question(m, p, "hold", None).state
+        assert "midfielder" in text and "You: 5 m into your half" in text
+        assert "Your base formation position: 5 m behind" in text
 
 
 def test_a_model_is_asked_only_the_actions_that_apply():
@@ -232,3 +246,44 @@ def test_a_player_keeping_its_place_still_collects_a_loose_ball_it_reaches_first
         assert actions.command(m, p, action) == bots.command(m, p)
     m.owner = 18  # an opponent has it: pressing stays a choice
     assert actions.command(m, p, "hold") == bots._shape(m, p, bots._home(m, p))
+
+
+def test_tactical_context_and_unique_marking_follow_both_teams_and_halves():
+    m = in_play(ball=(25, 10))
+    for period in (1, 2):
+        m.period = period
+        for team in (0, 1):
+            ours = [p for p in m.players if p.team == team and p.position != 'GK']
+            targets = [actions.marking_target(m, p, 'man_to_man') for p in ours]
+            assert len({q.id for q in targets}) == len(ours)
+            p, target = ours[0], targets[0]
+            text = actions.question(m, p, 'hold', None, defending='man_to_man',
+                                    current_actions={ours[1].id: 'press'}).state
+            assert 'Assigned role: Right back' in text and 'Recovery target (hold)' in text
+            assert f'Your marking assignment: opponent #{target.number}' in text
+            assert f'Other teammates pressing/challenging: #{ours[1].number}' in text
+            move = actions.command(m, p, 'mark', 'man_to_man')
+            assert math.hypot(move.x - target.x, move.y - target.y) == pytest.approx(2)
+            assert (move.x - target.x) * m.attack(team) < 0
+            m.down[ours[1].id] = ('back', m.t + 2)
+            text = actions.question(m, p, 'hold', None, current_actions={ours[1].id: 'slide_tackle'}).state
+            assert 'Other teammates pressing/challenging: none.' in text
+            m.down.clear()
+            m.owner = ours[1].id
+            text = actions.question(m, p, 'hold', None, current_actions={ours[1].id: 'press'}).state
+            assert 'Other teammates pressing/challenging: none.' in text
+            m.owner = None
+
+
+def test_wait_stops_with_possession_and_recovers_shape_if_ball_is_lost():
+    m = in_play()
+    p = on_the_ball(m, m.player(7))
+    assert 'wait' in actions.options(m, p)
+    for _ in range(60):
+        m.command(p.id, actions.command(m, p, 'wait'))
+        m.step()
+    assert m.owner == p.id and p.speed == 0
+    assert abs(p.x) < 0.01 and abs(p.y) < 0.01
+    m.owner = 18
+    assert 'wait' not in actions.options(m, p)
+    assert actions.command(m, p, 'wait') == bots._shape(m, p, bots._home(m, p))

@@ -69,6 +69,21 @@ def test_an_answer_with_the_runner_moves_is_unusable():
         asyncio.run(model.decide(actions.question(match, match.player(7), "hold", None)))
 
 
+def test_only_local_laya_requests_the_full_soccer_input_budget():
+    match = in_play(Match())
+    question = actions.question(match, match.player(7), "hold", .2, "Protect the right channel.")
+    for local, name in [(True, "laya"), (False, "laya"), (True, "d1-3B")]:
+        def handle(request):
+            body = json.loads(request.content)
+            assert body['state'] == question.state and 'Manager: Protect the right channel.' in body['state']
+            assert body.get('max_len') == (2048 if local and name == 'laya' else None)
+            return httpx.Response(200, json={'answers': {'move': {'choice': 'hold',
+                'probabilities': {move: int(move == 'hold') for move in question.options}}}})
+        model = apis.DecisionAPI('Local', 'http://localhost/v1', name, KEY, local=local,
+                                 transport=httpx.MockTransport(handle))
+        asyncio.run(model.decide(question))
+
+
 # -- the state each player is told ------------------------------------------------------------
 
 
@@ -96,6 +111,25 @@ def test_the_state_says_what_the_player_is_doing_and_how_fast_it_answers():
     assert "Your answers take 1.2 s." in state and "Manager: Stay wide." in state
     assert "Harbour kick off, you take it." in state  # the centre forward takes the kick-off
     assert "Your answers" not in actions.question(match, match.player(10), "hold", None).state
+
+
+def test_pause_holds_pending_player_answer_and_stops_new_requests():
+    async def go():
+        match = in_play(Match())
+        model = Fake("support", delay=0.02)
+        squad = Players(match, {7: model})
+        task = asyncio.create_task(squad._ask(7))
+        await asyncio.sleep(0.01)
+        match.paused = True
+        await asyncio.sleep(0.15)
+        assert len(model.asked) == 1 and squad.seats[7].answers == 0
+        match.paused = False
+        await asyncio.sleep(0.12)
+        assert squad.seats[7].answers > 0 and len(model.asked) > 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(go())
 
 
 # -- answers turned into movement --------------------------------------------------------------
@@ -419,3 +453,96 @@ def test_choosing_a_model_without_its_key_says_which_key(capsys):
         main(["--headless", "--home", "jev"])
     assert stopped.value.code == 2
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('shape, image, field', [
+    ('openai', 'message', 'input'), ('systemone', 'part', 'state'),
+    ('systemone', 'images', 'images'), ('systemone', 'node', 'state'),
+])
+def test_vision_players_send_fresh_images_through_each_adapter(shape, image, field):
+    from decision_pitch.vision import overhead
+    from dataclasses import replace
+    match = in_play(Match())
+    model = apis.DecisionAPI('Vision', 'https://example.test', 'test', KEY, shape, image=image)
+    question = actions.question(match, match.player(7), 'hold', None)
+    picture = overhead(match, match.player(7))
+    body = model._request(replace(question, image=picture))
+    assert 'base64' in json.dumps(body[field]) or image == 'node'
+    assert 'data:image/jpeg;base64,' in picture
+    match.player(7).x += 10
+    assert overhead(match, match.player(7)) != picture
+    # Its text twin retains the same text and options, without any image payload.
+    model.image = None
+    assert model._request(question)[field if field != 'images' else 'state'] == question.state
+    asyncio.run(model.aclose())
+
+
+def test_the_player_loop_attaches_images_only_to_vision_seats():
+    async def go():
+        match = in_play(Match())
+        text, image = Fake(delay=0.01), Fake(delay=0.01)
+        image.image = 'message'
+        squad = Players(match, {7: text, 8: image})
+        running = asyncio.create_task(squad.run())
+        await asyncio.sleep(0.09)
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        assert len(image.asked) >= 2 and len(text.asked) >= 2
+        assert all(q.image is None for _, q in text.asked)
+        assert all(q.image.startswith('data:image/jpeg;base64,') and 'YOU' in q.state for _, q in image.asked)
+    asyncio.run(go())
+
+
+def test_unselected_api_models_are_not_probed(monkeypatch):
+    def unexpected():
+        pytest.fail('unselected API was instantiated')
+    for name in players.APIS:
+        monkeypatch.setitem(players.APIS, name, unexpected)
+    assert asyncio.run(players.available(('bot',)))['bot'] is None
+
+
+def test_pause_holds_local_requests_already_waiting_in_the_queue():
+    async def check():
+        match = in_play(Match())
+        underlying = Fake(delay=0.05)
+        model = players.OneAtATime(underlying)
+        squad = Players(match, {p.id: model for p in match.players[:3]})
+        loops = [asyncio.create_task(squad._ask(pid)) for pid in squad.seats]
+        try:
+            while not underlying.asked:
+                await asyncio.sleep(0)
+            match.paused = True
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) == 1
+            match.paused = False
+            await asyncio.sleep(0.2)
+            assert len(underlying.asked) > 1
+        finally:
+            for loop in loops:
+                loop.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_local_latency_keeps_queue_time_but_excludes_deliberate_pause_wait(fail):
+    async def check():
+        match = in_play(Match())
+        class Finish(Fake):
+            async def decide(self, question):
+                try:
+                    return await super().decide(question)
+                finally:
+                    match.phase = 'full_time'
+        model = players.OneAtATime(Finish(delay=.02, fail=fail))
+        squad = Players(match, {7: model})
+        await model._turn.acquire()
+        task = asyncio.create_task(squad._ask(7))
+        await asyncio.sleep(.05)  # ordinary queueing remains part of latency
+        match.paused = True
+        model._turn.release()
+        await asyncio.sleep(.4)
+        match.paused = False
+        await task
+        assert 50 <= squad.decisions[0]['ms'] < 250
+    asyncio.run(check())

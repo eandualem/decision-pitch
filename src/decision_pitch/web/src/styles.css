@@ -21,11 +21,20 @@ body { -webkit-user-select: none; user-select: none; }
 .moment-title { font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
 .moment[data-kind="goal"] .moment-title { font-size: 36px; letter-spacing: .1em; }
 .moment-detail { color: #c7d4cf; font-size: 12px; margin-top: 4px; }
+.substitution-notice { position: absolute; top: 90px; left: 24px; max-width: min(460px, calc(100vw - 48px)); max-height: calc(100vh - 270px); overflow-y: auto; pointer-events: auto; padding: 14px 18px; background: #101d21f5; border-left: 3px solid #d6ff63; border-radius: 4px; box-shadow: 0 12px 40px #0005; }
+.substitution-title { display: block; font-size: 17px; margin-bottom: 8px; }
+.substitution-row { display: grid; gap: 3px; padding: 7px 0; border-top: 1px solid #ffffff18; font-size: 12px; }
+.substitution-team { color: #a8bbb1; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.substitution-off { color: #ffaaa0; }
+.substitution-on { color: #d6ff63; }
 .player-card { position: absolute; width: 15px; height: 22px; border: 1px solid #ffffffb0; border-radius: 2px; box-shadow: 0 3px 8px #0009; transform: translate(-50%, -100%) rotate(-8deg); }
 .player-card.yellow { background: #ffe140; }
 .player-card.red { background: #f44446; }
-.overlay-toggle, .play-again { padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.overlay-toggle, .pause-toggle, .play-again { padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .overlay-toggle { position: fixed; right: 24px; bottom: 16px; }
+.pause-toggle { position: fixed; right: 175px; bottom: 16px; }
+.pause-toggle[aria-pressed="true"] { background: #d6ff63; color: #15221b; }
+.pause-toggle:disabled { opacity: .5; }
 .overlay-toggle:hover, .overlay-toggle[aria-expanded="true"], .play-again:hover { background: #d6ff63; color: #15221b; }
 .play-again { margin-top: 12px; pointer-events: auto; }
 .moment[data-kind="full_time"] { max-width: calc(100vw - 48px); }
@@ -47,6 +56,8 @@ h1, h2, h3, p { margin: 0; }
 .player-model { display: block; color: #99ada4; font-size: 10px; margin-top: 3px; }
 .player-action { text-transform: capitalize; }
 .off-pitch { opacity: .45; }
+.roster-table .ball-carrier { background: #d6ff6324; color: #d6ff63; }
+.roster-table .active-defender { background: #71d8ff20; color: #71d8ff; }
 .team-panel h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: #c4d4cc; margin: 22px 0 10px; }
 .manager-feed { margin: 0; padding: 0; list-style: none; color: #a8bbb1; font-size: 11px; line-height: 1.6; }
 .manager-feed li { padding: 7px 0; border-top: 1px solid #ffffff0d; overflow-wrap: anywhere; }

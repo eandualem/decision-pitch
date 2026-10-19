@@ -38,6 +38,10 @@ let lastFrame = performance.now() / 1000;
 let socket;
 let reconnectTimer;
 let stopped = false;
+let pausedAt = null;
+let pausedTotal = 0;
+let rosterTeams = new Map();
+const viewTime = real => (pausedAt ?? real) - pausedTotal;
 // The human figure every person on the pitch is a clone of, loaded once before the first
 // match is built. A hello that arrives first waits for it, with what follows it.
 let figure = null;
@@ -53,6 +57,11 @@ function resetMatch(message) {
   stadium?.dispose();
   timeline.reset();
   shown = null;
+  pausedAt = null;
+  pausedTotal = 0;
+  lastFrame = performance.now() / 1000;
+  rosterTeams = new Map(message.teams.flatMap((team, index) =>
+    [...team.players, ...(team.bench ?? [])].map(p => [p.id, index])));
   stadium = createStadium(scene, renderer, message.pitch);
   actors = createPlayers(scene, message.teams, figure);
   touchline = createTouchline(scene, message.teams, message.pitch, figure);
@@ -61,11 +70,20 @@ function resetMatch(message) {
   camera.updateProjectionMatrix();
   broadcast = createCamera(camera, message.pitch);
   moments = createMoments(scene, message.teams);
-  overlay = createOverlay(message.teams);
+  overlay = createOverlay(message.teams, visible => actors.setInspectionVisible(visible), paused => {
+    if (socket?.readyState === 1) socket.send(JSON.stringify({ type: 'pause', paused }));
+  });
   status.textContent = '';
 }
 
 function receive(message, now = performance.now() / 1000) {
+  if (message.type === 'pause' && actors) {
+    if (message.paused && pausedAt === null) pausedAt = now;
+    else if (!message.paused && pausedAt !== null) { pausedTotal += now - pausedAt; pausedAt = null; }
+    lastFrame = viewTime(now);
+    overlay.setPaused(message.paused);
+    return;
+  }
   if (!figure) {
     if (message.type === 'hello') {
       held = [[message, now]];
@@ -79,16 +97,16 @@ function receive(message, now = performance.now() / 1000) {
   if (message.type === 'hello') {
     resetMatch(message);
   } else if (message.type === 'snapshot' && actors) {
-    timeline.push(message, now);
+    timeline.push(message, viewTime(now));
   } else if (message.type === 'event' && actors) {
-    timeline.pushEvent(message, now);
+    timeline.pushEvent(message, viewTime(now));
   } else if (message.type === 'decision' && actors) {
-    actors.handleDecision(message, now);
+    actors.handleDecision(message, viewTime(now));
     overlay.handleMessage(message);
   } else if (message.type === 'manager' && touchline) {
     overlay.handleMessage(message);
-    touchline.handleMessage(message, now);
-    broadcast.handleMessage(message, now, touchline);
+    touchline.handleMessage(message, viewTime(now));
+    broadcast.handleMessage(message, viewTime(now), touchline);
   } else if (overlay) {
     overlay.handleMessage(message);
   }
@@ -98,9 +116,9 @@ function receive(message, now = performance.now() / 1000) {
 // overlay's records and who takes the next throw-in: its moment has passed.
 function show(event, now, late) {
   actors.handleEvent(event, now, late);
+  moments.handleEvent(event, now, late);
   if (!late) {
     broadcast.handleEvent(event, now, actors, touchline);
-    moments.handleEvent(event, now);
     touchline.handleEvent(event, now);
   }
   overlay.handleMessage(event);
@@ -168,7 +186,7 @@ addEventListener('pageshow', (event) => {
 // Animation runs on the frame's own time, not the moment this code gets to run: under
 // load the two can be a frame apart, which would show as uneven motion.
 function draw(frameTime) {
-  const now = (frameTime ?? performance.now()) / 1000;
+  const now = viewTime((frameTime ?? performance.now()) / 1000);
   const dt = Math.max(0, Math.min(now - lastFrame, 0.1));
   lastFrame = now;
   const frame = actors && timeline.sample(now);
@@ -178,6 +196,11 @@ function draw(frameTime) {
       shown = frame.before;
       moments.setSnapshot(shown);
       overlay.setSnapshot(shown);
+      const carrier = shown.players.find(p => p.id === shown.ball.owner);
+      const defender = carrier && shown.players.filter(p => rosterTeams.get(p.id) !== rosterTeams.get(carrier.id))
+        .reduce((best, p) => !best || Math.hypot(p.x - carrier.x, p.y - carrier.y) < Math.hypot(best.x - carrier.x, best.y - carrier.y) ? p : best, null);
+      actors.highlight(carrier?.id ?? null, defender?.id ?? null);
+      overlay.highlight(carrier?.id ?? null, defender?.id ?? null);
     }
     for (const event of timeline.release()) show(event, now, timeline.late(event));
     actors.update(frame.before, frame.after, frame.alpha, dt, now, frame.latest);

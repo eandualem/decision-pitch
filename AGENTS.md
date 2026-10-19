@@ -36,13 +36,13 @@ class of models, now playing a team game with full rules.
 
 - The contestants are the models Decision Arena races: fast single-move
   answerers such as Laya (local), Jev, GPT-6 Luna Decisions, Perplexity
-  Decider and Clef, plus built-in bots.
+  Decider and Clef. Built-in bots are internal test fixtures, not player options.
 - Reuse Decision Arena's model adapters and timing approach rather than
   writing new ones. How (a shared package, a dependency or a copy with
   attribution) is your decision; record it in `docs/decisions.md`. Read,
   never change, the decision-arena repository; ask its agent when its code
   doesn't settle a question.
-- It runs with no keys: Laya and the built-in bots play a full match.
+- It runs with no keys: Laya plays both teams.
 - API keys come from the environment only and are never committed, logged
   or shown on screen. Tests use fake or recorded responses. Spending beyond
   the keys already configured, and any paid model run at scale, needs the

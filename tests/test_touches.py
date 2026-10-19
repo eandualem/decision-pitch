@@ -64,7 +64,10 @@ def test_a_throw_in_is_recorded_as_a_throw():
     thrower = next(p for p in m.players if p.team == m.restart_team)
     thrower.x, thrower.y = m.ball.x, m.ball.y - 0.5
     m.command(thrower.id, KickTo(10.0, 10.0, 12.0))
-    m.step()
+    for _ in range(150):
+        m.step()
+        if m.phase == "play":
+            break
     assert m.phase == "play"
     assert latest(m.snapshot())["kind"] == "throw"
     assert latest(m.snapshot())["player"] == thrower.id

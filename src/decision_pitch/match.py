@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import random
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field, replace
 
 from decision_pitch import pitch
@@ -79,6 +79,7 @@ DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected bal
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
 KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
+THROW_PREPARE = 2.0  # s with the ball before a throw-in is released
 KICK_RECOVERY = 0.25  # s after a kick before the kicker can play the ball again
 KICK_ERROR = 0.002  # radians of aim error per m/s of kick speed
 KICKOFF_WAIT = 10.0  # s players have to take their places for a kick-off before they are placed
@@ -136,6 +137,20 @@ FORMATION = [
 BENCH = ("GK", "DF", "DF", "MF", "MF", "FW", "FW")
 
 
+def position_label(player: Player) -> str:
+    """The current formation slot, viewed in the team's attacking direction."""
+    if player.position == "GK":
+        return "Goalkeeper"
+    if player.home == (0.0, 0.0):
+        return {"DF": "Defender", "MF": "Midfielder", "FW": "Forward"}[player.position]
+    side = "Right" if player.home[1] < 0 else "Left"
+    if player.position == "DF":
+        return f"{side} back" if abs(player.home[1]) > 14 else "Centre back"
+    if player.position == "MF":
+        return f"{side} midfield" if abs(player.home[1]) > 14 else "Centre midfield"
+    return "Striker"
+
+
 @dataclass
 class Team:
     name: str
@@ -155,13 +170,14 @@ TEAMS = (
 
 @dataclass
 class Match:
-    half_length: float = 180.0  # real seconds per half
+    half_length: float = 90.0  # real seconds per half
     seed: int = 0
     teams: tuple[Team, Team] = TEAMS
     t: float = 0.0  # seconds since kick-off, pauses included
     elapsed: float = 0.0  # seconds played in this half
     period: int = 1
     phase: str = "kickoff"
+    paused: bool = False
     score: list[int] = field(default_factory=lambda: [0, 0])
     ball: Ball = field(default_factory=Ball)
     owner: int | None = None  # the player in possession
@@ -198,6 +214,8 @@ class Match:
         self.stoppage = 0  # counts the restarts
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
         self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
+        # Performance counters retain contacts that the animation history combines.
+        self.contacts: dict[int, Counter] = {pid: Counter() for pid in self.everyone}
         self.diving: set[int] = set()  # goalkeepers diving across their goal this step
         # movements without the ball (docs/protocol.md): kind, until when, and how it then
         # goes down and until when, if it does
@@ -209,6 +227,7 @@ class Match:
         self.passed: int | None = None  # the team that deliberately kicked or threw the ball last
         self.holder: int | None = None  # the goalkeeper holding the ball in its hands
         self.held_since = 0.0
+        self.throw_ready: tuple[int, float] | None = None
         # an advantage being played: the team playing on, the offender, the player fouled, where the
         # foul was, whether coming back earns a card, and until when it can come back
         self.advantage: tuple[int, int, int, float, float, bool, float] | None = None
@@ -241,7 +260,8 @@ class Match:
 
     def hello_teams(self) -> list[dict]:
         def entry(p: Player) -> dict:
-            return {"id": p.id, "number": p.number, "name": p.name, "position": p.position, "model": None}
+            return {"id": p.id, "number": p.number, "name": p.name, "position": p.position,
+                    "role": position_label(p), "model": None}
 
         return [
             {
@@ -276,6 +296,7 @@ class Match:
     def _player_snapshot(self, p: Player) -> dict:
         entry = {
             "id": p.id,
+            "role": position_label(p),
             "x": round(p.x, 3),
             "y": round(p.y, 3),
             "heading": round(p.heading, 3),
@@ -556,6 +577,7 @@ class Match:
         able = [p for p in self.players if self._can_play(p)]
         if not able:
             self.owner = None
+            self.throw_ready = None
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
@@ -582,6 +604,8 @@ class Match:
                 self._touched(nearest, kind)
                 if kind == "catch":
                     self.holder, self.held_since = nearest.id, self.t
+        if self.phase == "throw_in" and (self.throw_ready is None or self.throw_ready[0] != nearest.id):
+            self.throw_ready = (nearest.id, self.t + THROW_PREPARE)
         self.owner = nearest.id
 
     def _possession_kind(self, p: Player) -> str:
@@ -659,6 +683,9 @@ class Match:
         return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
 
     def _may_kick(self, p: Player) -> bool:
+        if self.phase == "throw_in" and (self.throw_ready is None or self.throw_ready[0] != p.id
+                                        or self.t < self.throw_ready[1]):
+            return False
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
             return False
         if self.phase == "play":
@@ -720,6 +747,7 @@ class Match:
             if kind == "control":
                 return  # its tackle brought the ball to it: the tackle is the touch
             self.touches.pop()
+        self.contacts[p.id][kind] += 1
         self.touches.append(touch)
 
     def _ball_in_own_penalty_area(self, team: int) -> bool:
@@ -1040,6 +1068,7 @@ class Match:
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
         self.offside, self.indirect, self.penalty_live = set(), None, False
+        self.throw_ready = None
         self.restart_kicker = self.direct = self.passed = self.holder = None
         self.restart_indirect, self.taker = indirect, taker
         self.stoppage += 1

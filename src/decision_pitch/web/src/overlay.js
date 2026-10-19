@@ -5,7 +5,14 @@ const make = (tag, className, text = '') => {
   return node;
 };
 
-export function createOverlay(teams) {
+const identityLabel = player => `${player.role ?? player.position} · #${player.number}`;
+
+export function createOverlay(teams, onInspect = () => {}, onPause = () => {}) {
+  let paused = false;
+  const pause = make('button', 'pause-toggle', 'Pause · P');
+  pause.type = 'button';
+  const requestPause = () => { pause.disabled = true; onPause(!paused); };
+  pause.addEventListener('click', requestPause);
   const button = make('button', 'overlay-toggle', 'Decisions · O');
   button.type = 'button';
   button.setAttribute('aria-controls', 'decision-overlay');
@@ -15,7 +22,7 @@ export function createOverlay(teams) {
   panel.hidden = true;
   panel.setAttribute('aria-label', 'Player decisions and managers');
   const header = make('div', 'overlay-header');
-  header.append(make('h1', '', 'Inside the match'), make('p', '', 'Every player. Every decision.'));
+  header.append(make('h1', '', 'Inside the match'), make('p', '', 'Lime: ball carrier · Blue: nearest defender'));
   const columns = make('div', 'roster-columns');
   const rows = new Map();
   const roster = new Map();
@@ -23,10 +30,12 @@ export function createOverlay(teams) {
   teams.forEach((team, index) => {
     const section = make('section', 'team-panel');
     section.append(make('h2', '', team.name));
+    const manager = team.manager ?? 'Built-in';
+    section.append(make('p', 'manager-name', team.managerEffort ? `${manager} · ${team.managerEffort} effort` : manager));
     const table = make('table', 'roster-table');
     const head = document.createElement('thead');
     const tr = document.createElement('tr');
-    for (const title of ['Player / model', 'Decision', 'Latency']) {
+    for (const title of ['Position / player / model', 'Decision', 'Latency']) {
       const cell = make('th', '', title);
       cell.scope = 'col';
       tr.append(cell);
@@ -37,14 +46,14 @@ export function createOverlay(teams) {
       roster.set(player.id, { ...player, team: index });
       const row = document.createElement('tr');
       const identity = document.createElement('td');
-      const name = make('strong', 'player-name', `${player.number} ${player.name}`);
-      const model = make('span', 'player-model', player.model ?? 'Built-in bot');
+      const name = make('strong', 'player-name', identityLabel(player));
+      const model = make('span', 'player-model', player.model ?? (team.players.includes(player) ? 'Built-in bot' : 'Not assigned'));
       identity.append(name, model);
       const action = make('td', 'player-action', 'Waiting');
       const latency = make('td', 'player-latency', '—');
       row.append(identity, action, latency);
       body.append(row);
-      rows.set(player.id, { row, model, action, latency, decided: false });
+      rows.set(player.id, { row, name, model, action, latency, decided: false });
     }
     table.append(head, body);
     const feed = make('ol', 'manager-feed');
@@ -54,21 +63,23 @@ export function createOverlay(teams) {
     columns.append(section);
   });
   panel.append(header, columns);
-  document.body.append(panel, button);
+  document.body.append(panel, button, pause);
   const toggle = () => {
     panel.hidden = !panel.hidden;
     button.setAttribute('aria-expanded', String(!panel.hidden));
+    onInspect(!panel.hidden);
   };
   const onKey = event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName)) return;
     if (event.key.toLowerCase() === 'o') toggle();
+    if (event.key.toLowerCase() === 'p' && !pause.disabled) requestPause();
     if (event.key === 'Escape' && !panel.hidden) { toggle(); button.focus(); }
   };
   button.addEventListener('click', toggle);
   document.addEventListener('keydown', onKey);
   const playerLabel = id => {
     const p = roster.get(id);
-    return p ? `${p.number} ${p.name}` : `Player ${id}`;
+    return p ? identityLabel(p) : `Player ${id}`;
   };
   const appendFeed = (team, text) => {
     const feed = feeds[team];
@@ -78,10 +89,26 @@ export function createOverlay(teams) {
     while (feed.children.length > 6) feed.lastElementChild.remove();
   };
   return {
+    setPaused(value) {
+      paused = value;
+      pause.disabled = false;
+      pause.textContent = paused ? 'Resume · P' : 'Pause · P';
+      pause.setAttribute('aria-pressed', String(paused));
+    },
+    highlight(carrier, defender) {
+      for (const [id, item] of rows) {
+        item.row.classList.toggle('ball-carrier', id === carrier);
+        item.row.classList.toggle('active-defender', id === defender);
+      }
+    },
     setSnapshot(snapshot) {
       const active = new Map(snapshot.players.map(p => [p.id, p]));
       for (const [id, row] of rows) {
         const player = active.get(id);
+        if (player?.role) {
+          roster.get(id).role = player.role;
+          row.name.textContent = identityLabel(roster.get(id));
+        }
         row.row.classList.toggle('off-pitch', !player);
         if (!player) row.action.textContent = 'Off pitch';
         else if (!row.decided) row.action.textContent = player.action;
@@ -99,6 +126,10 @@ export function createOverlay(teams) {
         row.latency.textContent = Number.isFinite(message.ms) ? `${Math.round(message.ms)} ms` : '—';
       } else if (message.type !== 'manager' && (message.kind === 'substitution' || message.type === 'substitution')) {
         const row = rows.get(message.on);
+        if (roster.has(message.on) && roster.has(message.off)) {
+          roster.get(message.on).role = roster.get(message.off).role;
+          row.name.textContent = identityLabel(roster.get(message.on));
+        }
         if (row) { row.model.textContent = message.model ?? 'Built-in bot'; row.decided = false; row.latency.textContent = '—'; }
         appendFeed(message.team, `${playerLabel(message.off)} → ${playerLabel(message.on)}${message.model ? ` · ${message.model}` : ''}`);
       } else if (message.type === 'manager') {
@@ -109,6 +140,7 @@ export function createOverlay(teams) {
       document.removeEventListener('keydown', onKey);
       panel.remove();
       button.remove();
+      pause.remove();
     },
   };
 }

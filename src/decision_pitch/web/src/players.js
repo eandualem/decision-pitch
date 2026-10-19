@@ -167,6 +167,18 @@ export function createPlayers(scene, teams, figure, options = {}) {
   const actors = new Map();
   const previous = new Map();
   let previousSnapshot = null;
+  let inspecting = false;
+  let carrier = null;
+  let defender = null;
+  const markerShape = geometry(new THREE.RingGeometry(0.7, 0.86, 40));
+  const carrierMaterial = material(new THREE.MeshBasicMaterial({ color: '#d6ff63', depthWrite: false }));
+  const defenderMaterial = material(new THREE.MeshBasicMaterial({ color: '#71d8ff', depthWrite: false }));
+  function highlight() {
+    for (const [id, actor] of actors) {
+      actor.marker.visible = inspecting && (id === carrier || id === defender);
+      actor.marker.material = id === carrier ? carrierMaterial : defenderMaterial;
+    }
+  }
 
   function shadow(parent, size, surface = shadowMaterial) {
     const result = new THREE.Mesh(disc, surface);
@@ -175,6 +187,31 @@ export function createPlayers(scene, teams, figure, options = {}) {
     result.rotation.x = -Math.PI / 2;
     parent.add(result);
     return result;
+  }
+
+  function modelLabel(badge, name) {
+    const text = name ?? 'Built-in bot';
+    if (badge.userData.model === text) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(128, Math.min(720, text.length * 25 + 32));
+    canvas.height = 72;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(9, 18, 26, 0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = 'bold 40px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2, canvas.width - 20);
+    const old = badge.material.map;
+    if (old) { old.dispose(); textures.delete(old); }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    textures.add(texture);
+    badge.material.map = texture;
+    badge.material.needsUpdate = true;
+    badge.scale.set(0.5 * canvas.width / canvas.height, 0.5, 1);
+    badge.userData.model = text;
   }
 
   teams.forEach((team, teamIndex) => {
@@ -188,15 +225,17 @@ export function createPlayers(scene, teams, figure, options = {}) {
         colours: team.colours, number: player.number,
       });
       group.add(person.object);
-      const numberMap = new THREE.CanvasTexture(person.numberCanvas);
-      numberMap.colorSpace = THREE.SRGBColorSpace;
-      textures.add(numberMap);
-      const badge = new THREE.Sprite(material(new THREE.SpriteMaterial({ map: numberMap, depthWrite: false })));
-      badge.position.y = person.height + 0.55;
-      badge.scale.set(0.88, 0.88, 1);
+      const badge = new THREE.Sprite(material(new THREE.SpriteMaterial({ depthWrite: false })));
+      badge.position.y = person.height + 0.45 + teamIndex * 0.6;
+      modelLabel(badge, player.model);
       group.add(badge);
+      const marker = new THREE.Mesh(markerShape, carrierMaterial);
+      marker.rotation.x = -Math.PI / 2;
+      marker.position.y = 0.04;
+      marker.visible = false;
+      group.add(marker);
       actors.set(player.id, {
-        group, person, badge, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
+        group, person, badge, marker, team: teamIndex, heading: 0, facing: 0, faceYaw: 0, guard: 0,
         vx: 0, vy: 0, speed: 0, pace: 0, way: 0, pose: null, fading: null, dive: null, throwing: null, holding: null,
         diving: false, armed: false,
         // A move without the ball under way (air kick, stumble, slide), the `move` last seen,
@@ -1000,6 +1039,8 @@ export function createPlayers(scene, teams, figure, options = {}) {
 
   return {
     update,
+    highlight(carrierId, defenderId) { carrier = carrierId; defender = defenderId; highlight(); },
+    setInspectionVisible(visible) { inspecting = visible; highlight(); },
     ballPosition: ball.position,
     getPlayerPosition(id) {
       const actor = actors.get(id);
@@ -1032,6 +1073,7 @@ export function createPlayers(scene, teams, figure, options = {}) {
     // for a moment: the kick it plays, or shielding the ball. Bots send none.
     handleDecision(message, now) {
       const actor = actors.get(message.player);
+      if (actor && message.model) modelLabel(actor.badge, message.model);
       if (!actor || typeof message.action !== 'string') return;
       actor.decision = message.action;
       actor.decidedAt = now;
@@ -1039,6 +1081,10 @@ export function createPlayers(scene, teams, figure, options = {}) {
     // An event left behind by a stall (`late`) still says who takes the next throw-in,
     // but its celebration has passed.
     handleEvent(event, now, late = false) {
+      if (event.kind === 'substitution') {
+        const actor = actors.get(event.on);
+        if (actor) modelLabel(actor.badge, event.model);
+      }
       if (event.kind === 'throw_in') throwTeam = event.team ?? null;
       if (event.kind !== 'goal' || late) return;
       for (const actor of actors.values()) {

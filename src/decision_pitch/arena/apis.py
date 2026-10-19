@@ -1,7 +1,7 @@
 # Copied from Decision Arena (https://github.com/eandualem/decision-arena), commit 770bb4a,
 # src/decision_arena/apis.py, under the MIT licence in LICENSE beside this file. Changes:
 # imports from this package; an answer is checked against the question's own options
-# instead of the runner's fixed five moves.
+# instead of the runner's fixed five moves; local Laya gets a larger input budget.
 
 """Decision models behind an HTTP API: Jev at TypeSafe, OpenAI's and Perplexity's Decisions
 APIs, Cloudflare's Clef, EmpirioLabs' Aplomb, and Microsoft's and Liquid's through Vercel's
@@ -46,6 +46,7 @@ class DecisionAPI:
         image: str | None = None,  # an image twin: how this API takes the picture (see _with_image)
     ) -> None:
         self.name, self._url, self._model, self._shape = name, url, model, shape
+        self._local = local
         self.key_name = key_name
         self.image = image
         self._key = key
@@ -90,6 +91,8 @@ class DecisionAPI:
             }
         return {
             "model": self._model,
+            # Laya's default 512 tokens truncate the full 22-player soccer state.
+            **({"max_len": 2048} if self._local and self._model == "laya" else {}),
             "state": question.state,
             "questions": {
                 QUESTION: {

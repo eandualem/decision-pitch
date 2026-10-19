@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
 
-from decision_pitch import actions, bots
+from decision_pitch import actions, bots, vision
 from decision_pitch.arena import apis, local
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Answer, Model, Question
@@ -23,8 +24,7 @@ from decision_pitch.match import Command, Match
 FAILURE_WAIT = 0.5  # s before asking again after a failed answer
 BOT = "bot"
 
-# Decision Arena's models, by the name they are chosen with. Image twins are left out: the
-# match has no picture to send.
+# Decision Arena's text and image adapters, using the same request formats.
 APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "jev": apis.jev,
     "openai": apis.openai,
@@ -33,9 +33,13 @@ APIS: dict[str, Callable[[], apis.DecisionAPI]] = {
     "microsoft": apis.microsoft,
     "liquid": apis.liquid,
     "clef": apis.clef,
+    "openai-image": lambda: apis.openai(image=True),
+    "perplexity-image": lambda: apis.perplexity(image=True),
+    "aplomb-image": lambda: apis.aplomb(image=True),
+    "clef-image": lambda: apis.clef(image=True),
 }
 LOCAL: dict[str, Callable[[], apis.DecisionAPI]] = {"laya": local.laya, "d1": local.d1}
-NAMES = (BOT, *LOCAL, *APIS)
+NAMES = (*LOCAL, *APIS)
 PROBE = Question("Decision Pitch is starting.", {"yes": "it is", "no": "it is not"}, "Is this a test?")
 
 
@@ -48,9 +52,23 @@ class OneAtATime:
         self.model, self.name = model, model.name
         self._turn = asyncio.Lock()
 
-    async def decide(self, question: Question) -> Answer:
-        async with self._turn:
+    async def decide(self, question: Question, match: Match | None = None) -> Answer:
+        async with self.ready(match):
             return await self.model.decide(question)
+
+    @asynccontextmanager
+    async def ready(self, match: Match | None = None):
+        """Hold a dispatch slot; queueing and pause happen before request timing."""
+        paused_wait = 0.0
+        while True:
+            async with self._turn:
+                if match is None or not match.paused:
+                    yield paused_wait
+                    return
+            start = time.perf_counter()
+            while match.paused:
+                await asyncio.sleep(0.1)
+            paused_wait += time.perf_counter() - start
 
 
 @dataclass
@@ -69,6 +87,7 @@ class Seat:
     times: deque = field(default_factory=lambda: deque(maxlen=10))  # recent answer times, s
     outcomes: deque = field(default_factory=lambda: deque(maxlen=5))  # recent answers: True if usable
     failures: int = 0
+    late: Counter = field(default_factory=Counter)
 
 
 class Players:
@@ -78,6 +97,7 @@ class Players:
         self.match = match
         self.seats = {pid: Seat(model) for pid, model in (models or {}).items()}
         self.decisions: list[dict] = []  # for the page, drained by the server
+        self.defending = ["zonal", "zonal"]
         self._loops: dict[int, asyncio.Task] | None = None  # while running
 
     def seat(self, player_id: int, model: Model | None) -> None:
@@ -116,7 +136,7 @@ class Players:
             kicked = replaced and p.id in m.recovering
             if kicked and seat.action in actions.KICKS and seat.answers == seat.commanded:
                 seat.action = "hold"
-            seat.command, seat.commanded = actions.command(m, p, seat.action), seat.answers
+            seat.command, seat.commanded = actions.command(m, p, seat.action, self.defending[p.team]), seat.answers
             m.command(p.id, seat.command)
 
     def drain_decisions(self) -> list[dict]:
@@ -141,28 +161,50 @@ class Players:
         m, seat = self.match, self.seats[player_id]
         p = m.player(player_id)
         while m.phase != "full_time" and (p in m.players or p in m.bench):  # until it leaves
-            if m.phase == "half_time" or p in m.bench:
+            if m.paused or m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
-            question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
+            question = question_for(m, p, seat.model, seat.action, seat.answer, seat.instruction,
+                                    self.defending[p.team], {pid: s.action for pid, s in self.seats.items()})
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
+            paused_wait = 0.0
             try:
-                answer = await seat.model.decide(question)
+                if isinstance(seat.model, OneAtATime):
+                    async with seat.model.ready(m) as paused_wait:
+                        answer = await seat.model.model.decide(question)
+                else:
+                    answer = await seat.model.decide(question)
             except Exception as exc:  # noqa: BLE001 - any failure: wait, then ask again
-                ms = round((time.perf_counter() - start) * 1000)
+                ms = round((time.perf_counter() - start - paused_wait) * 1000)
                 seat.outcomes.append(False)
                 seat.failures += 1
                 self.decisions.append(_decision(player_id, seat, ms, error=_error(exc)))
                 await asyncio.sleep(FAILURE_WAIT)
                 continue
-            seat.answer = time.perf_counter() - start
+            latency = time.perf_counter() - start - paused_wait
+            while m.paused:
+                await asyncio.sleep(0.1)
+            seat.answer = latency
             note = _late(m, p, answer.move, asked, had_ball)
+            if note:
+                seat.late[note] += 1
             seat.action = "hold" if note == "already played" else answer.move
             seat.answers += 1
             seat.times.append(seat.answer)
             seat.outcomes.append(True)
             self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000), action=answer.move, note=note))
+
+
+def question_for(match, player, model, action="hold", answer=None, instruction=None,
+                 defending="zonal", current_actions=None) -> Question:
+    """The same state and image format for live players and off-pitch measurements."""
+    question = actions.question(match, player, action, answer, instruction, defending, current_actions)
+    if getattr(model, "image", None):
+        question = replace(question, image=vision.overhead(match, player), state=question.state +
+                           " Image: yellow ring and YOU mark you; names and shirt numbers identify players. "
+                           "Your team attacks right. White dot is the ball; arrows show movement.")
+    return question
 
 
 def _error(exc: Exception) -> str:
@@ -202,7 +244,7 @@ def _decision(
 # -- which models can play --------------------------------------------------------------
 
 
-async def available() -> dict[str, str | None]:
+async def available(names=None) -> dict[str, str | None]:
     """Every model by name, with None if it can play here or else what to check. Each API
     model whose key is set is asked one question, so a wrong key shows up at startup."""
     reasons: dict[str, str | None] = {BOT: None}
@@ -215,19 +257,29 @@ async def available() -> dict[str, str | None]:
         except MissingKey as exc:
             return str(exc)
         try:
-            await model.decide(PROBE)
+            question = PROBE
+            if model.image:
+                match = Match()
+                question = replace(PROBE, image=vision.overhead(match, match.player(7)))
+            await model.decide(question)
             return None
         except Exception as exc:  # noqa: BLE001 - any failure: name the key to check
             return f"{model.name} did not answer ({_error(exc)[:80]}); check {model.key_name}"
         finally:
             await model.aclose()
 
-    answers = await asyncio.gather(*(probe(name) for name in APIS))
-    return reasons | dict(zip(APIS, answers, strict=True))
+    selected = [name for name in APIS if names is None or name in names]
+    answers = await asyncio.gather(*(probe(name) for name in selected))
+    return reasons | dict(zip(selected, answers, strict=True))
 
 
 def start(name: str) -> Model:
     """A model ready to play: local servers are started and answer one question at a time."""
     if name in LOCAL:
         return OneAtATime(LOCAL[name]())
-    return APIS[name]()
+    model = APIS[name]()
+    labels = {"openai": "GPT-6 Luna", "perplexity": "Perplexity Decider", "aplomb": "Aplomb 1",
+              "clef": "Clef-flash", "microsoft": "Microsoft Decision-1", "liquid": "Liquid D1"}
+    base = name.removesuffix("-image")
+    model.name = labels.get(base, model.name) + (" image" if name.endswith("-image") else "")
+    return model

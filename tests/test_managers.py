@@ -153,7 +153,7 @@ def test_the_feed_tells_the_match_from_the_team_s_side():
                    {"type": "event", "kind": "throw_in", "t": 2.0, "team": 0}])  # fmt: skip
     feed = staff.feed(0)
     assert feed.startswith("You manage Harbour. 00:00, 1st half, Harbour 0-1 Ridge; kickoff.")
-    assert "Since you last looked: 00:00 goal, Ridge (Ember)." in feed  # a throw-in is left out
+    assert "Since you last looked: 00:00 goal, Ridge." in feed  # a throw-in is left out
     assert "- [7] Finch, midfielder: bot" in feed
     assert "Your bench: [23] Cove, goalkeeper;" in feed
     assert "- bot: the built-in bot" in feed
@@ -179,6 +179,9 @@ class Recorded:
         else:
             content = RECORDED["advice"][self.advised % len(RECORDED["advice"])]
             self.advised += 1
+        if "response_format" in body:
+            # Extend the historical response with the new tactical fields.
+            content = json.dumps({"defending": "zonal", "instructions": [], **json.loads(content)})
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content}}]})
 
 
@@ -215,7 +218,9 @@ def test_a_failed_consultation_changes_nothing_and_never_shows_the_key(monkeypat
     staff = staffed(LanguageModel(transport=httpx.MockTransport(fail)))
     asyncio.run(staff.line_up())  # falls back to the built-in line-up
     asyncio.run(staff.consult(0))
-    assert staff.drain() == []
+    messages = staff.drain()
+    assert len(messages) == 2 and all(m["kind"] == "status" for m in messages)
+    assert "fallback" in messages[0]["text"] and KEY not in str(messages)
     feed = staff.feed(0)
     assert "Your last consultation failed (HTTP 500" in feed and KEY not in feed
 
@@ -237,6 +242,8 @@ class RecordedClaude:
         else:
             content = RECORDED["advice"][self.advised % len(RECORDED["advice"])]
             self.advised += 1
+        if schema is not None:
+            content = json.dumps({"defending": "zonal", "instructions": [], **json.loads(content)})
         return httpx2.Response(200, json={
             "id": "msg_test", "type": "message", "role": "assistant", "model": body["model"],
             "content": [{"type": "text", "text": content}], "stop_reason": "end_turn",
@@ -316,7 +323,7 @@ def test_a_claude_manager_tells_the_page_its_own_assistant_model(monkeypatch):
     asyncio.run(alone.aclose())
 
 
-@pytest.mark.parametrize("manager, key", [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")])
+@pytest.mark.parametrize("manager, key", [("anthropic", "ANTHROPIC_API_KEY")])
 def test_a_language_model_manager_without_its_key_says_which_key(manager, key, capsys, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # no .env
     monkeypatch.delenv(key, raising=False)
@@ -326,7 +333,136 @@ def test_a_language_model_manager_without_its_key_says_which_key(manager, key, c
     assert key in capsys.readouterr().err
 
 
-def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys):
+def test_a_headless_match_with_built_in_managers_prints_their_advice(capsys, monkeypatch):
+    monkeypatch.setattr("decision_pitch.server._models", lambda *args: ({"bot": None}, {"bot": None}))
     main(["--headless", "--half-length", "60", "--seed", "3"])
     out = capsys.readouterr().out
     assert "manager: " in out and "substitution Harbour" in out
+
+
+def test_manager_reports_own_performance_and_only_opponent_aggregates():
+    staff = staffed(options=({'jev': Fake('Jev')}, {'clef': Fake('Private opponent model')}))
+    asyncio.run(staff.line_up())
+    m = staff.match
+    m.phase, m.owner, m.t = 'play', 7, 1
+    m.score = [0, 1]
+    m._touched(m.player(7), 'kick')
+    m._touched(m.player(18), 'tackle')
+    staff.squad.instruct(18, 'Secret opponent instruction')
+    events = [{'kind': 'goal', 'team': 1, 'player': 20},
+              {'kind': 'foul', 'team': 0, 'player': 18, 'fouled': 7}]
+    staff.observe(events)
+    staff.observe([])  # retained touches must not be counted again
+    feed = staff.feed(0)
+    assert '1 kicks' in feed and 'Opponent team, aggregate only:' in feed
+    assert '1 tackles' in feed and '1 goals' in feed and '1 fouls' in feed
+    assert staff.performance.players[7]['touches'] == 1
+    assert staff.performance.players[18]['touches'] == 1
+    for hidden in ('Private opponent model', 'Secret opponent instruction', 'Cliff', 'Drake', 'Ember'):
+        assert hidden not in feed
+    own_feed = staff.feed(1)
+    assert 'Ember' in own_feed and 'Secret opponent instruction' in own_feed
+
+
+@pytest.mark.parametrize('contact, field', [('tackle', 'tackles'), ('catch', 'saves/catches')])
+def test_manager_counts_contact_followed_by_kick_in_the_same_step(contact, field):
+    staff = staffed()
+    m = staff.match
+    m.t = 1
+    p = m.player(7)
+    m._touched(p, contact)
+    m._touched(p, 'control')  # taking possession adds no duplicate contact
+    m._touched(p, 'kick')
+    assert len(m.touches) == 1 and m.touches[0]['kind'] == 'kick'
+    staff.observe([])
+    staff.observe([])
+    assert staff.performance.players[7][field] == 1
+    assert staff.performance.players[7]['kicks'] == 1
+    assert staff.performance.players[7]['touches'] == 2
+
+
+def test_manager_does_not_treat_goal_animation_player_as_scorer():
+    staff = staffed()
+    staff.match.score = [1, 0]
+    staff.observe([{'kind': 'goal', 'team': 0, 'player': 11}])
+    assert 'goal, you (Pike)' not in staff.feed(0)
+    assert staff.performance.players[11]['goals'] == 0
+    assert '1 goals' in staff.performance.team(0)
+
+
+def test_manager_waits_thirty_seconds_after_answer_and_does_not_consult_at_half_time():
+    staff = staffed()
+    m = staff.match
+    m.phase, m.t = 'play', 29.9
+    assert not staff.due(0)
+    m.t = 30
+    assert staff.due(0)
+    asyncio.run(staff.consult(0))
+    assert staff.next[0] == 60
+    m.phase, m.t = 'half_time', 60
+    assert not staff.due(0)
+
+
+def test_manager_effort_is_sent_and_shown(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    api = Recorded()
+    manager = LanguageModel(transport=httpx.MockTransport(api), effort='high')
+    staff = staffed(manager)
+    asyncio.run(staff.line_up())
+    assert json.loads(api.requests[0].content)['reasoning_effort'] == 'high'
+    team = hello(staff.match, staff.squad, staff)['teams'][0]
+    assert team['manager'] == managers.DEFAULT_MODEL and team['managerEffort'] == 'high'
+    asyncio.run(manager.aclose())
+
+
+def test_paused_manager_defers_advice_and_is_not_due():
+    async def go():
+        class Coach(BuiltIn):
+            async def advise(self, situation):
+                await asyncio.sleep(0.02)
+                return Advice(instructions=[(7, 'Keep your position.')])
+        staff = staffed(Coach(), options=({'jev': Fake('Jev')}, {'bot': None}))
+        await staff.line_up()
+        task = asyncio.create_task(staff.consult(0))
+        await asyncio.sleep(0.01)
+        staff.match.paused = True
+        staff.match.t = 60
+        await asyncio.sleep(0.15)
+        assert not staff.due(0)
+        assert staff.squad.seats[7].instruction is None
+        staff.match.paused = False
+        await task
+        assert staff.squad.seats[7].instruction == 'Keep your position.'
+    asyncio.run(go())
+
+
+def test_manager_sets_initial_defending_and_role_instructions_then_changes_approach(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    def response(request):
+        schema = json.loads(request.content)['response_format']['json_schema']['schema']
+        assert schema['properties']['defending']['enum'] == ['zonal', 'man_to_man']
+        if 'lineup' in schema['properties']:
+            answer = {'lineup': [{'player': i, 'model': 'jev'} for i in range(1, 12)],
+                      'defending': 'man_to_man', 'instructions': [{'player': 2, 'text': 'Cover your assigned opponent; protect the right side.'}]}
+        else:
+            answer = {'defending': 'zonal', 'instructions': [], 'substitutions': []}
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(answer)}}]})
+    manager = LanguageModel(transport=httpx.MockTransport(response))
+    staff = staffed(home=manager, options=({'jev': Fake('Jev')}, {'bot': None}))
+    async def go():
+        await staff.line_up()
+        assert staff.squad.defending[0] == 'man_to_man'
+        assert 'right side' in staff.squad.seats[2].instruction
+        assert 'Recovery target' in staff.feed(0)
+        await staff.consult(0)
+        assert staff.squad.defending[0] == 'zonal'
+        staff.match.phase = 'play'
+        staff.apply(0, Advice(substitutions=[(2, 24, 'jev')], instructions=[(2, 'Press higher.')]))
+        staff.apply(0, Advice(instructions=[(2, 'Protect the right channel.')]))
+        staff.match._restart('throw_in', 0, 0, 34)
+        staff.match.step()
+        staff.observe(staff.match.drain_events())
+        assert staff.squad.seats[24].instruction == staff.squad.seats[2].instruction
+        assert staff.squad.seats[24].instruction == 'Protect the right channel.'
+        await staff.aclose()
+    asyncio.run(go())

@@ -3,9 +3,8 @@
 The match server streams the match to the page over one WebSocket at `/ws`.
 The engine is the source of truth; the page draws what it is sent and
 interpolates between snapshots. Every message is one JSON object with a
-`type`. Messages marked *planned* are defined here so the engine, the
-decision layer and the graphics can be built against them; the server sends
-them once the work that produces them lands.
+`type`. This is the renderer protocol; player questions and manager inputs
+are described separately in [how decisions work](model-decisions.md).
 
 ## Coordinates
 
@@ -33,7 +32,7 @@ Sent once when the page connects.
       "manager": "Built-in",
       "assistants": [],
       "players": [
-        {"id": 1, "number": 1, "name": "Vale", "position": "GK", "model": "Laya"}
+        {"id": 1, "number": 1, "name": "Vale", "position": "GK", "role": "Goalkeeper", "model": "Laya"}
       ]
     }
   ]
@@ -45,10 +44,16 @@ start in `players` and its substitutes in `bench`, in the same shape. `id` is
 unique across both teams; positions are `GK`, `DF`, `MF` or `FW`. `model` is the
 player's decision model, or `null` for the built-in bot; a substitute's is
 `null` until its manager chooses one. `manager` is the team's manager:
-`Built-in`, or the language model's name. `assistants` lists the model of
+`Built-in`, or the language model's name. `managerEffort` is the actual
+configured reasoning effort, or `null` for a built-in manager. `assistants` lists the model of
 each assistant helping the team's manager, one entry per assistant (for
-example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
+example `["gpt-6-astra", "gpt-6-astra"]`); it is empty for the built-in
 manager and for a language-model manager with none.
+
+`role` is the readable formation position, such as `Right back` or `Centre back`.
+The decisions table shows this role, shirt number and model. Bench players have
+a broad role until substituted; each active player's snapshot also includes
+`role`, so substitutions and replacement goalkeepers update the display.
 
 ### `snapshot`
 
@@ -65,8 +70,8 @@ The state of play, about 30 times a second.
   "ball": {"x": 12.4, "y": -3.1, "z": 0.11, "owner": 7,
            "touches": [{"player": 7, "kind": "control", "t": 734.183, "x": 11.8, "y": -3.0, "z": 0.11}]},
   "players": [
-    {"id": 7, "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
-    {"id": 1, "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
+    {"id": 7, "role": "Central midfielder", "x": 11.9, "y": -3.0, "heading": 0.3, "speed": 6.2, "action": "move"},
+    {"id": 1, "role": "Goalkeeper", "x": -51.2, "y": 1.4, "heading": 1.57, "speed": 4.1, "action": "move", "dive": true}
   ]
 }
 ```
@@ -163,7 +168,7 @@ send none.
 
 A failed answer has `"error"` in place of `"action"`. `ms` is the time from
 asking to the answer, including any wait for a local model's turn. `action`
-is one of `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
+is one of `wait` (stop with possession), `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
 `cross`, `shoot`, `clear`, `press`, `tackle`, `slide_tackle`, `jockey`,
 `hold`, `support`, `mark` and `run_behind` (see `docs/decisions.md`, section
 4). `note`, when present, says the answer came too late for the moment it was
@@ -181,11 +186,27 @@ ready to show.
 {"type": "manager", "team": 0, "kind": "substitution", "off": 8, "on": 26, "model": "laya", "text": "Heath (Laya) to come on for Brook: Faster midfield decisions."}
 ```
 
+A defending-style change is a team message:
+
+```json
+{"type": "manager", "team": 0, "kind": "tactics", "text": "Defending: man-to-man"}
+```
+
+Initial instructions and tactics use the same message kinds as later updates.
+There is no separate defending field in `hello` or `snapshot`.
+
 An `instruction` is for `player`, on the manager's team and on the pitch. A
 `substitution` is asked for here and made at the next stoppage, when its
 `substitution` event follows; `model` is the name the model is chosen with
-(see the README), or `bot`.
+(see the README).
 
 ## Page to server
 
-Nothing yet. The page only listens.
+Send `{"type":"pause","paused":true}` to pause this match, or the same
+message with `false` to resume. The server acknowledges with the same shape.
+While paused, simulation and new model requests stop. Pending answers wait
+before application; resuming excludes the paused wall time. Other browser
+connections have independent matches.
+
+Manager messages of kind `status` report lineup fallbacks and failed consultations;
+their `text` is safe to display like other manager messages.
