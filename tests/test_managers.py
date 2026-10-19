@@ -339,6 +339,7 @@ def test_manager_reports_own_performance_and_only_opponent_aggregates():
     asyncio.run(staff.line_up())
     m = staff.match
     m.phase, m.owner, m.t = 'play', 7, 1
+    m.score = [0, 1]
     m._touched(m.player(7), 'kick')
     m._touched(m.player(18), 'tackle')
     staff.squad.instruct(18, 'Secret opponent instruction')
@@ -355,6 +356,32 @@ def test_manager_reports_own_performance_and_only_opponent_aggregates():
         assert hidden not in feed
     own_feed = staff.feed(1)
     assert 'Ember' in own_feed and 'Secret opponent instruction' in own_feed
+
+
+@pytest.mark.parametrize('contact, field', [('tackle', 'tackles'), ('catch', 'saves/catches')])
+def test_manager_counts_contact_followed_by_kick_in_the_same_step(contact, field):
+    staff = staffed()
+    m = staff.match
+    m.t = 1
+    p = m.player(7)
+    m._touched(p, contact)
+    m._touched(p, 'control')  # taking possession adds no duplicate contact
+    m._touched(p, 'kick')
+    assert len(m.touches) == 1 and m.touches[0]['kind'] == 'kick'
+    staff.observe([])
+    staff.observe([])
+    assert staff.performance.players[7][field] == 1
+    assert staff.performance.players[7]['kicks'] == 1
+    assert staff.performance.players[7]['touches'] == 2
+
+
+def test_manager_does_not_treat_goal_animation_player_as_scorer():
+    staff = staffed()
+    staff.match.score = [1, 0]
+    staff.observe([{'kind': 'goal', 'team': 0, 'player': 11}])
+    assert 'goal, you (Pike)' not in staff.feed(0)
+    assert staff.performance.players[11]['goals'] == 0
+    assert '1 goals' in staff.performance.team(0)
 
 
 def test_manager_waits_thirty_seconds_after_answer_and_does_not_consult_at_half_time():

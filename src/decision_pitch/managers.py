@@ -583,7 +583,7 @@ def _told(m: Match, event: dict, team: int) -> str:
 
     name = visible_name(event["player"]) if "player" in event else None
     if kind == "goal":
-        told = f"goal, {who}" + (f" ({name})" if side == team else "")
+        told = f"goal, {who}"  # the engine's animation player is not reliable scoring attribution
     elif kind == "foul":
         told = f"foul by {name} on {visible_name(event['fouled'])}, free kick to {who}"
     elif kind in ("yellow", "red"):

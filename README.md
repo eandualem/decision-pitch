@@ -122,7 +122,8 @@ Managers receive individual football statistics and model health for their own
 players, and only aggregate opponent performance. Opponent model assignments,
 individual statistics and instructions are hidden. Possession by pitch third
 helps managers see where their team spends its time. Kicks count all passes,
-shots and clearances, not successful passes. Lineup fallbacks and failed
+shots and clearances, not successful passes. Goals are reported per team;
+individual scoring attribution is not yet reliable. Lineup fallbacks and failed
 consultations are shown in the decision panel.
 `--assistants 1` or `2` gives each language-model manager assistant models
 (`claude-haiku-5-5` or `gpt-5.4-nano`) that send it a short note before each

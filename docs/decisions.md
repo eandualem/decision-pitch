@@ -1398,9 +1398,12 @@ Text-only variants keep receiving text without an image. No football skill
 advantage is assumed for vision; managers may select either variant.
 
 Managers receive their own players' possession time, touches, kicks (not
-mislabelled as shots or completed passes), tackles, saves, goals and fouls,
-plus model decisions, latency and errors. Team totals and possession by pitch
-third describe both sides. Opponent model assignments, instructions, response
+mislabelled as shots or completed passes), tackles, saves/catches and fouls,
+plus model decisions, latency and errors. Team totals, goals and possession by pitch
+third describe both sides. Contact counters retain a tackle or catch followed
+by a kick in the same physics step, even when the animation history combines
+them. Individual goals are not reported: the goal event identifies a nearby
+player for animation, which is not reliable scoring attribution. Opponent model assignments, instructions, response
 times and individual statistics are excluded. Event summaries identify only
 the manager's own players. Statistics describe observed play, not inferred
 reasons for winning or losing.
