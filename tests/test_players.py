@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import random
 import time
 
@@ -9,8 +10,8 @@ import pytest
 from decision_pitch import actions, bots, players
 from decision_pitch.arena import apis
 from decision_pitch.arena.models import Answer
-from decision_pitch.bots import DRIBBLE_SPEED, _goal_line_spot, _home, _save_spot, _shape, _taker
-from decision_pitch.match import TEAMS, Hold, KickTo, Match, MoveTo, Team
+from decision_pitch.bots import DRIBBLE_SPEED, _dribble_spot, _goal_line_spot, _press_spot, _save_spot, _taker
+from decision_pitch.match import TEAMS, AirKick, Hold, KickTo, Match, MoveTo, Tackle, Team
 from decision_pitch.players import FAILURE_WAIT, Players
 from decision_pitch.server import main, run, seat
 
@@ -113,18 +114,47 @@ def test_a_player_on_the_ball_keeps_playing_it_whatever_the_action():
     p = match.player(7)
     match.ball.place(p.x + 0.5, p.y)
     match.owner = p.id
-    for action in ("press", "hold", "support", "mark"):
+    for action in ("press", "tackle", "slide_tackle", "jockey", "hold", "support", "mark"):
         command = actions.command(match, p, action)
         assert isinstance(command, MoveTo) and command.speed == DRIBBLE_SPEED  # not standing on it
 
 
-def test_without_the_ball_only_the_nearest_goes_for_it_to_kick_it():
+def test_a_late_answer_for_the_ball_is_carried_out_without_it():
     match = in_play(Match())
-    nearest, other = match.player(7), match.player(8)
-    match.ball.place(nearest.x + 2, nearest.y)
-    for action in ("dribble", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear"):
-        assert actions.command(match, nearest, action) == bots.command(match, nearest)  # goes for it
-        assert actions.command(match, other, action) == _shape(match, other, _home(match, other))
+    p, opponent = match.player(7), match.player(18)
+    match.ball.place(opponent.x + 0.6, opponent.y)
+    match.owner = opponent.id
+    for action in ("pass", "through_ball", "cross", "shoot", "clear"):
+        assert actions.command(match, p, action) == AirKick()  # a kick at nothing
+    for action in ("dribble", "take_on", "shield"):
+        assert actions.command(match, p, action) == MoveTo(*_dribble_spot(match, p), DRIBBLE_SPEED)
+    match.owner = None  # loose: it runs at the ball
+    assert actions.command(match, p, "shoot") == MoveTo(*_press_spot(match, p))
+
+
+def test_a_kick_at_nothing_is_spent_like_a_kick():
+    match = in_play(Match())
+    squad = Players(match, {7: Fake("shoot")})
+    opponent = match.player(18)
+    match.ball.place(opponent.x + 0.6, opponent.y)
+    match.owner = opponent.id
+    squad.seats[7].action = "shoot"
+    squad.play()
+    match.step()
+    assert match.snapshot()["players"][6]["move"] == "air_kick"
+    squad.play()
+    assert squad.seats[7].action == "hold"
+
+
+def test_an_answer_overtaken_by_the_players_own_kick_holds_its_place():
+    match = in_play(Match())
+    p = match.player(7)
+    match.kicked[p.id] = 3.0
+    assert players._late(match, p, "shoot", asked=2.5, had_ball=True) == "already played"
+    assert players._late(match, p, "shoot", asked=3.5, had_ball=True) == "no ball"  # it lost it
+    assert players._late(match, p, "sprint", asked=2.5, had_ball=True) is None
+    match.owner = p.id
+    assert players._late(match, p, "shoot", asked=2.5, had_ball=True) is None  # it has it again
 
 
 def test_a_model_goalkeeper_gets_across_to_a_shot_as_the_bot_does():
@@ -144,12 +174,27 @@ def test_a_model_goalkeeper_presses_and_marks_from_its_goal():
         assert actions.command(match, keeper, action) == MoveTo(*_goal_line_spot(match, keeper), face=(0.0, 0.0))
 
 
-def test_a_presser_does_not_chase_its_own_teammate_on_the_ball():
+def test_a_late_press_runs_at_its_teammates_ball_but_never_tackles_it():
     match = in_play(Match())
     carrier, presser = match.player(7), match.player(8)
     match.ball.place(carrier.x + 0.5, carrier.y)
     match.owner = carrier.id
-    assert actions.command(match, presser, "press") == actions.command(match, presser, "support")
+    assert "press" not in actions.options(match, presser)
+    assert actions.command(match, presser, "press") == MoveTo(*_press_spot(match, presser))
+
+
+def test_pressing_and_tackling_an_opponent_go_in_for_the_ball():
+    match = in_play(Match())
+    carrier, p = match.player(18), match.player(7)
+    match.ball.place(carrier.x + 0.6, carrier.y)
+    match.owner = carrier.id
+    assert actions.command(match, p, "press") == Tackle(*_press_spot(match, p), from_behind=False)
+    assert actions.command(match, p, "tackle") == Tackle(match.ball.x, match.ball.y)
+    assert actions.command(match, p, "slide_tackle") == Tackle(match.ball.x, match.ball.y, slide=True)
+    jockey = actions.command(match, p, "jockey")
+    goal_x = -match.attack(p.team) * 52.5
+    assert math.isclose(math.hypot(jockey.x - carrier.x, jockey.y - carrier.y), actions.JOCKEY_DISTANCE)
+    assert abs(jockey.x - goal_x) < abs(carrier.x - goal_x) and jockey.face == (carrier.x, carrier.y)
 
 
 def test_a_shot_out_of_range_is_dribbled_into_range_first():

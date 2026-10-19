@@ -66,6 +66,11 @@ export const MORE_ONE_SHOTS = {
   cut_R: [0.8333, 0.22, { turn: -60, turning: [0.22, 0.4783], speeds: [[0, 4], [0.22, 4], [0.4783, 3.49], [0.8333, 3.4]] }],
   brake: [2.2333, 0.1, { speeds: [[0, 7.5], [1.875, 0]] }],
   tackle_standing: [0.8, 0.3], cross: [1.1, 0.42], pass_lofted: [1.1, 0.42],
+  // A kick at nothing, stumbles, falls, getting up and the left-boot slide (issue #65).
+  tackle: [1, 0.35, { down: [0.3, 0.6] }], tackle_L: [1, 0.35, { down: [0.3, 0.6] }], tackle_missed: [1.2, 0.32],
+  air_kick: [1.5, 0.45], stumble: [1.2, 0, { speeds: [[0, 5], [1.2, 5]] }],
+  fall_front: [0.9, 0], fall_back: [0.9, 0], fall_side_L: [0.9, 0, { turn: -90 }], fall_side_R: [0.9, 0, { turn: 90 }],
+  get_up_front: [1.1, 0], get_up_back: [1.1, 0],
 };
 export const HAIRS = ['hair_bald', 'hair_buzz', 'hair_short', 'hair_curly', 'hair_swept', 'hair_bun'];
 const REGIONS = ['skin', 'shirt', 'sleeve', 'hands', 'shorts', 'legs', 'socks', 'boots'];

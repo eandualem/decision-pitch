@@ -13,6 +13,7 @@ body { -webkit-user-select: none; user-select: none; }
 .score { font-size: 23px; letter-spacing: .08em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .match-clock { border-left: 1px solid #ffffff24; padding: 0 15px; font-size: 15px; font-variant-numeric: tabular-nums; }
 .match-phase { padding: 0 16px 0 0; color: #b5c6be; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
+.keeper-count { padding: 0 16px 0 0; color: #f2c230; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; }
 /* A lower third at the bottom left: clear of the play in the middle of the wide shot and of
    the scorer framed in the close-up after a goal. */
 .moment { position: absolute; bottom: 4%; left: 3%; max-width: min(460px, 60vw); display: flex; flex-direction: column; align-items: flex-start; padding: 10px 22px 12px; background: #101d21ee; border-left: 3px solid #d6ff63; box-shadow: 0 12px 40px #0005; text-align: left; }
@@ -23,8 +24,11 @@ body { -webkit-user-select: none; user-select: none; }
 .player-card { position: absolute; width: 15px; height: 22px; border: 1px solid #ffffffb0; border-radius: 2px; box-shadow: 0 3px 8px #0009; transform: translate(-50%, -100%) rotate(-8deg); }
 .player-card.yellow { background: #ffe140; }
 .player-card.red { background: #f44446; }
-.overlay-toggle { position: fixed; right: 24px; bottom: 16px; padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
-.overlay-toggle:hover, .overlay-toggle[aria-expanded="true"] { background: #d6ff63; color: #15221b; }
+.overlay-toggle, .play-again { padding: 11px 16px; border: 1px solid #d6ff6355; border-radius: 4px; color: #d6ff63; background: #101d21ef; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.overlay-toggle { position: fixed; right: 24px; bottom: 16px; }
+.overlay-toggle:hover, .overlay-toggle[aria-expanded="true"], .play-again:hover { background: #d6ff63; color: #15221b; }
+.play-again { margin-top: 12px; pointer-events: auto; }
+.moment[data-kind="full_time"] { max-width: calc(100vw - 48px); }
 button:focus-visible { outline: 3px solid #fff; outline-offset: 4px; }
 .decision-overlay { position: fixed; z-index: 2; right: 24px; top: 90px; bottom: 72px; width: min(760px, calc(100vw - 48px)); overflow: auto; overscroll-behavior: contain; padding: 24px; background: #101d21f5; border: 1px solid #ffffff20; border-radius: 6px; box-shadow: 0 20px 80px #0007; user-select: text; }
 .overlay-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
@@ -60,4 +64,5 @@ h1, h2, h3, p { margin: 0; }
   .overlay-header { display: block; }
   .overlay-header p { margin-top: 6px; }
   .moment { bottom: 3%; left: 16px; padding: 8px 16px 10px; }
+  .moment[data-kind="full_time"] { bottom: 76px; max-width: calc(100vw - 32px); }
 }

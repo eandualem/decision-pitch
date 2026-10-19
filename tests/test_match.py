@@ -101,6 +101,24 @@ def test_opponents_wait_outside_the_penalty_area_at_a_goal_kick():
     assert m.phase == "goal_kick"
 
 
+def test_a_goal_kick_is_taken_quickly_with_an_opponent_still_leaving_the_area():
+    m = in_play(ball=(pitch.HALF_LENGTH - 1, 15.0), velocity=(10.0, 0.0, 0.0), last_touch=0)
+    run(m, 0.5)
+    keeper = next(p for p in m.players if p.team == 1 and p.position == "GK")
+    keeper.x, keeper.y = m.ball.x + 0.5, m.ball.y
+    attacker = next(p for p in m.players if p.team == 0 and p.position == "FW")
+    attacker.x, attacker.y = m.ball.x - 7.0, 0.0  # in the area, 7 m from the ball
+    m.command(keeper.id, KickTo(20.0, 20.0, 15.0))
+    run(m, 0.2)
+    assert m.phase == "goal_kick"  # it is near enough to challenge: the kick waits
+    for _ in range(round(2.0 / STEP)):
+        m.step()
+        if m.phase == "play":
+            break
+    assert m.restart_kicker == keeper.id and m.since_restart < 2.0
+    assert attacker.x > pitch.HALF_LENGTH - pitch.PENALTY_DEPTH  # taken before it left the area
+
+
 def test_only_the_restarting_team_may_play_the_ball_and_its_kick_restarts_play():
     m = in_play(ball=(10.0, pitch.HALF_WIDTH - 1), velocity=(0.0, 8.0, 0.0), last_touch=0)
     run(m, 0.5)
@@ -183,6 +201,16 @@ def test_the_team_shape_moves_up_with_the_ball_but_not_into_its_own_six_yard_box
     m.ball.place(-40.0, 0.0)
     m.owner = 20  # an away forward near the home area
     assert bots._home(m, defender)[0] == -pitch.HALF_LENGTH + bots.SHAPE_DEEPEST
+
+
+def test_the_team_keeps_its_attacking_shape_while_its_pass_is_on_the_way():
+    m = in_play(ball=(0.0, 0.0), velocity=(12.0, 0.0, 0.0), last_touch=0)  # a home pass
+    midfielder = m.player(7)
+    attacking = bots._home(m, midfielder)
+    m.owner = 8  # its receiver has it
+    assert bots._home(m, midfielder) == attacking
+    m.owner, m.last_touch = None, 1  # the away team cut it out
+    assert bots._home(m, midfielder)[0] < attacking[0]
 
 
 def test_the_goalkeeper_stays_on_its_line_while_its_team_attacks():

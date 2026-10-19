@@ -26,6 +26,11 @@
   "toe_R"
  ],
  "clips": {
+  "air_kick": {
+   "contact": 0.45,
+   "duration": 1.5,
+   "loop": false
+  },
   "backpedal": {
    "direction": "back",
    "duration": 0.5333,
@@ -185,6 +190,32 @@
    "set": "dribble",
    "speed": 7.5,
    "touch": 0.4
+  },
+  "fall_back": {
+   "duration": 0.9,
+   "loop": false
+  },
+  "fall_front": {
+   "duration": 0.9,
+   "loop": false
+  },
+  "fall_side_L": {
+   "duration": 0.9333,
+   "loop": false,
+   "turn": -90.0
+  },
+  "fall_side_R": {
+   "duration": 0.9333,
+   "loop": false,
+   "turn": 90.0
+  },
+  "get_up_back": {
+   "duration": 1.1,
+   "loop": false
+  },
+  "get_up_front": {
+   "duration": 1.1,
+   "loop": false
   },
   "header": {
    "contact": 0.56,
@@ -427,9 +458,41 @@
    "set": "jockey",
    "speed": 2.5
   },
+  "stumble": {
+   "duration": 1.2,
+   "loop": false,
+   "speeds": [
+    [
+     0.0,
+     5.0
+    ],
+    [
+     1.2,
+     5.0
+    ]
+   ]
+  },
   "tackle": {
    "contact": 0.4,
+   "down": [
+    0.32,
+    0.7
+   ],
    "duration": 1.5,
+   "loop": false
+  },
+  "tackle_L": {
+   "contact": 0.4,
+   "down": [
+    0.32,
+    0.7
+   ],
+   "duration": 1.5,
+   "loop": false
+  },
+  "tackle_missed": {
+   "contact": 0.32,
+   "duration": 1.2667,
    "loop": false
   },
   "tackle_standing": {

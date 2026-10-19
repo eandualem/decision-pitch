@@ -4,8 +4,10 @@ const labels = {
   goal: 'GOAL', foul: 'Foul', free_kick: 'Free kick', penalty: 'Penalty', offside: 'Offside',
   yellow: 'Yellow card', red: 'Red card', kickoff: 'Kick-off', throw_in: 'Throw-in',
   goal_kick: 'Goal kick', corner: 'Corner', half_time: 'Half-time', full_time: 'Full-time',
-  substitution: 'Substitution',
+  substitution: 'Substitution', second_touch: 'Played twice', held: 'Held too long',
+  advantage: 'Advantage', handball: 'Handball', added_time: 'Added time',
 };
+const HOLD_LIMIT = 8; // s a goalkeeper may hold the ball; the referee counts the last five
 const make = (tag, className, text = '') => {
   const node = document.createElement(tag);
   node.className = className;
@@ -22,7 +24,9 @@ export function createMoments(scene, teams) {
   const score = make('strong', 'score', '0 : 0');
   const clock = make('span', 'match-clock', '00:00');
   const phase = make('span', 'match-phase', 'Kick-off');
-  scorebar.append(brand, names[0], score, names[1], clock, phase);
+  const count = make('span', 'keeper-count');
+  count.hidden = true;
+  scorebar.append(brand, names[0], score, names[1], clock, phase, count);
   const banner = make('div', 'moment');
   banner.hidden = true;
   banner.setAttribute('role', 'status');
@@ -30,7 +34,11 @@ export function createMoments(scene, teams) {
   const eyebrow = make('span', 'moment-eyebrow', 'MATCH MOMENT');
   const headline = make('strong', 'moment-title');
   const detail = make('span', 'moment-detail');
-  banner.append(eyebrow, headline, detail);
+  const again = make('button', 'play-again', 'Play again');
+  again.type = 'button';
+  again.hidden = true;
+  again.onclick = () => { again.disabled = true; location.reload(); };
+  banner.append(eyebrow, headline, detail, again);
   root.append(scorebar, banner);
   document.body.append(root);
   const roster = new Map(teams.flatMap((team, index) => [...team.players, ...(team.bench ?? [])].map(p => [p.id, { ...p, team: index }])));
@@ -38,7 +46,20 @@ export function createMoments(scene, teams) {
   const lastPositions = new Map();
   const projected = new THREE.Vector3();
   let bannerUntil = 0;
+  let finished = false;
+  let lastScore = [0, 0];
   const pending = [];
+  const finish = (result) => {
+    finished = true;
+    pending.length = 0;
+    eyebrow.textContent = 'FULL-TIME';
+    headline.textContent = `${teams[0].name} ${result[0]} : ${result[1]} ${teams[1].name}`;
+    detail.hidden = true;
+    again.hidden = false;
+    banner.dataset.kind = 'full_time';
+    banner.hidden = false;
+    bannerUntil = Infinity;
+  };
   const playerLabel = id => {
     const player = roster.get(id);
     return player ? `${player.number} · ${player.name}` : `Player ${id}`;
@@ -46,8 +67,9 @@ export function createMoments(scene, teams) {
   const show = (event, now) => {
     const player = roster.get(event.player);
     headline.textContent = event.kind === 'free_kick' && event.indirect ? 'Indirect free kick' : labels[event.kind];
-    const team = teams[(event.kind === 'foul' || event.kind === 'offside') && player ? player.team : event.team];
-    const who = event.kind === 'substitution' ? `${playerLabel(event.off)} → ${playerLabel(event.on)}` : (player ? playerLabel(event.player) : '');
+    const team = teams[(event.kind === 'foul' || event.kind === 'offside' || event.kind === 'handball') && player ? player.team : event.team];
+    const who = event.kind === 'substitution' ? `${playerLabel(event.off)} → ${playerLabel(event.on)}`
+      : event.kind === 'added_time' ? `+${event.minutes} min` : (player ? playerLabel(event.player) : '');
     detail.textContent = [team?.name, who].filter(Boolean).join(' / ');
     eyebrow.textContent = event.kind === 'goal' ? 'THE FINISH' : 'MATCH MOMENT';
     banner.dataset.kind = event.kind;
@@ -62,10 +84,17 @@ export function createMoments(scene, teams) {
         lastPositions.get(player.id).set(player.x, 0, -player.y);
       }
       score.textContent = `${snapshot.score[0]} : ${snapshot.score[1]}`;
+      lastScore = snapshot.score;
+      if (snapshot.phase === 'full_time') finish(snapshot.score);
       clock.textContent = snapshot.clock;
       phase.textContent = snapshot.phase === 'play' ? `${snapshot.period === 2 ? '2ND' : '1ST'} HALF` : (labels[snapshot.phase] ?? snapshot.phase.replaceAll('_', ' '));
+      const held = snapshot.ball?.held;
+      count.hidden = !(held >= HOLD_LIMIT - 5);
+      if (!count.hidden) count.textContent = `Keeper ${Math.max(1, Math.ceil(HOLD_LIMIT - held))}`;
     },
     handleEvent(event, now) {
+      if (finished) return;
+      if (event.kind === 'full_time') { finish(event.score ?? lastScore); return; }
       if (!labels[event.kind]) return;
       const player = roster.get(event.player);
       if (event.kind === 'yellow' || event.kind === 'red') {
@@ -75,7 +104,7 @@ export function createMoments(scene, teams) {
         root.append(node);
         markers.push({ node, player: event.player, until: now + 7, position: lastPositions.get(event.player)?.clone() ?? null });
       }
-      if (event.kind === 'goal' || event.kind === 'full_time') {
+      if (event.kind === 'goal') {
         // Decisive moments must match the live camera and supersede old play.
         pending.length = 0;
         show(event, now);

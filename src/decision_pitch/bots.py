@@ -7,7 +7,7 @@ import math
 from dataclasses import replace
 
 from decision_pitch import pitch
-from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import CONTROL, CONTROL_HEIGHT, RESTARTS, Command, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import ROLLING, TOP_SPEED, Player, _step_ball
 
 SHOOTING_RANGE = 24.0  # m from goal
@@ -39,6 +39,7 @@ RUN_THROUGH = 3.0  # m beyond its meeting spot that a chaser close to a moving b
 RUN_THROUGH_NEAR = 6.0  # m from the ball within which it does
 RUN_THROUGH_SPEED = 1.0  # m/s the ball moves at, at least
 SAVE_MARGIN = 1.0  # m outside a post within which a goalkeeper still covers a shot
+LAST_DITCH = 25.0  # m from its own goal within which a carrier is met with a slide tackle
 SHAPE_FOLLOW = 0.9  # how far the team's shape moves with the ball, as a share of the ball's move
 SHAPE_DEEPEST = 8.0  # m from its own goal line that an outfield player's place goes back to at most
 
@@ -80,7 +81,9 @@ def command(m: Match, p: Player) -> Command:
         if p.id == chaser.id:
             return MoveTo(*_run_through(m, p, spot))
     elif p.id == _nearest(m, p.team, outfield=True).id:
-        return MoveTo(*_press_spot(m, p))
+        c = m.player(m.owner)
+        last_ditch = math.hypot(-m.attack(p.team) * pitch.HALF_LENGTH - c.x, c.y) < LAST_DITCH
+        return Tackle(*_press_spot(m, p), slide=last_ditch, from_behind=False)
     return _shape(m, p, _home(m, p))
 
 
@@ -304,12 +307,14 @@ def _taker(m: Match, team: int) -> Player:
 
 
 def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
-    """The player's formation spot, shifted with the ball; a goalkeeper's is on its line."""
+    """The player's formation spot, shifted with the ball, and further up while its team
+    has the ball or `attacking`; a goalkeeper's is on its line."""
     direction = m.attack(p.team)
     if m.phase == "kickoff":
         return direction * p.home[0], direction * p.home[1]
     if p.position == "GK":
         return _goal_line_spot(m, p)
+    attacking = attacking or _in_possession(m, p.team)
     bx, by = m.ball.x * direction, m.ball.y * direction  # the ball in the team's frame
     x = p.home[0] + SHAPE_FOLLOW * bx + (8 if attacking else 0) + 15
     y = p.home[1] * 0.85 + 0.25 * by
@@ -317,6 +322,17 @@ def _home(m: Match, p: Player, attacking: bool = False) -> tuple[float, float]:
     if m.phase == "goal_kick" and p.team != m.restart_team:
         x = min(x, pitch.HALF_LENGTH - pitch.PENALTY_DEPTH - 1)  # outside the area until the kick
     return direction * x, direction * y
+
+
+def _in_possession(m: Match, team: int) -> bool:
+    """Whether `team` has the ball, for its shape: one of its players has it, it is taking
+    the restart, or the ball is loose and it played it last, as after its pass
+    (docs/decisions.md, section 2)."""
+    if m.owner is not None:
+        return m.player(m.owner).team == team
+    if m.phase in RESTARTS:
+        return m.restart_team == team
+    return m.last_touch == team
 
 
 def _goal_line_spot(m: Match, p: Player) -> tuple[float, float]:

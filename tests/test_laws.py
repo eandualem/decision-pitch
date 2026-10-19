@@ -4,7 +4,7 @@ import pytest
 
 from decision_pitch import bots, pitch
 from decision_pitch.bots import _wall_spot
-from decision_pitch.match import DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import ADVANTAGE, DRIBBLE, OUT_OF_PLACE, RETREAT_WAIT, SET_PIECE_WAIT, AirKick, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import STEP, TOP_SPEED
 
 
@@ -42,6 +42,12 @@ def challenge(m, pid, x, y, vx, vy):
     return q
 
 
+def no_advantage(m):
+    """Play stops at every foul, as when the fouled team cannot play on."""
+    m._plays_on = lambda team: False
+    return m
+
+
 def kinds(events):
     return [e["kind"] for e in events]
 
@@ -54,7 +60,7 @@ def on_pitch(m):
 
 
 def test_running_into_the_ball_carrier_from_behind_is_a_foul_and_a_free_kick():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -63,14 +69,16 @@ def test_running_into_the_ball_carrier_from_behind_is_a_foul_and_a_free_kick():
     assert (events[0]["team"], events[0]["player"], events[0]["fouled"]) == (0, 15, 10)
     assert (m.phase, m.restart_team) == ("free_kick", 0)
     assert (m.ball.x, m.ball.y) == (0.0, 0.0)  # where the fouled player was
+    assert m.down[10][0] == "front" and 10 in m.recovering
 
 
 def test_running_into_the_carrier_from_the_side_without_reaching_the_ball_is_a_foul():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, 0.0, 0.75, 0.0, -5.0)
     m.step()
     assert kinds(m.drain_events()) == ["foul", "free_kick"]
+    assert m.down[10][0] == "side" and 10 in m.recovering
 
 
 def test_a_challenge_that_reaches_the_ball_from_the_front_wins_it_fairly():
@@ -110,7 +118,7 @@ def test_a_presser_meets_a_ball_coming_at_it_as_fast_as_it_runs():
 
 
 def test_a_free_kick_waits_before_it_can_be_taken():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -123,7 +131,7 @@ def test_a_free_kick_waits_before_it_can_be_taken():
 
 
 def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 0.0, 0.0)
     offender = challenge(m, 15, -0.7, 0.0, 5.0, 0.0)
     m.step()
@@ -141,7 +149,7 @@ def test_the_offender_runs_back_from_a_free_kick_and_the_kick_waits_for_it():
 
 
 def test_a_free_kick_near_goal_gets_a_wall_of_three_beyond_the_required_distance():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 25.0, 0.0)
     challenge(m, 15, 24.3, 0.0, 5.0, 0.0)
     m.step()
@@ -261,7 +269,7 @@ def test_the_bot_shoots_a_penalty():
 
 
 def test_a_foul_that_stops_a_promising_attack_is_a_yellow_card():
-    m = in_play()
+    m = no_advantage(in_play())
     on_the_ball(m, 10, 30.0, 0.0)
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
     m.step()
@@ -272,7 +280,7 @@ def test_a_foul_that_stops_a_promising_attack_is_a_yellow_card():
 
 
 def test_a_second_yellow_card_is_a_red_and_the_player_leaves_the_pitch():
-    m = in_play()
+    m = no_advantage(in_play())
     m.yellows[15] = 1
     on_the_ball(m, 10, 30.0, 0.0)
     challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
@@ -292,6 +300,54 @@ def test_a_foul_that_denies_an_obvious_goal_scoring_chance_is_a_red_card():
     m.step()
     assert kinds(m.drain_events()) == ["foul", "red", "free_kick"]
     assert 15 not in on_pitch(m)
+
+
+@pytest.mark.parametrize(
+    ("tackle", "chance", "expected"),
+    [
+        (True, True, ["foul", "yellow", "penalty"]),  # it tried to play the ball: a yellow
+        (True, False, ["foul", "penalty"]),  # a promising attack stopped: the penalty alone
+        (False, True, ["foul", "red", "penalty"]),  # it ran into the player: still a red
+    ],
+)
+def test_a_tackle_in_the_offenders_own_area_is_one_card_lower(tackle, chance, expected):
+    m = in_play()
+    if chance:
+        for p in m.players:
+            if p.team == 1 and p.position != "GK":
+                p.x = min(p.x, 20.0)
+    c = on_the_ball(m, 10, 45.0, 0.0)
+    if tackle:
+        c.vx = 2.0
+        tackler(m, 15, 44.85, 0.85, vx=0.4, vy=-1.6)  # takes the player, not the ball
+    else:
+        challenge(m, 15, 44.3, 0.0, 5.0, 0.0)  # runs into its back
+    m.step()
+    assert kinds(m.drain_events()) == expected
+
+
+@pytest.mark.parametrize(
+    ("keeper", "expected"),
+    [
+        (False, ["foul", "red", "penalty"]),  # it would have reached the loose ball first
+        (True, ["foul", "yellow", "penalty"]),  # the goalkeeper would have: no chance denied
+    ],
+)
+def test_a_foul_off_the_ball_denies_a_goal_chance_only_if_the_fouled_player_would_reach_it(keeper, expected):
+    m = in_play()
+    m.owner = None
+    for p in m.players:
+        if p.team == 1 and p.position != "GK":
+            p.x = min(p.x, 20.0)
+    r = m.player(9)
+    r.x, r.y, r.heading = 40.0, 0.0, 0.0
+    m.ball.place(43.0, 0.0)
+    if keeper:
+        k = m.player(12)
+        k.x, k.y = 44.0, 0.0
+    challenge(m, 17, 39.3, 0.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == expected
 
 
 def test_a_sent_off_goalkeeper_is_replaced_in_goal_by_the_teammate_nearest_it():
@@ -515,3 +571,584 @@ def test_a_sent_off_player_cannot_be_replaced():
     m._card(m.player(15), red=True)
     assert m.pending == []
     assert m.substitute(15, 30) == "that player is not on the pitch"
+
+
+# -- tackles ------------------------------------------------------------------------------------
+
+
+def tackler(m, pid, x, y, vx=0.0, vy=0.0, **kind):
+    """Player `pid` at (x, y), running at (vx, vy) m/s, going in for the ball."""
+    q = m.player(pid)
+    q.x, q.y, q.vx, q.vy, q.heading = x, y, vx, vy, math.atan2(m.ball.y - y, m.ball.x - x)
+    m.command(pid, Tackle(m.ball.x, m.ball.y, **kind))
+    return q
+
+
+def touch(m, pid):
+    return next(t["kind"] for t in reversed(m.touches) if t["player"] == pid)
+
+
+def test_a_standing_tackle_from_the_front_takes_the_ball():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, 1.6, 0.0, vx=-1.0)
+    m.step()
+    assert touch(m, 7) == "tackle" and m.owner is None and 18 in m.recovering
+    assert m.ball.vx > 0  # to the tackler's feet
+    run(m, 0.5)
+    assert m.owner == 7 and touch(m, 7) == "tackle"
+
+
+def test_a_standing_tackle_closing_fast_pokes_the_ball_loose():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, 1.6, 0.0, vx=-5.0)
+    m.step()
+    assert touch(m, 7) == "poke" and m.ball.vx < 0  # on, the way the tackler went in
+
+
+def test_a_standing_tackle_that_misses_leaves_the_tackler_stumbling():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.heading, c.vy = math.pi / 2, 7.0  # running away across the tackler
+    m.ball.place(0.0, 0.6)
+    tackler(m, 7, 1.1, 0.6)
+    m.step()
+    assert m.snapshot()["players"][6]["move"] == "stumble" and 7 in m.recovering
+    assert m.owner == 18 and not m.drain_events()
+
+
+def test_a_standing_tackle_that_takes_the_player_not_the_ball_is_a_foul():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 2.0
+    tackler(m, 7, -0.15, 0.85, vx=0.4, vy=-1.6)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+    assert m.down[18][0] == "side"
+
+
+def test_a_press_does_not_go_in_from_behind_but_a_tackle_does_and_fouls():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, -0.5, 0.2, from_behind=False)
+    m.step()
+    assert m.owner == 18 and not m.drain_events()
+    on_the_ball(m, 18, 0.0, 0.0)
+    tackler(m, 7, -0.5, 0.2)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+    assert m.down[18][0] == "front"
+
+
+def test_a_slide_tackle_from_the_side_pokes_the_ball_and_leaves_the_slider_down():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 4.0
+    tackler(m, 7, 1.5, 2.0, slide=True)
+    m.step()
+    start = m.t
+    assert touch(m, 7) == "poke" and m.snapshot()["players"][6]["move"] == "slide"
+    run(m, 0.6)
+    way, until = m.down[7]
+    assert way == "side" and math.isclose(until, start + 1.5)
+    assert m.snapshot()["players"][6]["down"] == {"way": "side", "until": round(until, 3)}
+    run(m, 1.0)
+    assert 7 not in m.down and 7 not in m.recovering
+
+
+def test_a_slide_tackle_that_takes_the_player_is_a_foul():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 1.0
+    tackler(m, 7, -0.8, 1.9, slide=True)
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+
+
+def test_a_slide_tackle_from_behind_is_a_foul_and_a_yellow_card_anywhere():
+    m = in_play()
+    on_the_ball(m, 18, 0.0, 0.0)  # at halfway, far from any promising attack
+    tackler(m, 7, -1.8, 0.3, slide=True)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "yellow", "free_kick"]
+
+
+def test_a_slide_tackle_that_misses_leaves_the_slider_on_the_ground():
+    m = in_play()
+    c = on_the_ball(m, 18, 0.0, 0.0)
+    c.vx = 7.0
+    tackler(m, 7, -0.3, 2.3, slide=True)
+    m.step()
+    assert m.owner == 18 and not m.drain_events() and m.moves[7][0] == "slide"
+    run(m, 0.6)
+    assert 7 in m.down and 7 in m.recovering
+
+
+def test_a_kick_at_nothing_at_speed_ends_on_the_ground():
+    m = in_play()
+    for vx, down in ((2.0, False), (6.5, True)):
+        p = m.player(7)
+        p.x, p.y, p.vx, p.vy = 10.0, 0.0, vx, 0.0
+        m.moves.clear(), m.down.clear(), m.recovering.clear()
+        m.command(7, AirKick())
+        m.step()
+        assert m.moves[7][0] == "air_kick" and m.commands[7] == Hold()
+        run(m, 0.6)
+        assert 7 not in m.moves and (7 in m.down) == down
+
+
+def test_a_tackle_ends_the_same_whichever_team_makes_it():
+    outcomes = []
+    for carrier, taker in ((18, 7), (7, 18)):
+        m = in_play()
+        c = on_the_ball(m, carrier, 0.0, 0.0)
+        c.vx = 6.0
+        tackler(m, taker, 0.88, 0.5)
+        m.step()
+        snapshot = {p["id"]: p for p in m.snapshot()["players"]}
+        outcomes.append((kinds(m.drain_events()), snapshot[taker].get("move"), m.owner == carrier))
+    assert outcomes[0] == outcomes[1]
+
+
+# -- restarts and goalkeepers' handling ------------------------------------------------------
+
+
+def take_free_kick(m, taker):
+    """A free kick for the home team at the centre, taken by `taker` with a short, slow kick."""
+    m._restart("free_kick", 0, 0.0, 0.0)
+    p = m.player(taker)
+    p.x, p.y = -0.4, 0.0
+    m.command(taker, KickTo(5.0, 0.0, 3.0))
+    while m.phase == "free_kick":
+        m.step()
+    m.drain_events()
+
+
+def test_the_taker_touching_the_ball_again_first_gives_an_indirect_free_kick():
+    m = in_play()
+    take_free_kick(m, 10)
+    m.command(10, MoveTo(4.0, 0.0))
+    run(m, 3.0)
+    assert kinds(m.drain_events())[:2] == ["second_touch", "free_kick"]
+    assert m.phase == "free_kick" and m.restart_team == 1 and m.restart_indirect
+
+
+def test_the_taker_may_play_the_ball_again_once_another_player_has():
+    m = in_play()
+    take_free_kick(m, 10)
+    mate = m.player(9)
+    mate.x, mate.y = 3.0, 0.0  # in the ball's path: it plays it first
+    m.command(10, MoveTo(4.0, 0.0))
+    run(m, 3.0)
+    assert "second_touch" not in kinds(m.drain_events())
+
+
+@pytest.mark.parametrize(
+    ("direct", "end", "goal", "restart"),
+    [
+        (("throw_in", 0), 1, False, "goal_kick"),  # a throw-in straight into their goal
+        (("throw_in", 0), -1, False, "corner"),  # and into its own
+        (("free_kick", 0), -1, False, "corner"),  # an own goal straight from a free kick
+        (("corner", 0), -1, False, "corner"),
+        (("free_kick", 0), 1, True, "kickoff"),  # a direct free kick into their goal counts
+        (("kickoff", 0), 1, True, "kickoff"),
+        (None, -1, True, "kickoff"),  # an own goal from open play counts
+    ],
+)
+def test_a_goal_straight_from_a_restart_counts_only_where_the_laws_allow(direct, end, goal, restart):
+    m = in_play()
+    m.direct, m.last_touch = direct, 0
+    m.ball.place(end * 52.4, 0.0)
+    m.ball.vx = end * 5.0
+    run(m, 0.2)  # over the line
+    assert (sum(m.score) == 1) == goal and m.phase == restart
+
+
+def keeper_with_ball_coming(m, distance, passed):
+    keeper = m.player(1)
+    keeper.x, keeper.y = -50.0, 0.0
+    m.passed = passed
+    m.ball.place(-50.0 + distance, 0.0)
+    return keeper
+
+
+def test_a_goalkeeper_handles_a_ball_in_its_area_but_not_a_teammates_kick_to_it():
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=None)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "catch" and "held" in m.snapshot()["ball"]
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=0)  # its own team's pass: only at its feet
+    m.step()
+    assert m.owner is None
+    keeper_with_ball_coming(m, 0.5, passed=0)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "control" and "held" not in m.snapshot()["ball"]
+
+
+def test_a_goalkeeper_holding_the_ball_more_than_eight_seconds_concedes_a_corner():
+    m = in_play()
+    keeper = keeper_with_ball_coming(m, 1.0, passed=None)
+    keeper.y = m.ball.y = 3.0  # on the left of its goal, as it faces the pitch
+    run(m, 7.9)
+    assert m.phase == "play" and m.snapshot()["ball"]["held"] == pytest.approx(7.9, abs=0.1)
+    run(m, 0.3)
+    assert kinds(m.drain_events())[-2:] == ["held", "corner"]
+    assert m.phase == "corner" and m.restart_team == 1 and (m.ball.x, m.ball.y) == (-52.5, 34.0)
+
+
+def test_a_goalkeeper_that_took_a_back_pass_with_its_feet_still_may_not_handle_it():
+    m = in_play()
+    keeper = keeper_with_ball_coming(m, 0.5, passed=0)
+    m.step()
+    assert m.owner == 1 and touch(m, 1) == "control"
+    assert not m._handles(keeper)  # until another player touches the ball
+
+
+def test_the_referees_count_stops_when_the_half_ends_on_a_held_ball():
+    m = in_play()
+    keeper_with_ball_coming(m, 1.0, passed=None)
+    m.elapsed = m.half_length - 0.05
+    run(m, 0.2)
+    assert m.phase == "half_time" and "held" not in m.snapshot()["ball"]
+
+
+# -- advantage, fouls off the ball, handball and added time ------------------------------------
+
+
+def test_play_goes_on_when_the_fouled_team_keeps_the_ball_in_their_attacking_half():
+    m = in_play()
+    on_the_ball(m, 10, 10.0, 0.0)
+    m.player(9).x, m.player(9).y = 11.0, 0.5  # a teammate can play on while 10 falls
+    challenge(m, 15, 9.3, 0.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "advantage"] and m.phase == "play"
+    m.command(15, Hold())  # it stops chasing
+    m.player(15).vx = 0.0
+    run(m, ADVANTAGE + 0.1)
+    assert m.phase == "play" and m.advantage is None  # it came
+
+
+def test_play_comes_back_for_the_free_kick_if_the_opponents_win_the_ball():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)  # within 27 m of goal: stopping it earns a yellow
+    m.player(9).x, m.player(9).y = 31.0, 0.5
+    challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
+    m.step()
+    m.drain_events()
+    m.player(10).x = 0.0  # gone, and an opponent at the ball
+    m.player(9).x = 0.0
+    m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+
+
+def test_advantage_is_recalled_when_the_loose_ball_goes_out_for_the_opponents():
+    m = in_play()
+    r = m.player(9)
+    r.x, r.y, r.heading = 30.0, 32.5, 0.0
+    challenge(m, 17, 29.3, 32.5, 5.0, 0.0)
+    m.player(10).x, m.player(10).y = 31.6, 33.7  # nearest, but cannot reach it before it goes out
+    m.ball.place(30.0, pitch.HALF_WIDTH + 0.1)
+    m.ball.vy = 10.0
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "advantage", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x, m.ball.y) == ("free_kick", 0, 30.0, 32.5)
+
+
+@pytest.mark.parametrize("kind", ["goal_kick", "corner"])
+def test_advantage_is_recalled_for_opposition_goal_line_restarts_only_within_its_window(kind):
+    m = in_play()
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t + ADVANTAGE)
+    m._restart(kind, 1, 50.0, 0.0)
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t)
+    m._restart(kind, 1, 50.0, 0.0)
+    assert (m.phase, m.restart_team) == (kind, 1)
+
+
+def test_running_into_an_opponent_off_the_ball_from_behind_is_a_foul():
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(8.0, 5.0)  # contested: within 5 m
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "free_kick"] and m.down[9][0] == "front"
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    challenge(m, 17, 5.7, 5.0, -5.0, 0.0)  # from the front: jostling, not a foul
+    m.step()
+    assert m.drain_events() == []
+
+
+@pytest.mark.parametrize("carrier", [True, False])
+def test_touching_a_player_from_behind_at_its_own_pace_is_not_running_into_it(carrier):
+    m = no_advantage(in_play())
+    m.owner = None
+    if carrier:
+        r = on_the_ball(m, 9, 5.0, 5.0)
+    else:
+        r = m.player(9)
+        r.x, r.y, r.heading = 5.0, 5.0, 0.0
+        m.ball.place(8.0, 5.0)
+    r.vx = 7.0
+    m.command(9, MoveTo(60.0, 5.0))
+    challenge(m, 17, 4.3, 5.0, 7.5, 0.0)  # tracking its run, closing at 0.5 m/s
+    m.step()
+    assert m.drain_events() == []
+
+
+def test_a_carrier_backing_into_an_opponent_standing_still_is_not_fouled_by_it():
+    m = no_advantage(in_play())
+    c = on_the_ball(m, 10, 45.0, 0.0)
+    c.vx = -3.0
+    challenge(m, 15, 44.25, 0.0, 0.0, 0.0)
+    m.step()
+    assert m.drain_events() == []
+
+
+@pytest.mark.parametrize(("side", "last", "handball"), [(0.55, None, True), (0.1, None, False), (0.55, (9.0, 0.0), False)])
+def test_a_ball_on_an_arm_away_from_the_body_is_handball(side, last, handball):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, side, 1.3
+    if last:  # played from just beside it
+        m.touches.append({"player": 7, "kind": "kick", "t": 0.0, "x": last[0], "y": last[1], "z": 1.3})
+    m.step()
+    events = kinds(m.drain_events())
+    if handball:
+        assert events == ["handball", "free_kick"] and m.restart_team == 0
+    else:
+        assert events == [] and touch(m, 15) == "deflect"
+
+
+def test_running_into_an_opponent_off_the_ball_away_from_the_ball_is_not_judged():
+    m = no_advantage(in_play())
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(30.0, 5.0)
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)
+    m.step()
+    assert m.drain_events() == []
+
+
+def test_time_lost_in_a_half_is_added_on_and_the_clock_runs_on():
+    m = in_play()
+    m._event("goal", 0)
+    m._event("substitution", 1)
+    m.drain_events()
+    assert m.lost == 1.5
+    m.elapsed = m.half_length - STEP / 2
+    m.step()
+    assert [(e["kind"], e.get("minutes")) for e in m.drain_events()] == [("added_time", 2)]
+    m.elapsed = m.half_length * (1 + 1 / 45)
+    assert m.clock() == "45+01:00"
+    run(m, m.half_length / 45 + 0.1)
+    assert m.phase == "half_time"
+
+
+def test_play_comes_back_even_when_the_opponent_kicks_the_ball_at_once():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)
+    m.player(9).x, m.player(9).y = 31.0, 0.5
+    challenge(m, 15, 29.3, 0.0, 5.0, 0.0)
+    m.step()
+    m.drain_events()
+    m.player(10).x = 0.0
+    m.player(9).x = 0.0
+    m.player(16).x, m.player(16).y = m.ball.x, m.ball.y
+    m.command(16, KickTo(-20.0, 0.0, 20.0))  # it would clear the ball in the same step
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+
+
+def test_a_controlled_tackle_recalls_advantage_before_the_ball_reaches_the_tackler():
+    m = in_play()
+    on_the_ball(m, 10, 30.0, 0.0)
+    tackler(m, 15, 31.6, 0.0, vx=-1.0)
+    m.advantage = (0, 17, 10, 30.0, 0.0, True, ADVANTAGE)
+    m.t = ADVANTAGE - 3 * STEP  # the ball would reach the tackler only after expiry
+    m.step()
+    assert kinds(m.drain_events()) == ["yellow", "free_kick"]
+    assert (m.phase, m.restart_team, m.ball.x) == ("free_kick", 0, 30.0)
+    assert m.yellows == {17: 1} and m.advantage is None
+
+
+def test_an_offside_player_hit_by_a_chest_high_ball_is_offside():
+    m = in_play()
+    p = m.player(10)
+    p.x, p.y, p.heading = 30.0, 0.0, 0.0
+    m.offside = {10}
+    m.ball.x, m.ball.y, m.ball.z = 30.0, 0.1, 1.3
+    m.step()
+    assert kinds(m.drain_events()) == ["offside", "free_kick"]
+
+
+def test_a_held_back_card_that_leaves_a_team_short_ends_the_match():
+    for stop in ("restart", "half", "kickoff"):
+        m = in_play()
+        for q in [q for q in m.players if q.team == 1][7:]:
+            m.players.remove(q)  # seven left
+        offender = next(q for q in m.players if q.team == 1 and q.position != "GK")
+        m.yellows[offender.id], m.cards_due = 1, [offender.id]
+        if stop == "restart":
+            m._restart("throw_in", 0, 0.0, 34.0)
+        elif stop == "half":
+            m._end_half()
+        else:
+            m._kickoff(0)
+        assert m.phase == "full_time" and kinds(m.drain_events())[-1] == "full_time"
+
+
+def test_a_ball_already_over_the_goal_line_is_not_handball():
+    m = in_play()
+    keeper = m.player(12)
+    keeper.x = -40.0  # away from the goal
+    p = m.player(15)
+    p.x, p.y, p.heading = 52.9, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 52.4, 0.55, 1.3, 30.0
+    m.step()
+    assert m.score == [1, 0] and "handball" not in kinds(m.drain_events())
+
+
+def test_handball_on_a_ball_going_over_the_bar_is_not_a_red_card():
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 47.8, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 47.8, 0.55, 1.3
+    m.ball.vx, m.ball.vz = 10.0, 10.0
+    m.step()
+    assert kinds(m.drain_events()) == ["handball", "yellow", "penalty"]
+
+
+def test_time_lost_during_added_time_is_added_on_too():
+    m = in_play()
+    m.lost = 0.5
+    m.elapsed = m.half_length - STEP / 2
+    m.step()
+    assert m.added == 1
+    m._event("goal", 0)  # in added time
+    assert m._half_end() == pytest.approx(m.half_length * (1 + 2 / 45))
+
+
+@pytest.mark.parametrize(("x", "vx", "expected"), [
+    (10.0, 1.0, ["handball", "free_kick"]),  # a slow ball far out: it would never reach the goal
+    (50.0, 20.0, ["handball", "red", "penalty"]),  # stopping a ball on its way in
+])
+def test_handball_is_a_red_card_only_when_the_ball_would_go_in(x, vx, expected):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = x, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = x - vx * STEP / 2, 0.55, 1.3, vx  # level with it after the step
+    m.step()
+    assert kinds(m.drain_events()) == expected
+
+
+@pytest.mark.parametrize("restart", ["indirect", "throw_in"])
+def test_handball_does_not_deny_a_goal_that_cannot_count_directly(restart):
+    m = in_play()
+    p = m.player(15)
+    p.x, p.y, p.heading = 50.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 50.0 - 20 * STEP / 2, 0.55, 1.3, 20.0
+    if restart == "indirect":
+        m.indirect = 10
+    else:
+        m.direct = ("throw_in", 0)
+    m.step()
+    assert kinds(m.drain_events()) == ["handball", "yellow", "penalty"]
+    assert 15 in on_pitch(m)
+
+
+def test_the_nearest_player_meets_a_chest_high_ball_whichever_team_it_is_on():
+    for near, far in ((16, 7), (7, 16)):
+        m = in_play()
+        m.ball.x, m.ball.y, m.ball.z = 10.0, 0.0, 1.3
+        a, b = m.player(near), m.player(far)
+        a.x, a.y, a.heading = 10.3, 0.0, math.pi  # facing it: the body
+        b.x, b.y, b.heading = 10.0, -0.55, 0.0  # an arm's length to the side
+        m.step()
+        assert m.drain_events() == [] and touch(m, near) == "deflect"
+
+
+def test_a_booked_players_reckless_slide_sends_it_off_with_no_advantage():
+    m = in_play()
+    on_the_ball(m, 10, 10.0, 0.0)
+    m.yellows[15] = 1
+    tackler(m, 15, 8.2, 0.3, slide=True)
+    m.step()
+    assert kinds(m.drain_events()) == ["foul", "yellow", "red", "free_kick"]
+    assert 15 not in on_pitch(m)
+
+
+def test_a_match_ended_by_coming_back_from_advantage_stays_ended():
+    m = in_play()
+    for q in [q for q in m.players if q.team == 1][7:]:
+        m.players.remove(q)  # seven left
+    offender = next(q for q in m.players if q.team == 1 and q.position != "GK")
+    m.yellows[offender.id] = 1
+    m.advantage = (0, offender.id, 10, 30.0, 0.0, True, m.t + ADVANTAGE)
+    taker = next(q for q in m.players if q.team == 1 and q is not offender and q.position != "GK")
+    taker.x, taker.y = m.ball.x, m.ball.y
+    m.command(taker.id, KickTo(-20.0, 0.0, 20.0))
+    m.step()
+    assert m.phase == "full_time"
+
+
+def test_a_ball_that_would_hit_the_post_is_not_going_in():
+    m = in_play()
+    m.ball.x, m.ball.y, m.ball.z, m.ball.vx = 47.0, 3.64, 1.3, 30.0
+    assert not m._goal_bound(52.5)
+
+
+def test_a_second_reckless_challenge_during_play_on_sends_the_player_off():
+    m = in_play()
+    m.cards_due = [15]  # booked for a reckless challenge while play went on
+    m._plays_on = lambda team: True  # the fouled team could play on again
+    on_the_ball(m, 10, 10.0, 0.0)
+    tackler(m, 15, 8.2, 0.3, slide=True)
+    m.step()
+    assert "red" in kinds(m.drain_events()) and 15 not in on_pitch(m)
+
+
+def test_an_offside_teammate_cannot_play_on_from_a_foul():
+    m = in_play()
+    m.ball.place(20.0, 0.0)
+    mate, opponent = m.player(9), m.player(16)
+    mate.x, mate.y = 20.5, 0.0
+    opponent.x, opponent.y = 21.5, 0.0
+    assert m._plays_on(0)
+    m.offside = {9}
+    assert not m._plays_on(0)
+
+
+def test_the_offender_can_still_foul_another_player_during_an_advantage():
+    m = no_advantage(in_play())
+    m.advantage = (0, 17, 10, 30.0, 0.0, False, m.t + ADVANTAGE)  # 17 fouled 10
+    r = m.player(9)
+    r.x, r.y, r.heading = 5.0, 5.0, 0.0
+    m.ball.place(8.0, 5.0)
+    challenge(m, 17, 4.3, 5.0, 5.0, 0.0)  # now into 9's back
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["foul", "free_kick"]
+
+
+def test_a_players_own_rebound_bounces_off_it_and_a_restart_takers_is_a_second_touch():
+    m = in_play()
+    p = m.player(7)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, 0.55, 1.3  # on its arm
+    m.touches.append({"player": 7, "kind": "kick", "t": 0.0, "x": 30.0, "y": 0.0, "z": 0.11})  # back off the frame
+    m.step()
+    assert m.drain_events() == [] and touch(m, 7) == "deflect"
+    m = in_play()
+    p = m.player(7)
+    p.x, p.y, p.heading = 10.0, 0.0, 0.0
+    m.ball.x, m.ball.y, m.ball.z = 10.0, 0.1, 1.3
+    m.restart_kicker = 7
+    m.step()
+    assert kinds(m.drain_events())[:2] == ["second_touch", "free_kick"]

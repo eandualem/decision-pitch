@@ -80,7 +80,15 @@ a test or from the command line without a browser.
   is put right at once. Anyone still out of place after 10 s at a kick-off,
   or 5 s at another restart, is moved there, so nothing can stall the match.
   Moving players straight to their place, as the engine first did, showed as
-  jumps of up to 40 m on screen.
+  jumps of up to 40 m on screen. A goal kick does not wait for every
+  opponent to leave the penalty area: it is taken once none is within
+  9.15 m of the ball, and one further away that is still leaving may stay,
+  as the laws allow an opponent that had no time to leave. Waiting for
+  them all kept the goalkeeper on the ball for about 1.9 s after it got
+  there; over 32 matches with models answering as Laya does, a goal kick
+  now takes 2.9 s from being given to being taken, against 3.8 s (bots
+  only: 2.7 s, against 4.1 s). Taking it at once, with an opponent beside
+  the ball, would kick it into a player who can still challenge for it.
 - **Built-in bot.** Simple rules (keep shape, chase the ball, dribble, pass
   to an open teammate, shoot in range) that play any position, so a full
   match runs with no model at all. A loose ball is chased by the one player
@@ -110,8 +118,25 @@ a test or from the command line without a browser.
   Laya does, shots rose from 7.9 to 12.8 a match and corners from 0.25 to
   0.72; over 24 bot matches, possession spells that reached shooting range
   rose from 20% to 32%. Following the ball more only while in possession gave
-  half the gain. A goalkeeper keeps to its goal line, and when a loose ball
-  is heading into its goal it moves across to the ball's line; a model in
+  half the gain. A team takes up these attacking places while it has the
+  ball, while it takes a restart, and while the ball is loose after one of
+  its players last played it, as during its own pass. Before, every pass
+  sent the team back to its defending places until the receiver had the
+  ball, and a model answering `hold`, its most common answer, kept its
+  defending place even while its team had the ball. Over 32 bot matches,
+  goals rose from 0.94 to 1.34 a match and shots from 17.0 to 17.8; over 32
+  matches with models answering as Laya does, goals rose from 1.28 to 1.56,
+  with shots the same (12.6). Offsides rose from 0.3 to 0.8 and from 0.8 to
+  1.8, as forwards stay further up while a pass is on its way. The ball's
+  share of play in the middle third (46% with bots, 40% with models) and
+  entries into the penalty area (16 and 18 a match) stayed about the same,
+  and so did they with each other shape tried, over 24 bot matches: wider
+  with the ball and narrower without it (team width 41 m and 34 m, against
+  37 m both) cut entries from 16.4 to 13.9 and shots from 17.3 to 12.8;
+  forwards waiting on the opponents' offside line, and the bot crossing from
+  wide in the final third, moved entries by less than one a match and the
+  middle-third share by less than two points. A goalkeeper keeps to its goal
+  line, and when a loose ball is heading into its goal it moves across to the ball's line; a model in
   goal that holds or supports does the same. Over the same 16 matches, this
   cut the share of shots scored from 35% to 16% (goals from 2.8 to 1.1 a
   match), and from 41% to 9% (11 to 3.6 goals) with every outfield player
@@ -203,7 +228,7 @@ story the game tells.
 
 ### The action set and the state text
 
-A model chooses one of fifteen actions, each described to it in a few words,
+A model chooses one of seventeen actions, each described to it in a few words,
 and is asked only the ones that apply: one set on the ball, one off it, and
 one at a restart. Each action that gains something has a downside the engine
 plays out, the same for both teams.
@@ -219,8 +244,10 @@ plays out, the same for both teams.
 | `cross` | on the ball wide in the final third, and the taker there | lifts the ball into the penalty area, to the teammate there with the most room or the penalty mark | a goalkeeper reaches higher, and there are no headers yet |
 | `shoot` | on the ball within 30 m of goal, and the taker of a penalty or a free kick in range | shoots inside the post further from the goalkeeper; from 16 m or more with no opponent within 2.5 m, or from 24 m or more, plays the ball as the built-in bot does (dribbles closer, passes when pressed out of range) | |
 | `clear` | on the ball, and the taker | kicks the ball long upfield | |
-| `press` | off the ball | runs at the ball at full speed to win it or collect it, coming round a carrier rather than into its back; supports a teammate who has it | |
-| `tackle` | off the ball | runs straight at the ball to win it now, from any side | running into the carrier from behind, or without reaching the ball, is a foul, with any card it earns |
+| `press` | off the ball, unless a teammate has it | runs at the ball at full speed to win it or collect it, coming round a carrier rather than into its back, and goes in with a standing tackle once it is in reach from the front or side (section 8) | a tackle can miss |
+| `tackle` | off the ball, while an opponent has it | runs straight at the ball and goes in with a standing tackle as soon as the ball is in reach, from any side (section 8) | a miss leaves it stumbling; from behind, or missing the ball and taking the player, it is a foul, with any card it earns |
+| `slide_tackle` | off the ball, an opponent on the ball within 15 m | runs at the ball and slides in from up to 2.5 m away (section 8) | a miss leaves it on the ground for about 1.5 s; from behind it is a foul and a yellow card |
+| `jockey` | off the ball, an opponent on the ball within 15 m | backs off facing the carrier, 2.5 m from it between the ball and its own goal, and takes a loose touch it reaches first | it gives ground and does not go in for the ball |
 | `hold` | off the ball, and at a restart | keeps its place in the team's shape (a goalkeeper guards its goal) | |
 | `support` | off the ball, and at a restart | moves into space ahead to offer a pass | |
 | `mark` | off the ball, and at a restart | stays goal-side of the nearest opponent | |
@@ -245,27 +272,52 @@ model often repeats the action its state says it is doing (Laya repeated its
 previous answer in 98% of a recorded match). So a repeated answer still plays
 sensible football, the same rules for both teams:
 
-- **On the ball**, `press`, `tackle`, `hold`, `support`, `mark` and
-  `run_behind` keep playing it as the built-in bot does (dribble, pass when pressed, shoot in range), instead
-  of standing on it. So does `shoot` out of range, instead of dribbling into
-  a tackle, and `shoot` from 16-24 m with no opponent within 2.5 m, which
-  carries the ball closer before shooting, as the bot does. Laya answers
-  `shoot` almost every time; with every outfielder answering it, the ball
-  changed hands by a tackle about 590 times a bot match of two 180 s halves,
-  and now about 16 (bots alone: 10), with passes made under pressure again.
+- **On the ball**, an answer for off the ball (`press`, `tackle`,
+  `slide_tackle`, `jockey`, `hold`, `support`, `mark` and `run_behind`) keeps
+  playing the ball as the built-in bot does (dribble, pass when pressed, shoot
+  in range) until the next answer, instead of standing on it. Such an answer
+  is not the model's mistake: the player was off the ball when it was asked
+  and came to have it, often through the loose-ball rule below. Carried out
+  as given, over 16 headless matches with late answers as Laya gives them,
+  the ball changed hands by a tackle 108 times a match instead of 43, shots
+  fell from 12.6 to 6.0 and fouls rose from 2.0 to 9.2.
+- **On the ball**, `shoot` out of range plays the ball as the built-in bot
+  does (dribble, pass when pressed), instead of dribbling into a tackle, and
+  `shoot` from 16-24 m with no opponent within 2.5 m carries the ball closer
+  before shooting, as the bot does. Laya answers `shoot` almost every time;
+  with every outfielder answering it, the ball changed hands by a tackle about
+  590 times a bot match of two 180 s halves, and now about 16 (bots alone:
+  10), with passes made under pressure again.
 - **An action that needs a moment that has passed** falls back to the
   nearest one that applies: `take_on` with no opponent ahead within 10 m
   dribbles; `shield` with no opponent within 5 m plays as the bot does;
   `through_ball` with no teammate ahead passes; `cross` from inside carries
   the ball towards the touchline and their goal line until it is wide.
-- **Off the ball**, `dribble`, `take_on`, `shield`, `pass`, `through_ball`,
-  `cross`, `shoot` and `clear` play as the built-in bot does: the one player
-  who can reach the ball first goes for it and the others keep their places,
-  instead of every one of them running at it. `sprint` runs at the ball at
-  full speed, as `press` does, so a sprinting dribbler runs on to its own
-  knock, and chases the ball if an opponent takes it. A player keeping its
-  place (`hold`, `support`, `mark` or `run_behind`) still goes for a loose
-  ball it can reach first, as a player keeping its shape collects a ball
+- **A late answer is carried out as given**, so the screen shows what each
+  model decided, mistakes included. A model answers about the moment it was
+  asked; by the time the answer arrives the player may have lost the ball,
+  or won it:
+  - A kick (`pass`, `through_ball`, `cross`, `shoot`, `clear`) while another
+    player has the ball is a kick at nothing where the player stands. The
+    swing takes 0.6 s, in which it cannot play the ball; then it holds its
+    place until its next answer. A player that swings at 6 m/s or more loses
+    its footing and goes down for 1.5 s more. With the ball loose, the player
+    runs at it to kick it, as a kick command does.
+  - `dribble`, `take_on` or `shield` while another player has the ball is a
+    run to where it would have dribbled, without the ball; with the ball
+    loose, it runs at the ball. `sprint` runs at the ball at full speed, as
+    `press` does, so a sprinting dribbler runs on to its own knock, and
+    chases the ball if an opponent takes it.
+  - An answer to a question asked while the player had the ball, arriving
+    after the player has itself passed, shot or cleared it, was overtaken by
+    its own kick, not by the match: the player holds its place. Without this,
+    nearly every kick would be followed by a kick at nothing, because the next
+    question is asked as soon as a kick is decided, before it is made.
+  - The `decision` message tells the page when an answer is carried out
+    without the ball or was overtaken, and the overlay shows it.
+- **Off the ball**, a player keeping its place (`hold`, `support`, `mark` or
+  `run_behind`) still goes for a loose ball it can reach first, as a player
+  keeping its shape collects a ball
   that comes to it; pressing an opponent on the ball stays a choice. Asked
   from these sets in a keyless match of two 90 s halves, Laya answered `hold`
   64% of 1,848 times, `run_behind` 23% (nearly every time it was offered),
@@ -471,8 +523,9 @@ and overlay ES modules, with one entry point owning the WebSocket and render
 loop. Each module disposes its scene objects, textures and listeners when a new
 hello resets the match. Match coordinates map to `(x, z, -y)` in the scene.
 
-The stadium uses striped grass, regulation pitch markings, netted goals,
-stands and floodlights built from shared geometry and materials. Shirt numbers
+The stadium uses grass with mowing stripes, regulation pitch markings, netted
+goals, stands on all four sides and floodlights built from shared geometry and
+materials (see "Real grass and the stands behind the goals" below). Shirt numbers
 are drawn into canvas textures using the system font. Keepers use the supplied
 keeper colour. Players and managers are human figures made in Blender, with
 animation clips, and the ball is drawn at its real size (see "Human figures
@@ -490,6 +543,16 @@ The page accepts the protocol's planned events without inventing match state.
 This keeps the engine authoritative and the page usable offline, while shared
 geometry, capped pixel density and one shadow-casting light limit GPU work for
 smooth laptop recording. It replaces the scaffold's cylinders and fixed camera.
+
+### Full-time result and another match
+
+At full time, the existing lower-third banner stays visible with “Full-time”,
+the team names and final score, and one “Play again” button. It uses the same
+dark panel, lime accent and typography as the scorebar and decision toggle.
+The final snapshot also shows it, so a delayed full-time event cannot leave
+an apparently frozen match without its result. Old event banners cannot
+replace it. “Play again” reloads the page, which closes the old connection
+and starts a fresh match with the server's same models and settings.
 
 ### Managers on the touchline, smooth motion and contact
 
@@ -636,7 +699,7 @@ own left: Blender's +X, and the page's local +x before the figure turns. The
 same holds for clip names: `strafe_L` steps and `keeper_dive_L` dives to the
 figure's left.
 
-**Clips.** All 66 clips play on that skeleton, keyed 60 times a second (at 30, a
+**Clips.** All 76 clips play on that skeleton, keyed 60 times a second (at 30, a
 fast loop had one key between a touch and the landing, and the page's linear
 interpolation cut the foot's arc into the grass by up to 13 mm), with the
 `root` bone fixed: the engine moves the player, the clip only moves the body
@@ -701,8 +764,8 @@ the tracks that hold a bone at rest and the keys interpolating their
 neighbours reproduces (within 0.05 degrees or 0.3 mm), and stores rotations as
 normalised 16-bit integers, which glTF allows for animation and three.js
 reads; no bone moves more than 1.2 mm for it. With every clip above,
-`figure.glb` is 1.66 MB (it was 1.6 MB with the first 24 clips, and would be
-over 2 MB without the compaction).
+`figure.glb` is 1.82 MB (it was 1.6 MB with the first 24 clips and 1.66 MB with
+66, and would be over 2 MB without the compaction).
 
 **On the page.** `GLTFLoader`, with `SkeletonUtils` for cloning skinned meshes
 and the `BufferGeometryUtils` it imports, is vendored from three.js 0.186.0
@@ -721,7 +784,7 @@ individual movement" below says how the page chooses among the loops, sets
 and moves). The touches from the contact moments above play their clip so
 that its moment of contact lands on the touch: a `kick` plays the shot, pass,
 lofted pass or cross by the ball's flight, `control` and `throw` play theirs,
-`tackle` the slide or the standing block, `deflect` plays `control`, and a
+`tackle` and `poke` the standing block, `deflect` plays `control`, and a
 `knock` plays no clip. The engine keeps a player moving while it plays the ball, so a
 player above a walking pace plays only the clip's upper body and kicking leg
 over its running stride; the whole clip plays only near standstill, except
@@ -880,8 +943,8 @@ the ball's flight after the touch: lifted (0.3 rad or more, from how high the
 ball has risen against gravity) from a wide attacking place in towards the
 middle, the cross; lifted elsewhere, the lofted pass; along the ground, the
 shot when it leaves faster than 18 m/s. A model's decision of the last two
-seconds says instead (shoot, cross, through ball, clear). A tackle at 4.5 m/s
-or more is the slide, slower the standing block. Over a run, a kick's kicking
+seconds says instead (shoot, cross, through ball, clear). A tackle is the
+standing block; a slide comes with the player's `move` ("Mishaps" below). Over a run, a kick's kicking
 leg follows the clip only from 0.3 s before contact to 0.35 s after, so its
 grounded wind-up and landing do not skate. A sprinter's knock plays no clip:
 its stride is timed (within -25% to +30% of its pace) so the boot's touch
@@ -913,9 +976,9 @@ planted foot slips in each stance, which neighbours step in time, and each
 player's cadence, stride, lean and arm swing; and `tests/web/motion-record.mjs`
 films the evidence in `docs/media/motion/`, whose README gives the numbers.
 
-**Known limits.** A goalkeeper's dive plays its whole clip over the engine's
-dive, so its feet slide as it leaves the grass, and over a run the support
-foot under a pass or a lofted pass still slips in about half its stances.
+**Known limits.** The standing foot under a kick still slips in a share of
+its stances; "Mishaps" below gives the numbers after the dive and the lofted
+pass were improved.
 
 **Why.** Players read as people when they move as people do: facing the play
 while moving across it, changing pace and direction with a plant and a push,
@@ -937,6 +1000,185 @@ motion and its turn cannot match the engine's, and no fixed playback matches
 a stop at a different deceleration. A cut on any fast turn of the body at a
 run: cuts took 13% of all stances live, half of them sliding.
 
+### Mishaps: kicks at nothing, stumbles, falls and slides
+
+**Choice.** What a player does without the ball when a decision has gone
+wrong is shown as the engine carries it out: a kick at nothing, a stumble
+after a missed tackle, a slide, and going down and getting up again. The
+snapshot says which (a player's `move` and `down`, docs/protocol.md); the
+figure has clips made for each with the same rig and scripts as the others,
+and the page plays them from those fields alone.
+
+**Clips.** Ten more, 76 in all:
+
+- `air_kick`: a full swing through where the ball should be (`contact`),
+  much higher than a shot's, the body leaning back, a hop on the standing
+  foot and the arms out before it steadies.
+- `stumble`: a toe caught at a run, the body pitching over a short step with
+  the arms thrown out, two quick steps and on. Its feet are planted for a
+  root running at 5 m/s (`speeds`), so the page plays it at the player's pace.
+  `tackle_missed`: a standing lunge that finds nothing, the left foot hopping
+  through to catch the weight, then back over its feet.
+- `fall_front` (tripped: knees and hands, then the chest, the shins swinging
+  up and down), `fall_back` (the feet going from under it, onto its backside
+  and back) and `fall_side_L`, `fall_side_R` (shouldered off: a step across,
+  down on the hip and shoulder, rolling onto the back). The first ends lying
+  face down, the others on the back; a side fall lies across the way the
+  player ran, a quarter turn (`turn`) from `fall_back`'s end.
+- `get_up_front` (pushing up, onto hands and knees, a foot through and up)
+  and `get_up_back` (sitting up, feet in, onto them and up), from those lying
+  poses to standing over the root.
+- `tackle_L`: the slide on the left boot, `tackle` mirrored. Both slides say
+  (`down`) from when the slider is on the grass to when it begins to get up.
+
+Lying, the legs lie straight and the body twists about its own length to
+roll over, so the scripts gained two pose channels: an ankle placed at a
+point (`f*ax`, `f*ay`, `f*az`, by weight `f*at`) and a twist of the hips
+(`htwist`). Both are zero in every earlier clip, which rebuild byte for byte.
+Each new clip was checked in Blender for parts below the grass: lying, none;
+a knee or a hand dips up to 7 cm into the grass for a frame or two as it lands
+(11 cm for the arm a side fall lands on).
+
+**On the page.**
+
+- `move: "air_kick"` plays `air_kick` from the first snapshot that shows it,
+  0.15 s into the clip, so the swing goes through about 0.3 s later, within
+  the 0.6 s the engine gives it. Over a run only its upper body and kicking
+  leg play, as for a kick; slowing, all of it.
+- `move: "stumble"` is the miss of a standing tackle: at 2.5 m/s or more the
+  `stumble`, its feet held on the grass, more slowly `tackle_missed`.
+- `move: "slide"` plays the slide on the boot nearer the ball from going in.
+  The engine judges a slide as it goes in, so its `tackle` or `poke` touch
+  plays no clip of its own. A `tackle` or `poke` touch without a slide is the
+  standing block.
+- `down` plays the fall for its `way`, a side fall away from the nearest
+  opponent, holds the lying pose and plays the get-up so that the figure is
+  on its feet at `until`. With less time than the fall and the get-up take
+  (a fouled player is down 1.2 s, against 2 s for the clips) both play
+  faster, up to twice. A touch at `until` is eligible to animate: recovery
+  uses the engine timestamp, before the visual contact offset is applied.
+  A new movement that arrives during the last get-up frame stays unconsumed
+  until it can start on the following frame.
+  A slide that ends down holds its own lying pose and gets up from it: in
+  the engine's 1.5 s from going in, at its own pace.
+  After a side fall the figure turns a quarter to get up from its back, which
+  matches the side fall's end exactly, and turns back to its heading on its
+  feet, at 3 rad/s, which the turn on the spot shows.
+- Down or sliding, a figure keeps the facing it went down with, and the
+  page's lean, hip turn and carriage give way to a clip that takes the whole
+  body, so a body lying on the grass lies as it was made.
+- A scripted scene shows each of these as the engine sends it, before or
+  without a match: `tests/web/motion_replay.py --mishaps`.
+
+**Planted feet: the dive and the kicks.** Measured with the motion probe on
+scripted scenes that repeat the moment (`--mishaps` for a goalkeeper diving
+to each side, `--kicks` for one player passing at 0 to 6 m/s along the ground
+and lofted, ahead, to the side and behind it), the page as on develop against
+this one, 150 s each:
+
+- A dive seen begun, the keeper already moving across, now starts at its
+  push-off (0.2 s into the clip), and the foot lock holds whichever sole is on
+  the grass until it leaves it (0.36 s) and again as it gets up (from 1.4 s).
+  Stances sliding: dive to the left 92.7% to 20%, to the right 98.1% to
+  18.2%; median slip 31 to 0.6 cm/s.
+- Turning into a lofted pass or a cross, the body pivots on its standing foot
+  while that is on the grass, instead of about the engine's position, which
+  dragged the planted foot round turns of up to 180 degrees, and comes back
+  over the engine's position over 0.3 s, the foot lock holding the feet.
+  Stances sliding: lofted pass 48.3% to 39.3%, cross 30.8% to 17.6%.
+- A plain pass is drawn as before: pivoting measured no better for it
+  (38.9% on develop, 40.6% pivoting), so it is left as it was.
+
+The page ran at 40 to 53 fps through these runs, with other work on the
+machine, so the counts are of 11 to 55 stances each.
+
+**Known limits.** Under a plain pass at a run the standing foot still slides
+in about 40% of its stances: the stride's standing foot is often in the air
+as the body turns into the kick, and the page learns where the ball goes only
+about 0.1 s ahead, too late to time the stride. First touches (`control`) slide
+in about half of theirs. A side fall's get-up plays across the player's
+heading and turns back afterwards. The slide is shown from the moment the
+engine judges it, so the ball can leave the carrier's feet before the
+slider's boot gets there.
+
+**Why.** A decision that has gone wrong should look like one: a swing at
+nothing, a stumble, a player on the grass. Lying and getting up poses shared
+between clips let the page hold a player down for as long as the engine
+keeps it there, and speeding the clips up rather than cutting them keeps a
+short fall a whole fall.
+
+**Rejected.** Get-ups for each side: the side falls roll onto the back, and
+turning the figure a quarter lets one get-up serve. Showing a slide's tackle
+at its touch: the touch comes as the slide goes in, so the slide would be
+rushed through in a tenth of a second. Holding the standing foot for every
+kick with the foot lock alone: a turn of 90 degrees carries a foot 0.27 m
+from the root nearly 0.4 m, past the lock's reach.
+
+### Real grass and the stands behind the goals
+
+**Choice.** The pitch and its surround are one grass surface drawn by a single
+material, built in the page from generated textures, with no photograph or
+third-party texture:
+
+- **Turf.** A tileable square metre of turf is generated once: tens of
+  thousands of short blades seen from above, each its own shade of green,
+  over darker thatch, in clumps of slightly different colour and height. Its
+  colour, the height of each blade and a normal map made from those heights
+  are sampled at two scales, with a low-frequency variation over tens of
+  metres, so no repeat shows from the broadcast camera.
+- **Mowing stripes.** Twenty bands across the pitch, as a mower cutting from
+  touchline to touchline leaves them: the blades in alternate bands lean
+  towards one touchline or the other. A band is lighter where the viewer
+  looks the way its blades lean and darker where it looks into them, so the
+  stripes are strongest from the main camera, fade as the camera looks along
+  them, and swap shade from the opposite side, as on a real pitch. The lean
+  also tilts the normal slightly, so the sun picks the bands out too.
+- **Light.** The grass is lit with a physically based material, rough and
+  non-metallic, so it takes a soft sheen at a grazing angle under the
+  floodlights without a plastic shine.
+- **Depth near the camera.** Within 10 m of the camera (the close-ups,
+  cutaways and managers' shots), the material traces each pixel's view ray
+  down through the blades' heights, in eight steps over a turf 3 cm deep, and
+  shades the first blade it meets (parallax occlusion). Blades in front hide
+  those behind, the tips lean with their band, and deeper in the turf is in
+  shade. The depth fades out from 4 m to 10 m, so the wide shot never pays
+  for it.
+- **Wear.** Goalmouths, penalty spots and the centre spot are lightly worn:
+  a patchy, drier and shorter turf.
+- **Painted lines.** The markings, including the technical areas, are kept
+  as one distance field: each texel holds its distance from the nearest
+  painted edge. The grass material paints them into the turf, slightly
+  mottled by the blades under the paint, so they read as paint on grass
+  rather than strips over it. Each pixel is painted by the share of its
+  footprint across the line that the line covers, so a distant line thins
+  and fades rather than breaking up. The distance field keeps the edges sharp
+  in a close-up at a fraction of the memory a painted texture would need.
+- **Stands.** The ends behind the goals have stands like the side stands,
+  with the same tiers and seats in the same instanced meshes, so they add no
+  draw call. The low wall in front of each stand stays.
+
+The textures are generated in the page as the first match is built and kept
+for the next one. The grass is one mesh, in place of the striped turf, the
+surround and the painted ribbons, so it saves two draw calls. Measured on an
+Apple M5 at 1600 by 900, it adds about 1 ms of GPU time per frame to the wide
+shot and 1.5 ms to a close-up at a pixel ratio of 1, and 3 ms to a close-up
+at the page's highest pixel ratio of 1.5, where the whole frame takes about
+6 ms.
+
+**Why.** Everything else on screen now looks real, so a flat, evenly coloured
+pitch was what gave the scene away. Real stripes come from the light caught by
+leaning blades, not from paint, so they must change with the angle they are
+seen from. A procedural turf keeps the project free of third-party assets.
+
+**Rejected.** Instanced blades: they would need tens of thousands of blades per
+square metre to match real turf, and fewer read as sparse. Stacked shells of
+turf near the camera: they look much the same, but each pixel is shaded once
+per shell, which added 2.4 to 5.7 ms of GPU time to a close-up at a pixel
+ratio of 1. A painted line texture over the whole pitch: it would need about
+32 million texels for sharp edges close up. Mipmaps of the distance field and
+its own screen derivatives for anti-aliasing: averaged distances, and pixels
+straddling a line's centre, broke distant lines into dashes.
+
 ## 7. References and licences
 
 Prefer original work. Open-source soccer simulators may be studied for rules
@@ -957,13 +1199,102 @@ third-party model, motion capture, texture or asset pack is used.
 
 **Choice.** The remaining laws are judged by the engine from what it already
 simulates, by fixed rules that are the same for both teams, so each call can be
-set up in a test and checked. Every foul stops play: there is no advantage.
+set up in a test and checked.
 
-- **Fouls.** Only a challenge on the player with the ball is judged. An
-  opponent who runs into the ball carrier (their discs touch while it moves
-  towards the carrier faster than 2 m/s) commits a foul if it came from behind
-  the carrier, or if it could not reach the ball. An opponent who reaches the
-  ball from the front or side wins it fairly.
+- **Fouls.** Only a challenge on the player with the ball is judged: a
+  tackle, as below, or running into the carrier. An opponent who runs into
+  the ball carrier (their discs touch while it runs towards the carrier, and
+  the two close on each other, faster than 2 m/s) commits a foul if it came
+  from behind the carrier, or if it could not reach the ball. An opponent who
+  reaches the ball from the front or side wins it fairly. Both speeds count:
+  the closing speed, the opponent's speed towards the carrier less the
+  carrier's own speed the same way, as for a tackle, so a defender running
+  beside a player at its pace does not run into it by touching it; and the
+  opponent's own speed, so a carrier backing into an opponent standing still
+  is not fouled by it.
+- **Tackles.** A player can go in for the ball an opponent has with a
+  standing tackle or a slide, when it can play the ball (not still recovering
+  from a kick, a miss or a fall). How each ends follows from where the
+  players are and how they move, so a test can set up each outcome:
+  - A **standing tackle** goes in once the ball is within 1.2 m of the
+    tackler. `tackle` goes in from any side; `press`, and the built-in bot
+    pressing, only from the front or side. From behind (more than 120° from
+    where the carrier faces) it is a foul. Otherwise it wins the ball if the
+    ball will still be within reach 0.25 s later, with both players moving
+    as they are: the tackler takes it if it closes on the carrier at 3 m/s
+    or less, and pokes it 4 m/s away from the carrier if faster. If the ball
+    will be out of reach but the two players would then touch, it took the
+    player and not the ball: a foul. Otherwise it misses: the tackler
+    stumbles, and cannot play the ball for 0.5 s while the carrier goes on.
+  - A **slide tackle** goes in from up to 2.5 m; the built-in bot slides in,
+    from the front or side, at a carrier within 25 m of its goal. The tackler slides 0.5 s
+    along the grass at where the ball will be, then is on the ground until
+    1.5 s after it went in. From behind it is a foul and a yellow card for a
+    reckless challenge. Otherwise it wins the ball if the ball will be
+    within 2.5 m of the tackler 0.5 s later, poking it 5 m/s on along the
+    slide; if the ball will be out of reach but the carrier will not, it
+    took the player: a foul. Otherwise it misses.
+  - A carrier who loses the ball cannot play it for 0.4 s, so the ball does
+    not change hands straight back. A fouled player goes down for 1.2 s:
+    forwards if it was fouled from behind, sideways otherwise.
+- **Fouls off the ball.** A player that runs into an opponent without the
+  ball within 5 m of the ball, from behind it (more than 120° from where it
+  faces), running at it and closing on it faster than 4 m/s, fouls it: a direct free kick, or a penalty in the offender's own
+  area, with the same cards as a foul on the ball. The fouled player goes
+  down. Running into an opponent from the front or side off the ball is
+  jostling for position and is not judged. Judged anywhere on the pitch at
+  2 m/s, as a foul on the carrier is, players keeping their shape ran into
+  each other's backs so often that there were about 27 fouls in a bot match
+  of two 180 s halves, against about 1; judged only where the ball is
+  contested, there are about 4.
+  Judged by the offender's own speed rather than the closing speed, a
+  defender tracking a forward's run in behind, both at about 7 m/s, fouled
+  it whenever their discs touched: of 16 fouls off the ball in the area over
+  48 matches with players answering as Laya does, 11 closed at under 4 m/s,
+  most at under 1 m/s, and those matches had 0.58 penalties and 0.29 red
+  cards each, about twice what a top-flight match has: 0.23 penalties a game
+  in the first half of the 2024-25 Premier League season
+  ([Opta Analyst, 7 January 2025](https://theanalyst.com/articles/football-newsletter-penalties-bruno-fernandes))
+  and 52 red cards in its 380 matches, 0.14 a game
+  ([season statistics](https://extratime.com/stats/2129/2287/premier-league/)).
+  With the closing speed and the card rules below, the same matches have
+  0.29 penalties and 0.10 red cards. Fouls fall from 7.4 to 2.3 a match and
+  stoppages from 20 to 17, so there are fewer penalties and free kicks to
+  score from: goals fall from 1.15 to 0.96 a match, while goals from
+  penalties fall from 0.50 to 0.21.
+- **Handball.** Players are discs with no arms, so handball is judged from
+  where the ball meets a player. A loose ball between 0.9 m and 1.7 m off the
+  ground that passes within 0.6 m of an outfield player's centre (or a
+  goalkeeper's outside its own area) touches its upper body. More than
+  0.45 m to the side of the way the player faces, it touches an arm held
+  away from the body: handball, a direct free kick or a penalty, unless the
+  ball came from within 2 m, too close to react, or from the player's own
+  touch. Otherwise it bounces off the body as any deflection does. The
+  nearest such player meets the ball, whichever team it is on. Handball
+  that stops a ball heading into the goal (between the posts and under the
+  bar, as it flies), and legally able to count under the restart rules, is a
+  red card; within 27 m of the player's own goal it is a yellow card.
+- **Advantage.** After a foul outside the offender's penalty area that is
+  not a red-card offence, when the ball is in the fouled team's attacking
+  half and the nearest player able to play it is on the fouled team, play
+  goes on: the referee signals advantage. A teammate in an offside position
+  does not count as able to play it. If the opponents win the ball
+  within 3 s (including a controlled tackle before the ball reaches the
+  tackler's feet), or the ball goes out for an opposition throw-in, goal kick or
+  corner during that window, play comes back for the free kick, with the
+  card the foul earned. Otherwise play goes on, and only a card for a
+  reckless challenge is still given, at the next stoppage. While an advantage is played, the
+  offender's continued contact with the player it fouled is not judged again,
+  and any other foul stops play.
+- **Added time.** Each half has time added for time lost: a minute for each
+  goal and penalty, and half a minute for each substitution and card, in
+  match minutes, rounded up to a whole minute; no time is lost, none is
+  added. A match minute is a forty-fifth of the half's length. When the half
+  reaches its length the referee shows the added minutes, and the clock runs
+  on as 45+ or 90+. Time lost during added time is added on as well, but not
+  time lost once the half's time is up, such as a penalty the half waits for. No
+  player is injured or wastes time on purpose in the
+  engine, so neither adds time.
 - **Free kicks and penalties.** The fouled team takes a free kick where the
   foul happened, after a pause of 1.5 s, with opponents held 9.15 m from the
   ball; within 32 m of its goal, the defending team's three nearest outfield
@@ -982,8 +1313,18 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   corner. Interfering with an opponent without playing the ball is not judged.
 - **Cards.** A foul that stops a promising attack (the carrier within 27 m of
   the goal it attacks) is a yellow card. A foul that denies an obvious
-  goal-scoring opportunity (the carrier within 25 m of goal with no outfield
-  defender other than the offender nearer the goal line) is a red card. A
+  goal-scoring opportunity is a red card: the fouled player is within 25 m of
+  goal, no outfield defender other than the offender is nearer the goal line,
+  and it was likely to keep or gain control of the ball, because it had the
+  ball or, with the ball loose, no one but the offender was nearer it. A
+  player fouled off the ball while a teammate or an opponent has the ball
+  was not denied a goal chance. In the offender's own penalty area, a tackle
+  (standing or slide) is an attempt to play the ball, and the penalty gives
+  back the chance it took, so the card is one lower, as in Law 12 of the
+  Laws of the Game: a yellow card for denying an obvious goal-scoring
+  opportunity, and no card for stopping a promising attack. Running into a
+  player, on or off the ball, is not an attempt to play the ball and keeps
+  its card. A slide tackle from behind is a yellow card wherever it is. A
   second yellow is a red. A sent-off player leaves the pitch; if it was the
   goalkeeper, the teammate nearest its own goal goes in goal. A team reduced
   below seven players ends the match.
@@ -994,6 +1335,29 @@ set up in a test and checked. Every foul stops play: there is no advantage.
   player's place and position, and is played by the built-in bot until a
   manager chooses its model. A substituted or sent-off player cannot return,
   and a sent-off player cannot be replaced.
+- **Restarts.** The player who takes a kick-off, throw-in, goal kick, corner,
+  free kick or penalty may not touch the ball again until another player has:
+  if it does, the opponents take an indirect free kick there. A goal goes in
+  "straight from" a restart when no one has touched the ball since the
+  restart was taken. Straight from a throw-in no goal counts: into the
+  opponents' goal it is a goal kick, into the thrower's own goal a corner.
+  Straight from a kick-off, goal kick, corner or free kick a goal counts only
+  against the opponents; into the kicking team's own goal it is a corner. An
+  indirect free kick counts against neither goal, as before. A foul throw
+  cannot happen in the engine: the ball is placed where it went out and the
+  thrower throws it from there, with both hands from behind its head.
+- **Goalkeepers' handling.** A goalkeeper handles the ball in its own
+  penalty area: it reaches 1.3 m and up to 2.6 m high there, against an
+  outfield player's 0.75 m and 0.9 m, and its taking the ball is a catch. A
+  ball a teammate deliberately kicked to it (a pass, clearance or kick from a
+  restart, not a deflection), or threw to it from a throw-in, it may not
+  handle: it plays it with its feet, at an outfield player's reach, as
+  if outside its area. The laws give an indirect free kick if it handles
+  such a ball; the engine's goalkeeper never does. A goalkeeper holding the
+  ball, a catch it has not yet released, for more than eight seconds
+  concedes a corner to the opponents, on the side of the pitch it is on.
+  Each snapshot tells the page how long it has held it, and the page shows
+  the referee's count for the last five seconds.
 - **Saves and deflections.** A loose ball that comes at a player faster than
   18 m/s, relative to the player, bounces off it instead of being taken. A
   goalkeeper that reaches a ball faster than 10 m/s only at full stretch (the

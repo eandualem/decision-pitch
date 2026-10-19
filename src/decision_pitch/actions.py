@@ -37,7 +37,7 @@ from decision_pitch.bots import (
     _wall_spot,
 )
 from decision_pitch.bots import command as bot_command
-from decision_pitch.match import RESTARTS, Command, Hold, KickTo, Match, MoveTo
+from decision_pitch.match import RESTARTS, AirKick, Command, Hold, KickTo, Match, MoveTo, Tackle
 from decision_pitch.physics import DIAGONAL, ROLLING, Player
 
 ACTIONS = {
@@ -52,13 +52,16 @@ ACTIONS = {
     "clear": "kick the ball long upfield",
     "press": "run at the ball to win it or collect it",
     "tackle": "go straight in to win the ball now; it can be a foul",
+    "slide_tackle": "slide in for the ball from further away; a miss leaves you on the ground, from behind it is a foul",
+    "jockey": "back off facing the player on the ball, between it and your goal; safe, but gives ground",
     "hold": "keep your place in the team's shape",
     "support": "move into space ahead to offer a pass",
     "mark": "stay goal-side of the nearest opponent",
     "run_behind": "sprint beyond their last defender for a through ball; you can be offside",
 }
 ON_THE_BALL = ("dribble", "sprint", "take_on", "shield", "pass", "through_ball", "cross", "shoot", "clear")
-OFF_THE_BALL = ("press", "tackle", "hold", "support", "mark", "run_behind")
+OFF_THE_BALL = ("press", "tackle", "slide_tackle", "jockey", "hold", "support", "mark", "run_behind")
+CHALLENGES = ("press", "tackle", "slide_tackle", "jockey")  # going for the ball an opponent has
 AT_A_RESTART = ("hold", "support", "mark", "run_behind")  # for the players not taking it
 KEEPER_ON_THE_BALL = ("pass", "through_ball", "clear")
 KEEPER_OFF_THE_BALL = ("hold", "press")
@@ -92,6 +95,8 @@ RUN_BEYOND = 6.0  # m beyond the second-last defender that a run in behind aims
 RUN_LANE = 25.0  # m from the centre line, at most, that a run in behind keeps to
 RUN_REACH = 20.0  # m behind the offside line within which a player can run in behind
 RUN_ON = 4.0  # m/s: a runner beyond the line still going faster than this carries on
+CHALLENGE_RANGE = 15.0  # m from the opponent on the ball within which a slide or jockey is asked
+JOCKEY_DISTANCE = 2.5  # m from the carrier, towards its own goal, that a jockeying player keeps
 
 
 def options(m: Match, p: Player) -> dict[str, str]:
@@ -132,6 +137,15 @@ def _applies(m: Match, p: Player, action: str) -> bool:
         return _space(m, p) < SHIELD_RANGE
     if action == "run_behind":
         return p.position != "GK" and _offside_line(m, p.team) - p.x * m.attack(p.team) <= RUN_REACH
+    if action in CHALLENGES:
+        c = m.player(m.owner) if m.owner is not None else None
+        if c is not None and c.team == p.team:
+            return False  # a teammate has it
+        if action == "press":
+            return True
+        if c is None:
+            return False
+        return action == "tackle" or math.hypot(c.x - p.x, c.y - p.y) <= CHALLENGE_RANGE
     return True
 
 
@@ -139,6 +153,9 @@ def command(m: Match, p: Player, action: str) -> Command:
     """The engine command that carries out `action` for `p` now."""
     if m.phase == "half_time":
         return Hold()
+    on_the_ball = m.owner == p.id
+    if m.phase == "play" and not on_the_ball and action in ON_THE_BALL and action != "sprint":
+        return _without_ball(m, p, action)
     direction = m.attack(p.team)
     goal = math.hypot(direction * pitch.HALF_LENGTH - p.x, p.y)
     if action == "shoot" and goal >= SHOOTING_RANGE:
@@ -155,18 +172,17 @@ def command(m: Match, p: Player, action: str) -> Command:
             return _shape(m, p, wall)  # the wall lines up whatever the action
         elif not taker and action not in AT_A_RESTART:
             action = "hold"  # only the taker goes to the ball
-    on_the_ball = m.owner == p.id
     if on_the_ball and action in OFF_THE_BALL:
         return _on_the_ball(m, p)  # it has the ball: it keeps playing it
-    if p.position == "GK" and action in ("press", "tackle", "mark", "run_behind"):
+    if p.position == "GK" and action in ("press", "tackle", "slide_tackle", "jockey", "mark", "run_behind"):
         return bot_command(m, p)  # a keeper keeps its goal, coming for the ball as the bot does
-    if m.phase == "play" and not on_the_ball and action in ON_THE_BALL and action != "sprint":
-        return bot_command(m, p)  # the nearest goes for the ball; the others keep their places
     if m.phase == "play" and m.owner is None and action in AT_A_RESTART and _chase(m, p.team)[0] is p:
         return bot_command(m, p)  # keeping its place, it still collects a loose ball it reaches first
     teammate = not on_the_ball and m.owner is not None and m.player(m.owner).team == p.team
-    if action in ("press", "sprint", "tackle") and teammate:
+    if action == "sprint" and teammate:
         action = "support"  # a teammate has it
+    if action == "jockey" and (m.owner is None or teammate):
+        action = "hold"  # no opponent on the ball to back off from
     if action == "hold":
         if p.position == "GK":
             return MoveTo(*(_save_spot(m, p) or _goal_line_spot(m, p)), face=(m.ball.x, m.ball.y))
@@ -203,12 +219,41 @@ def command(m: Match, p: Player, action: str) -> Command:
         return KickTo(direction * pitch.HALF_LENGTH, _far_post(m, p), 24.0, 0.06)
     if action == "clear":
         return KickTo(p.x + direction * 40, p.y * 0.5, 26.0, 0.5)
-    if action == "tackle" and m.owner is not None:
+    if action == "jockey":
+        return _jockey(m, p)
+    opponent = m.owner is not None and not teammate
+    if action in ("tackle", "slide_tackle") and opponent:
         c = m.player(m.owner)
-        return MoveTo(m.ball.x + c.vx * 0.2, m.ball.y + c.vy * 0.2)  # straight in, from any side
+        # straight in, from any side
+        return Tackle(m.ball.x + c.vx * 0.2, m.ball.y + c.vy * 0.2, slide=action == "slide_tackle")
     if action == "sprint" and m.owner is None:
         return MoveTo(*_run_on(m, p))  # on to its knock, flat out
-    return MoveTo(*_press_spot(m, p))  # press, or sprint at an opponent on the ball
+    if action == "press" and opponent:
+        return Tackle(*_press_spot(m, p), from_behind=False)
+    return MoveTo(*_press_spot(m, p))  # at the ball: loose, a teammate's, or sprinting at an opponent's
+
+
+def _without_ball(m: Match, p: Player, action: str) -> Command:
+    """A late answer for the ball, carried out without it (docs/decisions.md, section 4):
+    with the ball loose it runs at it; while another player has it, a kick is a kick at
+    nothing and any other action a run to where it would have dribbled."""
+    if m.owner is None:
+        if p.position == "GK":
+            return bot_command(m, p)  # a keeper keeps its goal
+        return MoveTo(*_press_spot(m, p))
+    if action in KICKS:
+        return AirKick()
+    return MoveTo(*_dribble_spot(m, p), DRIBBLE_SPEED)
+
+
+def _jockey(m: Match, p: Player) -> MoveTo:
+    """Back off facing the opponent on the ball, JOCKEY_DISTANCE from it towards its own
+    goal."""
+    c = m.player(m.owner)
+    goal_x = -m.attack(p.team) * pitch.HALF_LENGTH
+    dx, dy = goal_x - c.x, -c.y
+    dist = math.hypot(dx, dy) or 1.0
+    return MoveTo(c.x + dx / dist * JOCKEY_DISTANCE, c.y + dy / dist * JOCKEY_DISTANCE, face=(c.x, c.y))
 
 
 def _run_on(m: Match, p: Player) -> tuple[float, float]:

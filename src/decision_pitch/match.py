@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from decision_pitch import pitch
 from decision_pitch.physics import (
@@ -19,6 +19,7 @@ from decision_pitch.physics import (
     TOP_SPEED,
     Ball,
     Player,
+    brake,
     carry,
     separate,
     step_ball,
@@ -48,7 +49,23 @@ class KickTo:
     touch: str = "kick"  # how the page is told of it: "kick", or "knock" for a sprint's knock ahead
 
 
-Command = Hold | MoveTo | KickTo
+@dataclass(frozen=True)
+class Tackle:
+    """Run at (x, y) and go in for the ball an opponent has once it is in reach."""
+
+    x: float
+    y: float
+    speed: float = TOP_SPEED
+    slide: bool = False  # a slide tackle, from further away; else a standing tackle
+    from_behind: bool = True  # it goes in from behind the carrier too
+
+
+@dataclass(frozen=True)
+class AirKick:
+    """Kick where the player stands, with no ball to kick: a late answer carried out."""
+
+
+Command = Hold | MoveTo | KickTo | Tackle | AirKick
 
 CONTROL = 0.75  # m from a player's centre to the ball's within which it plays the ball
 CONTROL_HEIGHT = 0.9  # m, the highest ball a player can play
@@ -73,7 +90,7 @@ RESTART_DISTANCE = {"kickoff": pitch.CENTRE_RADIUS, "corner": 9.15, "goal_kick":
                     "free_kick": 9.15, "penalty": 9.15}  # fmt: skip
 RESTARTS = tuple(RESTART_DISTANCE)
 NO_OFFSIDE = ("throw_in", "goal_kick", "corner")  # restarts no one can be offside from
-FOUL_SPEED = 2.0  # m/s a challenger runs into the ball carrier at for its challenge to be judged
+FOUL_SPEED = 2.0  # m/s a challenger runs at and closes on the ball carrier at for its challenge to be judged
 BEHIND = -0.5  # cosine: a challenger more than 120° from where the carrier faces is behind it
 PROMISING_ATTACK = 27.0  # m from goal within which a foul stops a promising attack: a yellow card
 GOAL_CHANCE = 25.0  # m from goal within which a foul can deny an obvious goal-scoring chance
@@ -81,6 +98,33 @@ SUBSTITUTES = 5  # substitutions a team may make
 WINDOWS = 3  # stoppages it may make them in, half time not counted
 FEWEST = 7  # players a team needs to play on
 RECENT_TOUCHES = 0.1  # s of touches each snapshot repeats, so none falls between two of them
+STAND_REACH = 1.2  # m from a tackler's centre to the ball within which it goes in standing
+SLIDE_REACH = 2.5  # m within which it slides in
+TACKLE_LOOK = 0.25  # s ahead at which a standing tackle is judged
+SLIDE_TIME = 0.5  # s a slide lasts, and ahead at which it is judged
+SLIDE_SPEED = 6.0  # m/s a slide starts at
+SLIDE_DOWN = 1.5  # s from going in to slide until the slider is up again
+TAKE_SPEED = 3.0  # m/s closing on the carrier at or below which a tackle takes the ball
+POKE_SPEED = 4.0  # m/s a standing tackle that closes faster pokes the ball on at
+SLIDE_POKE = 5.0  # m/s a slide pokes the ball on at
+STUMBLE = 0.5  # s a missed standing tackle leaves the tackler unable to play the ball
+DISPOSSESSED = 0.4  # s a carrier that loses the ball to a tackle cannot play it
+FOULED_DOWN = 1.2  # s a fouled player is on the ground
+AIR_KICK = 0.6  # s a kick at nothing takes
+AIR_KICK_FALL = 6.0  # m/s at or above which a kick at nothing ends on the ground
+AIR_KICK_DOWN = 1.5  # s on the ground after it
+BRAKE = 12.0  # m/s² a player swinging, sliding or falling slows at
+HOLD_LIMIT = 8.0  # s a goalkeeper may hold the ball in its hands
+ADVANTAGE = 3.0  # s in which play comes back for the free kick if the opponents win the ball
+ARM_HEIGHT = 1.7  # m: a ball between CONTROL_HEIGHT and this touches a player's upper body
+ARM_REACH = 0.6  # m from a player's centre within which such a ball touches it
+BODY_SIDE = 0.45  # m to the side of the way it faces beyond which the ball meets an arm
+TOO_CLOSE = 2.0  # m from where it was last played within which a ball on the arm is not handball
+GOAL_LOOK = 3.0  # s of a ball's path followed to judge whether it is going into the goal
+LOOK_STEP = 0.02  # s between the points of that path
+OFF_BALL_RANGE = 5.0  # m from the ball within which running into a player off the ball is judged
+OFF_BALL_SPEED = 4.0  # m/s it must run at and close on it at
+LOST = {"goal": 1.0, "penalty": 1.0, "substitution": 0.5, "yellow": 0.5, "red": 0.5}  # match minutes
 
 # 4-4-2 for a team attacking towards +x, in its own half
 FORMATION = [
@@ -155,6 +199,23 @@ class Match:
         self.pending: list[tuple[int, int]] = []  # substitutions asked for: (off, on)
         self.touches: deque[dict] = deque(maxlen=8)  # the latest touches of the ball, for the page
         self.diving: set[int] = set()  # goalkeepers diving across their goal this step
+        # movements without the ball (docs/protocol.md): kind, until when, and how it then
+        # goes down and until when, if it does
+        self.moves: dict[int, tuple[str, float, str | None, float]] = {}
+        self.down: dict[int, tuple[str, float]] = {}  # on the ground: which way, until when
+        self.kicked: dict[int, float] = {}  # when each player last kicked the ball, not a knock
+        self.restart_kicker: int | None = None  # took a restart, and no one else has touched the ball since
+        self.direct: tuple[str, int] | None = None  # the restart and team the ball is straight from
+        self.passed: int | None = None  # the team that deliberately kicked or threw the ball last
+        self.holder: int | None = None  # the goalkeeper holding the ball in its hands
+        self.held_since = 0.0
+        # an advantage being played: the team playing on, the offender, the player fouled, where the
+        # foul was, whether coming back earns a card, and until when it can come back
+        self.advantage: tuple[int, int, int, float, float, bool, float] | None = None
+        self.cards_due: list[int] = []  # cautioned during an advantage, shown at the next stoppage
+        self.lost = 0.0  # match minutes lost in this half
+        self.added: int | None = None  # minutes added to this half, once shown
+        self.lost_shown = 0.0  # `lost` when they were shown
         self._kickoff(0, place_players=True)
 
     # -- what the engine is told and shows --------------------------------------------------
@@ -170,7 +231,12 @@ class Match:
         return (1 if team == 0 else -1) * (1 if self.period == 1 else -1)
 
     def clock(self) -> str:
-        minutes = self.elapsed / self.half_length * 45 + (45 if self.period == 2 else 0)
+        minutes = self.elapsed / self.half_length * 45
+        end = 45 if self.period == 1 else 90
+        if minutes >= 45:  # added time
+            over = minutes - 45
+            return f"{end}+{int(over):02d}:{int(over * 60) % 60:02d}"
+        minutes += end - 45
         return f"{int(minutes):02d}:{int(minutes * 60) % 60:02d}"
 
     def hello_teams(self) -> list[dict]:
@@ -202,6 +268,7 @@ class Match:
                 "z": round(b.z, 3),
                 "owner": self.owner,
                 "touches": [dict(touch) for touch in self.touches if touch["t"] >= self.t - RECENT_TOUCHES],
+                **({"held": round(self.t - self.held_since, 1)} if self.holder is not None else {}),
             },
             "players": [self._player_snapshot(p) for p in self.players],
         }
@@ -217,6 +284,11 @@ class Match:
         }
         if p.id in self.diving:
             entry["dive"] = True
+        if p.id in self.moves:
+            entry["move"] = self.moves[p.id][0]
+        if p.id in self.down:
+            way, until = self.down[p.id]
+            entry["down"] = {"way": way, "until": round(until, 3)}
         return entry
 
     def drain_events(self) -> list[dict]:
@@ -254,19 +326,35 @@ class Match:
             self.since_restart += STEP
             if self.since_restart >= HALF_TIME:
                 self.period, self.elapsed = 2, 0.0
+                self.lost, self.added = 0.0, None
                 self._kickoff(1, place_players=True)
             return
         if self.phase in RESTARTS:
             self._substitute()
         self.elapsed += STEP
         self.since_restart += STEP
+        if self.added is None and self.elapsed >= self.half_length:
+            self.added, self.lost_shown = math.ceil(self.lost - 1e-9), self.lost
+            if self.added:
+                self._event("added_time", None, minutes=self.added)
         for pid in list(self.recovering):
             self.recovering[pid] -= STEP
             if self.recovering[pid] <= 0:
                 del self.recovering[pid]
+        for pid, (_, until, way, down_until) in list(self.moves.items()):
+            if self.t >= until:
+                del self.moves[pid]
+                if way:
+                    self.down[pid] = (way, down_until)
+        for pid, (_, until) in list(self.down.items()):
+            if self.t >= until:
+                del self.down[pid]
 
+        # tackles are judged on where everyone is as the step begins, before anyone moves,
+        # so the outcome does not depend on which team moves first
+        went_in = {p.id for p in list(self.players) if self._goes_in(p)}
         for p in self.players:
-            self._move(p)
+            self._move(p, went_in)
         self._judge_challenge()
         if self.phase == "full_time":
             return
@@ -279,6 +367,10 @@ class Match:
 
         before = (self.ball.x, self.ball.y, self.ball.z)
         self._take_possession()
+        if self.phase == "play" and self.advantage is not None:
+            self._check_advantage()  # before a new owner can play the ball on
+            if self.phase == "full_time":
+                return  # its card left a team too short to play on
         owner = self.player(self.owner) if self.owner else None
         command = self.commands[owner.id] if owner else None
         if owner and isinstance(command, KickTo) and self._may_kick(owner):
@@ -295,18 +387,37 @@ class Match:
             step_ball(self.ball)
         if self.phase == "play":
             self._check_ball(before)
+        if self.phase == "play" and self.owner is None:
+            self._arm_height()  # only a ball still in play
+        if self.phase == "play" and self.holder is not None:
+            self._check_holding()
 
         if self.penalty_live and self.ball.vx == self.ball.vy == self.ball.vz == 0:
             self.penalty_live = False  # it came to rest untouched
         waiting = self.phase == "penalty" or self.penalty_live  # a penalty is completed first
-        if self.elapsed >= self.half_length and self.phase not in ("half_time", "full_time") and not waiting:
+        if self.elapsed >= self._half_end() and self.phase not in ("half_time", "full_time") and not waiting:
             self._end_half()
 
-    def _move(self, p: Player) -> None:
+    def _goes_in(self, p: Player) -> bool:
+        """Whether `p`, told to tackle and free to move, goes in for the ball now."""
         command = self.commands[p.id]
-        if self._out_of_place(p) > OUT_OF_PLACE:
+        if not isinstance(command, Tackle) or p.id in self.down or p.id in self.moves:
+            return False
+        return self._out_of_place(p) <= OUT_OF_PLACE and self._tackle(p, command)
+
+    def _move(self, p: Player, went_in: set[int]) -> None:
+        command = self.commands[p.id]
+        if p.id in self.down or p.id in self.moves:
+            brake(p, BRAKE)  # swinging, stumbling, sliding or on the ground: it slows to a stop
+        elif self._out_of_place(p) > OUT_OF_PLACE:
             # the laws ask it to retreat, whatever it was told
             step_player(p, *self._allowed_spot(p, margin=1.0), TOP_SPEED)
+        elif isinstance(command, AirKick):
+            self._air_kick(p)
+        elif isinstance(command, Tackle) and p.id in went_in:
+            brake(p, BRAKE)  # its standing tackle is made
+        elif isinstance(command, Tackle):
+            step_player(p, command.x, command.y, command.speed)
         elif isinstance(command, MoveTo):
             dive = self._dives(p)
             if dive:
@@ -332,12 +443,102 @@ class Match:
             return False  # not moving towards the goal
         return abs(b.y + b.vy * (goal_x - b.x) / b.vx) <= pitch.GOAL_WIDTH / 2 + DIVE_MARGIN
 
+    # -- movements without the ball: kicks at nothing, tackles and falls -------------------
+
+    def _air_kick(self, p: Player) -> None:
+        """`p` kicks where it stands, at nothing; at speed it goes down after the swing
+        (docs/decisions.md, section 4). The command is then spent."""
+        out = AIR_KICK
+        if p.speed >= AIR_KICK_FALL:
+            self.moves[p.id] = ("air_kick", self.t + AIR_KICK, "back", self.t + AIR_KICK + AIR_KICK_DOWN)
+            out += AIR_KICK_DOWN
+        else:
+            self.moves[p.id] = ("air_kick", self.t + AIR_KICK, None, 0.0)
+        self.recovering[p.id] = max(self.recovering.get(p.id, 0.0), out)
+        self.commands[p.id] = Hold()
+        brake(p, BRAKE)
+
+    def _tackle(self, p: Player, command: Tackle) -> bool:
+        """Whether `p` goes in for the ball an opponent has, now, and if so how it ends
+        (docs/decisions.md, section 8)."""
+        if self.phase != "play" or self.owner is None or p.id in self.recovering:
+            return False
+        c, b = self.player(self.owner), self.ball
+        reach = SLIDE_REACH if command.slide else STAND_REACH
+        if c.team == p.team or b.z > CONTROL_HEIGHT or math.hypot(b.x - p.x, b.y - p.y) > reach:
+            return False
+        behind = self._behind(p, c)
+        if behind and not command.from_behind:
+            return False
+        look = SLIDE_TIME if command.slide else TACKLE_LOOK
+        bx, by = b.x + c.vx * look, b.y + c.vy * look  # where the ball and the players will be
+        cx, cy = c.x + c.vx * look, c.y + c.vy * look
+        px, py = (p.x, p.y) if command.slide else (p.x + p.vx * look, p.y + p.vy * look)
+        if command.slide:
+            dx, dy = bx - p.x, by - p.y
+            dist = math.hypot(dx, dy) or 1.0
+            p.vx, p.vy = dx / dist * SLIDE_SPEED, dy / dist * SLIDE_SPEED
+            p.heading = math.atan2(dy, dx)
+            self.moves[p.id] = ("slide", self.t + SLIDE_TIME, "side", self.t + SLIDE_DOWN)
+            self.recovering[p.id] = SLIDE_DOWN
+        if behind:
+            self._fouled(p, c, behind=True, reckless=command.slide)
+        elif math.hypot(bx - px, by - py) <= reach:
+            self._win_ball(p, c, command.slide)
+        elif math.hypot(cx - px, cy - py) <= (SLIDE_REACH if command.slide else 2 * PLAYER_RADIUS):
+            self._fouled(p, c, behind=False, reckless=False)  # it took the player, not the ball
+        elif not command.slide:
+            self.moves[p.id] = ("stumble", self.t + STUMBLE, None, 0.0)
+            self.recovering[p.id] = STUMBLE
+        return True
+
+    def _behind(self, p: Player, carrier: Player) -> bool:
+        """Whether `p` is more than 120° from where `carrier` faces."""
+        dx, dy = p.x - carrier.x, p.y - carrier.y
+        dist = math.hypot(dx, dy)
+        return dist > 0 and (dx * math.cos(carrier.heading) + dy * math.sin(carrier.heading)) / dist < BEHIND
+
+    def _win_ball(self, p: Player, carrier: Player, slide: bool) -> None:
+        """`p`'s tackle wins the ball: it takes it, or pokes it loose if it closes fast
+        or slides. Either way the ball leaves the carrier, which cannot play it at once."""
+        b = self.ball
+        dx, dy = carrier.x - p.x, carrier.y - p.y
+        dist = math.hypot(dx, dy) or 1.0
+        closing = ((p.vx - carrier.vx) * dx + (p.vy - carrier.vy) * dy) / dist
+        if not slide and closing <= TAKE_SPEED:
+            if self.advantage is not None and self.t < self.advantage[-1] and p.team != self.advantage[0]:
+                self._check_advantage(lost=True)
+                return
+            # the ball comes to the tackler's feet
+            tx, ty = p.x + math.cos(p.heading) * DRIBBLE, p.y + math.sin(p.heading) * DRIBBLE
+            speed = math.hypot(tx - b.x, ty - b.y) / TACKLE_LOOK
+            kind = "tackle"
+        else:
+            tx, ty = b.x + (b.x - p.x), b.y + (b.y - p.y)  # on, the way the tackler went in
+            speed = SLIDE_POKE if slide else POKE_SPEED
+            kind = "poke"
+        self._touched(p, kind)
+        aim = math.hypot(tx - b.x, ty - b.y) or 1.0
+        b.vx, b.vy, b.vz = (tx - b.x) / aim * speed, (ty - b.y) / aim * speed, 0.0
+        self.owner = None
+        self.last_touch = p.team
+        self.offside = self._offside_positions(p)
+        if p.id != self.indirect:
+            self.indirect = None
+        self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), DISPOSSESSED)
+
+    def _fouled(self, p: Player, carrier: Player, behind: bool, reckless: bool, tackle: bool = True) -> None:
+        """`p`'s tackle fouls `carrier`, which goes down."""
+        self.down[carrier.id] = ("front" if behind else "side", self.t + FOULED_DOWN)
+        self.recovering[carrier.id] = max(self.recovering.get(carrier.id, 0.0), FOULED_DOWN)
+        self._foul(p, carrier, reckless=reckless, tackle=tackle)
+
     # -- possession and kicks ---------------------------------------------------------------
 
     def _reaches(self, p: Player) -> bool:
         """Whether the ball is within `p`'s reach."""
         reach, height = CONTROL, CONTROL_HEIGHT
-        if self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team):
+        if self._handles(p):
             reach, height = KEEPER_CONTROL, KEEPER_HEIGHT
         b = self.ball
         return b.z <= height and math.hypot(b.x - p.x, b.y - p.y) <= reach
@@ -359,8 +560,11 @@ class Match:
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
             deflects = self.owner is None and self._deflects(nearest)
-            if self.penalty_live and self.elapsed >= self.half_length and not (deflects and self._saves(nearest)):
+            if self.penalty_live and self.elapsed >= self._half_end() and not (deflects and self._saves(nearest)):
                 self._end_half()  # this touch completes the penalty the half waited for; a save does not
+                return
+            if nearest.id == self.restart_kicker:
+                self._second_touch(nearest)
                 return
             if nearest.id in self.offside:
                 self._offside(nearest)
@@ -374,13 +578,16 @@ class Match:
                 self.indirect = None
             self.last_touch = nearest.team
             if nearest.id != self.owner:
-                self._touched(nearest, self._possession_kind(nearest))
+                kind = self._possession_kind(nearest)
+                self._touched(nearest, kind)
+                if kind == "catch":
+                    self.holder, self.held_since = nearest.id, self.t
         self.owner = nearest.id
 
     def _possession_kind(self, p: Player) -> str:
         """How `p` came to have the ball in play: a goalkeeper's catch in its own area, a
         tackle off an opponent, or a first touch."""
-        if self._saves(p):
+        if self._handles(p):
             return "catch"
         if self.owner is not None and self.player(self.owner).team != p.team:
             return "tackle"
@@ -422,6 +629,31 @@ class Match:
         self.owner = None
         self.recovering[p.id] = KICK_RECOVERY
 
+    def _handles(self, p: Player) -> bool:
+        """Whether goalkeeper `p` may take the ball in its hands: in its own penalty area,
+        unless a teammate deliberately kicked or threw it to it (docs/decisions.md, section 8)."""
+        return (self.phase == "play" and p.position == "GK" and self._ball_in_own_penalty_area(p.team)
+                and self.passed != p.team)
+
+    def _second_touch(self, p: Player) -> None:
+        """The taker of a restart touched the ball again before anyone else: an indirect
+        free kick to the opponents."""
+        self._event("second_touch", 1 - p.team, p.id)
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, self.ball.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, self.ball.y))
+        self._restart("free_kick", 1 - p.team, x, y, indirect=True)
+
+    def _check_holding(self) -> None:
+        """A goalkeeper that has held the ball in its hands for more than HOLD_LIMIT concedes
+        a corner, on its side of the pitch."""
+        keeper = self.player(self.holder)
+        if self.owner != keeper.id or not self._ball_in_own_penalty_area(keeper.team):
+            self.holder = None  # released, or carried out of its area
+        elif self.t - self.held_since > HOLD_LIMIT:
+            self._event("held", 1 - keeper.team, keeper.id)
+            goal_x = -self.attack(keeper.team) * pitch.HALF_LENGTH
+            self._restart("corner", 1 - keeper.team, goal_x, math.copysign(pitch.HALF_WIDTH, self.ball.y))
+
     def _saves(self, p: Player) -> bool:
         """Whether `p` is the goalkeeper defending the goal the ball is at."""
         return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
@@ -434,10 +666,20 @@ class Match:
         if self.since_restart >= (KICKOFF_WAIT if self.phase == "kickoff" else RETREAT_WAIT):
             self._keep_distance(everyone=True)  # anyone still out of place is placed
             return True
+        if self.phase == "goal_kick":
+            # taken quickly: an opponent still leaving the penalty area may stay, as the laws
+            # allow one that had no time to leave, once none is near enough to the ball to
+            # challenge for it (docs/decisions.md, section 2)
+            b, near = self.ball, RESTART_DISTANCE["goal_kick"]
+            return all(math.hypot(q.x - b.x, q.y - b.y) >= near for q in self.players if q.team != self.restart_team)
         return all(self._out_of_place(q) <= OUT_OF_PLACE for q in self.players)
 
     def _kick(self, p: Player, command: KickTo) -> None:
+        restart = self.phase if self.phase in RESTARTS else None
         self._touched(p, "throw" if self.phase == "throw_in" else command.touch)
+        self.passed = p.team  # a teammate goalkeeper may not handle it
+        if restart:
+            self.direct, self.restart_kicker = (restart, p.team), p.id
         cap = THROW_MAX if self.phase == "throw_in" else KICK_MAX
         loft = max(command.loft, 0.3) if self.phase == "throw_in" else command.loft
         speed = max(0.0, min(command.speed, cap))
@@ -455,6 +697,8 @@ class Match:
         self.owner = None
         self.recovering[p.id] = KICK_RECOVERY
         self.commands[p.id] = Hold()
+        if command.touch != "knock":
+            self.kicked[p.id] = self.t
         if self.phase != "play":
             self.phase, self.restart_team = "play", None
 
@@ -462,10 +706,19 @@ class Match:
         """Record `p`'s touch of the ball, where the ball is as it touches it, for the page
         to show (docs/protocol.md). A kick straight after taking the ball, in the same step,
         replaces the touch it follows. It changes nothing in play."""
+        if p.id != self.restart_kicker:
+            self.restart_kicker = None
+        if p.id != self.holder:
+            self.holder = None
+        if not (p.position == "GK" and p.team == self.passed):
+            self.passed = None  # until another player touches it, its keeper still may not handle it
+        self.direct = None
         b = self.ball
         touch = {"player": p.id, "kind": kind, "t": round(self.t, 3),
                  "x": round(b.x, 3), "y": round(b.y, 3), "z": round(b.z, 3)}  # fmt: skip
         if self.touches and (self.touches[-1]["t"], self.touches[-1]["player"]) == (touch["t"], p.id):
+            if kind == "control":
+                return  # its tackle brought the ball to it: the tackle is the touch
             self.touches.pop()
         self.touches.append(touch)
 
@@ -480,34 +733,56 @@ class Match:
 
     def _judge_challenge(self) -> None:
         """An opponent running into the ball carrier fouls it if it came from behind or
-        could not reach the ball (docs/decisions.md, section 8)."""
-        if self.phase != "play" or self.owner is None:
+        could not reach the ball, and into a player off the ball if it came from behind
+        (docs/decisions.md, section 8)."""
+        if self.phase != "play":
             return
-        carrier = self.player(self.owner)
-        facing = math.cos(carrier.heading), math.sin(carrier.heading)
-        for q in self.players:
-            dx, dy = q.x - carrier.x, q.y - carrier.y
-            dist = math.hypot(dx, dy)
-            if q.team == carrier.team or dist == 0 or dist >= 2 * PLAYER_RADIUS:
-                continue
-            towards = -(q.vx * dx + q.vy * dy) / dist
-            behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
-            if towards > FOUL_SPEED and (behind or not self._reaches(q)):
-                self._foul(q, carrier)
-                return
+        for r in sorted(self.players, key=lambda r: r.id != self.owner):  # the carrier first
+            carrier = r.id == self.owner
+            facing = math.cos(r.heading), math.sin(r.heading)
+            for q in self.players:
+                dx, dy = q.x - r.x, q.y - r.y
+                dist = math.hypot(dx, dy)
+                if q.team == r.team or dist == 0 or dist >= 2 * PLAYER_RADIUS:
+                    continue
+                if self.advantage is not None and (q.id, r.id) == self.advantage[1:3]:
+                    continue  # the contact being played on from
+                own = -(q.vx * dx + q.vy * dy) / dist  # how fast q runs at r
+                towards = min(own, own + (r.vx * dx + r.vy * dy) / dist)  # and how fast they close
+                behind = (dx * facing[0] + dy * facing[1]) / dist < BEHIND
+                if not carrier and (towards <= OFF_BALL_SPEED or not self._near_ball(r)):
+                    continue
+                if towards > FOUL_SPEED and (behind or (carrier and not self._reaches(q))):
+                    self._fouled(q, r, behind=behind, reckless=False, tackle=False)
+                    return
 
-    def _foul(self, offender: Player, fouled: Player) -> None:
+    def _foul(self, offender: Player, fouled: Player, reckless: bool = False, tackle: bool = False) -> None:
         team = fouled.team
         self._event("foul", team, offender.id, fouled=fouled.id)
         goal = math.hypot(self.attack(team) * pitch.HALF_LENGTH - fouled.x, fouled.y)
-        if goal <= GOAL_CHANCE and self._denies_goal(offender, fouled):
+        denies = goal <= GOAL_CHANCE and self._denies_goal(offender, fouled)
+        booked = self.yellows.get(offender.id, 0) + self.cards_due.count(offender.id)
+        second = reckless and booked > 0  # a second yellow sends it off: no advantage
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
+        # a tackle in the offender's own area tried to play the ball: the penalty gives back
+        # the chance it took, so the card is one lower (docs/decisions.md, section 8)
+        attempt = tackle and self._in_own_penalty_area(x, y, offender.team)
+        red = denies and not attempt
+        caution = reckless or (denies if attempt else goal <= PROMISING_ATTACK)
+        advantage = self.advantage is None and not red and not second and not self._in_own_penalty_area(x, y, offender.team)
+        if advantage and self._plays_on(team):
+            self._event("advantage", team, fouled.id)
+            self.advantage = (team, offender.id, fouled.id, x, y, goal <= PROMISING_ATTACK or reckless, self.t + ADVANTAGE)
+            if reckless:
+                self.cards_due.append(offender.id)
+            return
+        if red:
             self._card(offender, red=True)
-        elif goal <= PROMISING_ATTACK:
+        elif caution:
             self._card(offender)
         if self.phase == "full_time":
             return
-        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, fouled.x))
-        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, fouled.y))
         if self._in_own_penalty_area(x, y, offender.team):
             goal = -self.attack(offender.team) * pitch.HALF_LENGTH
             spot = goal - math.copysign(pitch.PENALTY_MARK, goal)
@@ -515,8 +790,120 @@ class Match:
         else:
             self._restart("free_kick", team, x, y)
 
+    def _near_ball(self, p: Player) -> bool:
+        return math.hypot(self.ball.x - p.x, self.ball.y - p.y) <= OFF_BALL_RANGE
+
+    def _plays_on(self, team: int) -> bool:
+        """Whether `team`, just fouled, can play on: the ball in its attacking half and the
+        nearest player able to play it its own."""
+        if self.ball.x * self.attack(team) <= 0:
+            return False
+        able = [p for p in self.players if p.id not in self.recovering and p.id not in self.offside]
+        b = self.ball
+        return bool(able) and min(able, key=lambda p: math.hypot(b.x - p.x, b.y - p.y)).team == team
+
+    def _check_advantage(self, lost: bool = False) -> None:
+        """Recall advantage when the opponents win the ball or an out-of-play restart;
+        otherwise let it expire once its time is up."""
+        team, offender, _, x, y, card, until = self.advantage
+        if lost or (self.owner is not None and self.player(self.owner).team != team):
+            self.advantage = None
+            if offender in self.cards_due:
+                self.cards_due.remove(offender)
+            if card and self.player(offender) in self.players:
+                self._card(self.player(offender))
+            if self.phase != "full_time":
+                self._restart("free_kick", team, x, y)
+        elif self.t >= until:
+            self.advantage = None
+
+    def _arm_height(self) -> None:
+        """A loose ball at upper-body height that meets a player: handball if it meets an arm
+        away from the body and did not come from too close, else it bounces off the body
+        (docs/decisions.md, section 8)."""
+        b = self.ball
+        if not CONTROL_HEIGHT < b.z <= ARM_HEIGHT:
+            return
+        last = self.touches[-1] if self.touches else None
+        near = [
+            p for p in self.players
+            if math.hypot(b.x - p.x, b.y - p.y) <= ARM_REACH and p.id not in self.recovering
+            and not (p.position == "GK" and self._ball_in_own_penalty_area(p.team))  # it may handle it there
+        ]  # fmt: skip
+        if not near:
+            return
+        p = min(near, key=lambda p: math.hypot(b.x - p.x, b.y - p.y))  # the nearest meets it
+        if p.id in self.offside:
+            self._offside(p)
+            return
+        if p.id == self.restart_kicker:
+            self._second_touch(p)
+            return
+        own = last is not None and last["player"] == p.id  # its own touch: not handball
+        dx, dy = b.x - p.x, b.y - p.y
+        side = abs(-dx * math.sin(p.heading) + dy * math.cos(p.heading))
+        close = last is not None and math.hypot(last["x"] - p.x, last["y"] - p.y) <= TOO_CLOSE
+        if side > BODY_SIDE and not close and not own:
+            self._handball(p)
+        else:
+            self._deflect(p)
+
+    def _handball(self, p: Player) -> None:
+        team, b = 1 - p.team, self.ball
+        self._event("handball", team, p.id)
+        goal_x = -self.attack(p.team) * pitch.HALF_LENGTH
+        if self._counts(team) and self._goal_bound(goal_x):
+            self._card(p, red=True)
+        elif math.hypot(goal_x - b.x, b.y) <= PROMISING_ATTACK:
+            self._card(p)
+        if self.phase == "full_time":
+            return
+        x = max(-pitch.HALF_LENGTH, min(pitch.HALF_LENGTH, b.x))
+        y = max(-pitch.HALF_WIDTH, min(pitch.HALF_WIDTH, b.y))
+        if self._in_own_penalty_area(x, y, p.team):
+            spot = goal_x - math.copysign(pitch.PENALTY_MARK, goal_x)
+            nearest = min((q for q in self.players if q.team == team), key=lambda q: math.hypot(q.x - b.x, q.y - b.y))
+            self._restart("penalty", team, spot, 0.0, taker=nearest.id)
+        else:
+            self._restart("free_kick", team, x, y)
+
+    def _goal_bound(self, goal_x: float) -> bool:
+        """Whether the loose ball, left alone, would go into the goal on the line at
+        `goal_x`: its flight, bounces and roll followed for up to GOAL_LOOK seconds."""
+        ball = replace(self.ball)
+        for _ in range(round(GOAL_LOOK / LOOK_STEP)):
+            x0 = ball.x
+            step_ball(ball, LOOK_STEP)  # with the goal frame
+            if (ball.x - goal_x) * (x0 - goal_x) <= 0:  # it reached the line
+                return abs(ball.y) <= pitch.GOAL_WIDTH / 2 and ball.z < pitch.GOAL_HEIGHT
+            if ball.vx == ball.vy == ball.vz == 0:
+                return False
+        return False
+
+    def _half_end(self) -> float:
+        """The `elapsed` at which this half ends: with the added time shown, and time lost
+        during it."""
+        if self.added is None:
+            return self.half_length
+        return self.half_length * (1 + (self.added + self.lost - self.lost_shown) / 45)
+
+    def _cards_due(self) -> None:
+        """Show the cards held back during an advantage, now that play has stopped."""
+        due, self.cards_due = self.cards_due, []
+        for pid in due:
+            if self.player(pid) in self.players and self.phase != "full_time":
+                self._card(self.player(pid))
+
     def _denies_goal(self, offender: Player, fouled: Player) -> bool:
-        """No outfield defender but the offender is nearer the goal line than the carrier."""
+        """The fouled player had the ball, or was the nearest to a loose ball but for the
+        offender, and no outfield defender but the offender is nearer the goal line."""
+        if self.owner is None:
+            b = self.ball
+            others = [q for q in self.players if q is not offender]
+            if min(others, key=lambda q: math.hypot(b.x - q.x, b.y - q.y)) is not fouled:
+                return False  # someone else would have reached the ball first
+        elif self.owner != fouled.id:
+            return False  # someone else has the ball
         direction = self.attack(fouled.team)
         return not any(
             q.team == offender.team and q is not offender and q.position != "GK"
@@ -535,7 +922,8 @@ class Match:
 
     def _send_off(self, p: Player) -> None:
         self.players.remove(p)
-        self.recovering.pop(p.id, None)
+        for state in (self.recovering, self.moves, self.down):
+            state.pop(p.id, None)
         self.pending = [(off, on) for off, on in self.pending if off != p.id]
         if self.owner == p.id:
             self.owner = None
@@ -578,6 +966,8 @@ class Match:
             self.substitutions[p.team] += 1
             self.players[self.players.index(p)] = q
             self.bench.remove(q)
+            for state in (self.recovering, self.moves, self.down):
+                state.pop(off, None)
             q.x, q.y, q.vx, q.vy, q.heading = p.x, p.y, 0.0, 0.0, p.heading
             q.position, q.home = p.position, p.home
             self.commands[q.id] = Hold()
@@ -607,7 +997,7 @@ class Match:
             end = 1 if x > 0 else -1
             attackers = 0 if self.attack(0) == end else 1
             # no goal straight from an indirect free kick
-            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT and self.indirect is None:
+            if abs(y) < pitch.GOAL_WIDTH / 2 and z < pitch.GOAL_HEIGHT and self._counts(attackers):
                 self.score[attackers] += 1
                 self._event("goal", attackers, self._last_player(attackers))
                 self._kickoff(1 - attackers)
@@ -622,6 +1012,14 @@ class Match:
             y = pitch.HALF_WIDTH if y > 0 else -pitch.HALF_WIDTH
             self._restart("throw_in", 1 - (self.last_touch or 0), x, y)
 
+    def _counts(self, attackers: int) -> bool:
+        """Whether a ball in the goal `attackers` attack is a goal: not straight from an
+        indirect free kick or a throw-in, nor into the kicking team's own goal straight from
+        any other restart (docs/decisions.md, section 8)."""
+        if self.indirect is not None:
+            return False
+        return self.direct is None or (self.direct[0] != "throw_in" and self.direct[1] == attackers)
+
     def _last_player(self, team: int) -> int | None:
         """The scorer, if it can be told: the player of `team` nearest the ball."""
         players = [p for p in self.players if p.team == team]
@@ -630,10 +1028,19 @@ class Match:
     def _restart(
         self, kind: str, team: int, x: float, y: float, indirect: bool = False, taker: int | None = None
     ) -> None:
+        if (self.advantage is not None and self.t < self.advantage[-1]
+                and team != self.advantage[0] and kind in ("throw_in", "goal_kick", "corner")):
+            self._check_advantage(lost=True)
+            return
+        self.advantage = None
+        self._cards_due()
+        if self.phase == "full_time":
+            return  # a held-back card left a team too short to play on
         self.ball.place(x, y)
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
         self.offside, self.indirect, self.penalty_live = set(), None, False
+        self.restart_kicker = self.direct = self.passed = self.holder = None
         self.restart_indirect, self.taker = indirect, taker
         self.stoppage += 1
         if kind == "free_kick":
@@ -643,11 +1050,15 @@ class Match:
 
     def _kickoff(self, team: int, place_players: bool = False) -> None:
         self._restart("kickoff", team, 0.0, 0.0)
+        if self.phase == "full_time":
+            return
         self.events.pop()  # a kick-off is not shown as an event
         if place_players:
             self._place_for_kickoff()
 
     def _place_for_kickoff(self) -> None:
+        self.moves.clear()
+        self.down.clear()
         for p in self.players:
             side = -self.attack(p.team)
             p.x, p.y = -side * p.home[0], -side * p.home[1]
@@ -722,7 +1133,11 @@ class Match:
         return self._away(p, x, y, RESTART_DISTANCE["penalty"] + margin)
 
     def _end_half(self) -> None:
-        self.owner = None
+        self.advantage = None
+        self._cards_due()
+        self.owner = self.holder = None
+        if self.phase == "full_time":
+            return
         if self.period == 1:
             self.phase, self.since_restart = "half_time", 0.0
             self._event("half_time", None)
@@ -731,6 +1146,8 @@ class Match:
             self._event("full_time", None)
 
     def _event(self, kind: str, team: int | None, player: int | None = None, **details) -> None:
+        if self.elapsed < self._half_end():
+            self.lost += LOST.get(kind, 0.0)  # not once time is up, as when a penalty is completed
         event = {"type": "event", "kind": kind, "t": round(self.t, 3), "team": team}
         if player is not None:
             event["player"] = player

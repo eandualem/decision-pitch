@@ -71,10 +71,13 @@ The state of play, about 30 times a second.
 }
 ```
 
-- `t`: match seconds since kick-off; `period`: 1 or 2.
+- `t`: match seconds since kick-off; `period`: 1 or 2. `clock`: the match
+  clock in minutes and seconds, as `45+01:20` or `90+00:35` in added time.
 - `phase`: `kickoff`, `play`, `throw_in`, `goal_kick`, `corner`,
   `free_kick`, `penalty`, `half_time` or `full_time`.
 - `ball.owner`: the player in possession, or `null`.
+- `ball.held`: while a goalkeeper holds the ball in its hands, the seconds it
+  has held it; absent otherwise. At more than eight it concedes a corner.
 - `ball.touches`: the touches of the ball in the last 0.1 s, oldest first, or
   `[]`. Each touch is repeated in the snapshots of that tenth of a second, so
   none falls between two snapshots. `player` touched it; `t` is the match time
@@ -86,17 +89,29 @@ The state of play, about 30 times a second.
   knocks the ball a few metres ahead to run on to it), `throw` (the kick that
   takes a throw-in),
   `control` (a player takes a loose ball, or a teammate's, in play), `tackle`
-  (a player takes the ball from an opponent who has it, in play), `deflect`
+  (a player takes the ball from an opponent who has it, in play), `poke` (a
+  tackle knocks the ball loose from the opponent who has it), `deflect`
   (the ball comes too fast to control and bounces off the player), `save`
   (such a deflection off the goalkeeper defending the goal the ball is at, in
-  its penalty area) and `catch` (that goalkeeper takes the ball in its penalty
-  area in play, even a slow ball from a teammate). There are no headers:
+  its penalty area) and `catch` (that goalkeeper takes the ball in its hands
+  in its penalty area, in play; a ball a teammate kicked or threw to it it
+  takes with its feet, a `control`). There are no headers:
   outfield players play the ball only up to 0.9 m high.
 - `heading`: the way the player faces, in radians anticlockwise from +x. It
   can differ from the way it moves: a player keeping its place faces the
   ball while it side-steps, backs off or moves diagonally.
-- `action`: the engine command the player is carrying out: `hold`, `move` or
-  `kick`. The decision model's own choice is in `decision` messages.
+- `action`: the engine command the player is carrying out: `hold`, `move`,
+  `kick`, `tackle` (running in to tackle) or `airkick` (a kick with no ball to
+  kick). The decision model's own choice is in `decision` messages.
+- `move`: on a player, a movement it makes without the ball, while it lasts:
+  `air_kick` (a kick that meets nothing), `stumble` (a missed standing
+  tackle) or `slide` (a slide tackle, from going in to stopping); absent
+  otherwise.
+- `down`: on a player, `{"way": "front" | "back" | "side", "until": T}` while
+  it is on the ground or getting up, where `T` is the match time it is back
+  on its feet and can play again; absent otherwise. A player goes down when
+  it is fouled, after a slide tackle, and when it kicks at nothing at speed
+  (docs/decisions.md, sections 4 and 8).
 - `dive`: on a player, `true` while it is a goalkeeper diving across its goal
   at a ball heading in (docs/decisions.md, section 2); absent otherwise.
 - `players`: only players on the pitch; a substituted or sent-off player
@@ -118,16 +133,22 @@ restart, unless the list says otherwise, and is `null` for `half_time` and
 |---|---|
 | `goal` | `player`: the scorer; for now, the scoring team's player nearest the ball |
 | `throw_in`, `goal_kick`, `corner` | none |
-| `free_kick` | `indirect`: `true` after offside, when a goal cannot be scored from it directly |
+| `free_kick` | `indirect`: `true` after offside or a second touch, when a goal cannot be scored from it directly |
 | `penalty` | `player`: the taker |
 | `foul` | `player`: the offender; `fouled`: the player fouled. `team` is the fouled player's team |
 | `offside` | `player`: the player caught offside. `team` is the defending team |
+| `second_touch` | `player`: the taker of a restart who touched the ball again before anyone else. `team` is the other team |
+| `held` | `player`: the goalkeeper that held the ball for more than eight seconds. `team` is the other team |
+| `advantage` | `player`: the player fouled. `team` is its team, which plays on |
+| `handball` | `player`: the player the ball struck. `team` is the other team |
+| `added_time` | `minutes`: the minutes added to the half. `team` is `null` |
 | `yellow`, `red` | `player`: the player shown the card. `team` is that player's team |
 | `substitution` | `off` and `on`: the players leaving and joining; `model`: the incoming player's model, or `null` |
 | `half_time`, `full_time` | `score`: the score at the whistle, home first, as in the snapshot |
 
 A foul is followed by any card it earns, then the `free_kick` or `penalty`; an
-offside by its `free_kick`. A second yellow card sends `yellow` then `red`. A
+offside or a second touch by its `free_kick`, and a goalkeeper holding the ball
+too long by its `corner`. A second yellow card sends `yellow` then `red`. A
 sent-off player leaves `players`; if it was the goalkeeper, a teammate takes
 over in goal without an event.
 
@@ -143,8 +164,12 @@ send none.
 A failed answer has `"error"` in place of `"action"`. `ms` is the time from
 asking to the answer, including any wait for a local model's turn. `action`
 is one of `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
-`cross`, `shoot`, `clear`, `press`, `tackle`, `hold`, `support`, `mark` and
-`run_behind` (see `docs/decisions.md`, section 4).
+`cross`, `shoot`, `clear`, `press`, `tackle`, `slide_tackle`, `jockey`,
+`hold`, `support`, `mark` and `run_behind` (see `docs/decisions.md`, section
+4). `note`, when present, says the answer came too late for the moment it was
+asked about: `"no ball"` (an action on the ball, carried out without it) or
+`"already played"` (the player passed, shot or cleared the ball itself before
+the answer came, so it holds its place).
 
 ### `manager`
 

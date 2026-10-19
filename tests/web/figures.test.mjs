@@ -435,6 +435,13 @@ test('the page leans a body into its acceleration and turns its hips to the stri
   // Braking, it leans back.
   run(sprinter, 20, (i) => sprinter.update(1 / 60, Math.max(0, 2 - i * 5 / 60), 0));
   assert.ok(upright(sprinter).z < -0.05, 'leaning back as it brakes');
+  // A clip that takes the whole body, a fall say, takes the lean with it.
+  const faller = made.create({ seed: 4 });
+  run(faller, 30, (i) => {
+    faller.act('tackle', 0.5, 1, 'whole');
+    faller.update(1 / 60, Math.min(7, i * 4 / 60), 0);
+  });
+  assert.ok(Math.abs(upright(faller).z) < 0.005, `no lean under a whole-body clip: ${upright(faller).z}`);
   // Running round to its left, it leans to its left (+x), into the curve, and by more
   // the faster it goes, up to a limit.
   const curve = (speed) => {

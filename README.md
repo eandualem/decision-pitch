@@ -9,6 +9,8 @@ faster model acts more often while the match keeps running.
 It is a sibling of [Decision Arena](https://github.com/eandualem/decision-arena),
 where the same models race in a runner game.
 
+![A match in play: Harbour in blue against Ridge in orange, seen from the main stand](docs/media/grass/wide.jpg)
+
 **Status:** early. Decision models or built-in bots play a full match on the
 page, and each team's manager picks their models and makes substitutions. See [docs/decisions.md](docs/decisions.md)
 for the design and [docs/protocol.md](docs/protocol.md) for the match stream.
@@ -19,6 +21,15 @@ You need [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv run decision-pitch
+```
+
+With no keys, that match is played by the built-in bots. To watch a decision
+model play with no keys, install Laya once and give it a team. Laya runs on
+your computer, and its first start downloads about 850 MB:
+
+```bash
+uv tool install 'laya[serve]'
+uv run decision-pitch --home laya --away bot
 ```
 
 The page opens in your browser at `http://127.0.0.1:8000/` and a match starts
@@ -98,19 +109,19 @@ while it waits.
 | Kick-off, at the start, after half time and after a goal | Implemented. Opponents stay outside the centre circle; players out of place run back and the kick-off waits for them, for up to 10 s |
 | Ball in and out of play | Implemented. The ball is out when it has wholly crossed a line, on the ground or in the air |
 | Goals | Implemented |
-| Throw-ins | Implemented. Opponents stay 2 m away; foul throws are not checked yet |
-| Goal kicks | Implemented. Opponents stay 9.15 m away and outside the penalty area until the kick is taken |
+| Throw-ins | Implemented. Opponents stay 2 m away. A foul throw cannot happen: the thrower always throws with both hands from where the ball went out |
+| Goal kicks | Implemented. Opponents leave the penalty area until the kick is taken; it is taken once none is within 9.15 m of the ball, and one that had no time to leave may stay |
 | Corners | Implemented. Opponents stay 9.15 m away |
-| Two halves and half time | Implemented, with a change of ends. No added time |
-| Goalkeepers | A goalkeeper can play the ball higher and further in its own penalty area. Handling rules (back-passes, six seconds) are not implemented yet |
+| Two halves and half time | Implemented, with a change of ends and added time for goals, penalties, substitutions and cards |
+| Goalkeepers | Implemented. A goalkeeper can handle the ball, so play it higher and further, in its own penalty area, except a ball a teammate deliberately kicked or threw to it, which it plays with its feet. A goalkeeper holding the ball for more than eight seconds concedes a corner, with the referee's count shown for the last five |
 | Saves and deflections | Implemented. A ball faster than 18 m/s bounces off any player it reaches; a goalkeeper at full stretch parries a shot instead of catching it, so a parry or block can give a corner |
-| Playing the ball twice at a restart | Not implemented yet |
-| Goals that may not be scored directly from a restart (any goal from a throw-in; an own goal from a kick-off, goal kick, corner or direct free kick) | Not implemented yet: such a goal currently counts. A goal straight from an indirect free kick does not count |
-| Fouls | Implemented for challenges on the player with the ball: running into it from behind, or without being able to reach the ball. Handball and fouls off the ball are not implemented yet |
+| Playing the ball twice at a restart | Implemented: an indirect free kick to the opponents |
+| Goals that may not be scored directly from a restart | Implemented. A throw-in straight into the opponents' goal is a goal kick, and into the thrower's own goal a corner. An own goal straight from a kick-off, goal kick, corner or free kick is a corner, and a goal straight from an indirect free kick does not count |
+| Fouls | Implemented for challenges on the player with the ball: a standing or slide tackle from behind, a tackle that takes the player and not the ball, and running into the carrier from behind or without being able to reach the ball. A fouled player goes down. Off the ball, running into an opponent from behind where the ball is contested is a foul. Handball is judged from where the ball meets a player, since players have no arms: a ball at arm height and wide of the body, not from close by |
 | Free kicks and penalties | Implemented. Opponents stay 9.15 m away, with a wall near goal; at a penalty only the taker and the goalkeeper on its line stay in the area and arc |
-| Advantage | Not implemented: every foul stops play |
+| Advantage | Implemented: when the fouled team can play on in the opponents' half, play goes on, and comes back for the free kick if the opponents win the ball or receive an out-of-play restart within 3 s |
 | Offside | Implemented, judged when a teammate kicks the ball, with an indirect free kick. Interfering with an opponent without playing the ball is not judged yet |
-| Yellow and red cards | Implemented: a yellow for stopping a promising attack, a red for denying an obvious goal-scoring opportunity or a second yellow. A sent-off player leaves the match; a team with fewer than seven ends it |
+| Yellow and red cards | Implemented: a yellow for stopping a promising attack or a slide tackle from behind, a red for denying an obvious goal-scoring opportunity or a second yellow. A tackle in the offender's own penalty area is one card lower, as the penalty gives the chance back. A sent-off player leaves the match; a team with fewer than seven ends it |
 | Substitutions | Implemented in the engine: five substitutes, at most three stoppages besides half time, made at the next stoppage, as the managers ask for them. A substitute takes the place and position of the player it replaces |
 
 ## Test it

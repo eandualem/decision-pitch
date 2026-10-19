@@ -148,6 +148,17 @@ def _hit_segment(ball: Ball, a: tuple[float, float, float], b: tuple[float, floa
     return True
 
 
+def brake(p: Player, rate: float) -> None:
+    """Slow `p` at `rate` m/s² along the way it is moving, keeping its facing: a player
+    that cannot run, swinging, sliding or on the ground."""
+    speed = p.speed
+    if speed > 0:
+        keep = max(0.0, speed - rate * STEP) / speed
+        p.vx, p.vy = p.vx * keep, p.vy * keep
+    p.x += p.vx * STEP
+    p.y += p.vy * STEP
+
+
 def step_player(
     player: Player,
     tx: float,
