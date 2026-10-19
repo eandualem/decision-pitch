@@ -33,7 +33,7 @@ Sent once when the page connects.
       "manager": "Built-in",
       "assistants": [],
       "players": [
-        {"id": 1, "number": 1, "name": "Vale", "position": "GK", "model": "Laya"}
+        {"id": 1, "number": 1, "name": "Vale", "position": "GK", "role": "Goalkeeper", "model": "Laya"}
       ]
     }
   ]
@@ -50,6 +50,11 @@ configured reasoning effort, or `null` for a built-in manager. `assistants` list
 each assistant helping the team's manager, one entry per assistant (for
 example `["gpt-5.4-nano", "gpt-5.4-nano"]`); it is empty for the built-in
 manager and for a language-model manager with none.
+
+`role` is the readable formation position, such as `Right back` or `Centre back`.
+The decisions table shows this role, shirt number and model. Bench players have
+a broad role until substituted; each active player's snapshot also includes
+`role`, so substitutions and replacement goalkeepers update the display.
 
 ### `snapshot`
 
