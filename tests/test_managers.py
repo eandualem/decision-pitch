@@ -179,6 +179,9 @@ class Recorded:
         else:
             content = RECORDED["advice"][self.advised % len(RECORDED["advice"])]
             self.advised += 1
+        if "response_format" in body:
+            # Extend the historical response with the new tactical fields.
+            content = json.dumps({"defending": "zonal", "instructions": [], **json.loads(content)})
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content}}]})
 
 
@@ -239,6 +242,8 @@ class RecordedClaude:
         else:
             content = RECORDED["advice"][self.advised % len(RECORDED["advice"])]
             self.advised += 1
+        if schema is not None:
+            content = json.dumps({"defending": "zonal", "instructions": [], **json.loads(content)})
         return httpx2.Response(200, json={
             "id": "msg_test", "type": "message", "role": "assistant", "model": body["model"],
             "content": [{"type": "text", "text": content}], "stop_reason": "end_turn",
@@ -428,4 +433,36 @@ def test_paused_manager_defers_advice_and_is_not_due():
         staff.match.paused = False
         await task
         assert staff.squad.seats[7].instruction == 'Keep your position.'
+    asyncio.run(go())
+
+
+def test_manager_sets_initial_defending_and_role_instructions_then_changes_approach(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    def response(request):
+        schema = json.loads(request.content)['response_format']['json_schema']['schema']
+        assert schema['properties']['defending']['enum'] == ['zonal', 'man_to_man']
+        if 'lineup' in schema['properties']:
+            answer = {'lineup': [{'player': i, 'model': 'jev'} for i in range(1, 12)],
+                      'defending': 'man_to_man', 'instructions': [{'player': 2, 'text': 'Cover your assigned opponent; protect the right side.'}]}
+        else:
+            answer = {'defending': 'zonal', 'instructions': [], 'substitutions': []}
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(answer)}}]})
+    manager = LanguageModel(transport=httpx.MockTransport(response))
+    staff = staffed(home=manager, options=({'jev': Fake('Jev')}, {'bot': None}))
+    async def go():
+        await staff.line_up()
+        assert staff.squad.defending[0] == 'man_to_man'
+        assert 'right side' in staff.squad.seats[2].instruction
+        assert 'Recovery target' in staff.feed(0)
+        await staff.consult(0)
+        assert staff.squad.defending[0] == 'zonal'
+        staff.match.phase = 'play'
+        staff.apply(0, Advice(substitutions=[(2, 24, 'jev')], instructions=[(2, 'Press higher.')]))
+        staff.apply(0, Advice(instructions=[(2, 'Protect the right channel.')]))
+        staff.match._restart('throw_in', 0, 0, 34)
+        staff.match.step()
+        staff.observe(staff.match.drain_events())
+        assert staff.squad.seats[24].instruction == staff.squad.seats[2].instruction
+        assert staff.squad.seats[24].instruction == 'Protect the right channel.'
+        await staff.aclose()
     asyncio.run(go())

@@ -79,6 +79,7 @@ DEFLECT_KEEP = 0.3  # share of its speed along the player's body a deflected bal
 DRIBBLE = 0.6  # m ahead of a player's centre that it carries the ball
 KICK_MAX = 30.0  # m/s
 THROW_MAX = 15.0  # m/s
+THROW_PREPARE = 2.0  # s with the ball before a throw-in is released
 KICK_RECOVERY = 0.25  # s after a kick before the kicker can play the ball again
 KICK_ERROR = 0.002  # radians of aim error per m/s of kick speed
 KICKOFF_WAIT = 10.0  # s players have to take their places for a kick-off before they are placed
@@ -226,6 +227,7 @@ class Match:
         self.passed: int | None = None  # the team that deliberately kicked or threw the ball last
         self.holder: int | None = None  # the goalkeeper holding the ball in its hands
         self.held_since = 0.0
+        self.throw_ready: tuple[int, float] | None = None
         # an advantage being played: the team playing on, the offender, the player fouled, where the
         # foul was, whether coming back earns a card, and until when it can come back
         self.advantage: tuple[int, int, int, float, float, bool, float] | None = None
@@ -575,6 +577,7 @@ class Match:
         able = [p for p in self.players if self._can_play(p)]
         if not able:
             self.owner = None
+            self.throw_ready = None
             return
         nearest = min(able, key=lambda p: math.hypot(self.ball.x - p.x, self.ball.y - p.y))
         if self.phase == "play":
@@ -601,6 +604,8 @@ class Match:
                 self._touched(nearest, kind)
                 if kind == "catch":
                     self.holder, self.held_since = nearest.id, self.t
+        if self.phase == "throw_in" and (self.throw_ready is None or self.throw_ready[0] != nearest.id):
+            self.throw_ready = (nearest.id, self.t + THROW_PREPARE)
         self.owner = nearest.id
 
     def _possession_kind(self, p: Player) -> str:
@@ -678,6 +683,9 @@ class Match:
         return p.position == "GK" and self._ball_in_own_penalty_area(p.team)
 
     def _may_kick(self, p: Player) -> bool:
+        if self.phase == "throw_in" and (self.throw_ready is None or self.throw_ready[0] != p.id
+                                        or self.t < self.throw_ready[1]):
+            return False
         if self.phase in ("free_kick", "penalty") and self.since_restart < SET_PIECE_WAIT:
             return False
         if self.phase == "play":
@@ -1060,6 +1068,7 @@ class Match:
         self.phase, self.restart_team, self.since_restart = kind, team, 0.0
         self.owner = None
         self.offside, self.indirect, self.penalty_live = set(), None, False
+        self.throw_ready = None
         self.restart_kicker = self.direct = self.passed = self.holder = None
         self.restart_indirect, self.taker = indirect, taker
         self.stoppage += 1

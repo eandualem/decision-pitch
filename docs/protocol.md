@@ -169,7 +169,7 @@ send none.
 
 A failed answer has `"error"` in place of `"action"`. `ms` is the time from
 asking to the answer, including any wait for a local model's turn. `action`
-is one of `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
+is one of `wait` (stop with possession), `dribble`, `sprint`, `take_on`, `shield`, `pass`, `through_ball`,
 `cross`, `shoot`, `clear`, `press`, `tackle`, `slide_tackle`, `jockey`,
 `hold`, `support`, `mark` and `run_behind` (see `docs/decisions.md`, section
 4). `note`, when present, says the answer came too late for the moment it was

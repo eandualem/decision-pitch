@@ -228,13 +228,14 @@ story the game tells.
 
 ### The action set and the state text
 
-A model chooses one of seventeen actions, each described to it in a few words,
+A model chooses one of eighteen actions, each described to it in a few words,
 and is asked only the ones that apply: one set on the ball, one off it, and
 one at a restart. Each action that gains something has a downside the engine
 plays out, the same for both teams.
 
 | Action | Asked | What the player does until the next answer | Its downside |
 |---|---|---|---|
+| `wait` | on the ball | stops with the ball at its feet while waiting for support | opponents can tackle; goalkeeper handling limits still apply |
 | `dribble` | on the ball | carries the ball at 6 m/s towards their goal, in the lane with the most room (section 2) | slower than a pass |
 | `sprint` | on the ball | knocks the ball ahead and runs on to it at full speed, 7.5 m/s, aiming 8 m beyond the rolling ball so it does not brake (in 5 s from a standstill it covers 30 m, a dribble 26 m) | between touches the ball is loose, and a nearby opponent can take it |
 | `take_on` | on the ball, an opponent ahead within 10 m | runs at the nearest opponent ahead, then cuts past it diagonally on the side with more room | the defender can take the ball, and running into it is a foul only if it came from behind |
@@ -250,10 +251,10 @@ plays out, the same for both teams.
 | `jockey` | off the ball, an opponent on the ball within 15 m | backs off facing the carrier, 2.5 m from it between the ball and its own goal, and takes a loose touch it reaches first | it gives ground and does not go in for the ball |
 | `hold` | off the ball, and at a restart | keeps its place in the team's shape (a goalkeeper guards its goal) | |
 | `support` | off the ball, and at a restart | moves into space ahead to offer a pass | |
-| `mark` | off the ball, and at a restart | stays goal-side of the nearest opponent | |
+| `mark` | off the ball, and at a restart | stays goal-side of its assigned opponent in man-to-man defending, or the nearest opponent in zonal defending | |
 | `run_behind` | off the ball within 20 m of the offside line, and at a restart there | from onside, with a teammate on the ball ready to pass (unpressed and facing upfield), sprints to 6 m beyond the offside line, and goes for the through ball if it reaches it first; beyond the line with no pass played, it checks back; otherwise it keeps its place, no further up than onside | offside, if a teammate kicks the ball while it is beyond the line and it then plays it |
 
-A goalkeeper is asked a smaller set: `pass`, `through_ball` and `clear` on the
+A goalkeeper is asked a smaller set: `wait`, `pass`, `through_ball` and `clear` on the
 ball, `hold` and `press` off it. "Wide in the final third" is at least 14 m from
 the centre line and within 36 m of their goal line. The sets keep a model from
 answering an action that cannot apply, such as `shoot` without the ball, which
@@ -354,8 +355,9 @@ match and goals from 0.69 to 1.00, and cut the ball's loose share from 60% to
 The state is short, because a local model answers a shorter question faster
 (Laya: about 0.2 s for 300 characters, 0.5 s for 700). It is told from the
 player's own side: "ahead" is towards the goal it attacks and "left" is as it
-faces that goal, so both teams read the same text for the same situation. For
-example:
+faces that goal, so both teams read the same text for the same situation. This
+excerpt illustrates the location format; the full state also includes all players
+and the tactical context described in section 15:
 
 > You are Brook (8), a Harbour midfielder. 05:00, 1st half, Harbour 0-0 Ridge.
 > Play is on. You: 9 m into your half, 5 m left of centre, 2 m/s, doing
@@ -1495,3 +1497,28 @@ in that order, instead of generated names. The role comes from the engine's base
 formation slot (for example right back or centre back), follows a substitute into
 that slot, and updates if an outfield player takes over in goal. Unassigned bench
 players keep their broad position until they enter the match.
+
+## 15. Position-aware decisions and deliberate possession
+
+A base-formation offset alone does not explain when to leave a position. Each
+player also receives its precise formation role, the current recovery and support
+targets used by the existing movement actions, distance from those targets, the
+nearest teammate to the ball, and teammates already pressing. The prompt explains
+that leaving a defensive slot exposes space and that holding shape is active
+movement back into position. This is decision context, not a forced pressing rule.
+
+Managers choose zonal or man-to-man defending before kick-off and may change it
+at consultations. They can give initial player instructions alongside their model
+lineup. Formation slots remain the existing 4-4-2; substitutes inherit them. In
+zonal defending, players are told to protect their area and cover the presser. In
+man-to-man defending, outfield players receive distinct opponents, allocated by
+proximity to their formation areas; the mark action uses that same target. The
+allocation is recalculated as players move or leave, with deterministic tie breaks.
+Both teams receive the same context in their own attacking direction.
+
+A new wait action lets a ball carrier stop with the ball at its feet, exposed to
+tackles, while looking for support. It is distinct from hold, which recovers team
+shape without possession. Goalkeepers retain their existing handling time limit.
+Throw-ins have a two-second preparation period after the taker collects the ball,
+so arrival at the touchline is not an immediate release. This is simulation pacing,
+not a claim that the laws require a two-second wait; other restarts are unchanged.

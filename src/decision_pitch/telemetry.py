@@ -35,7 +35,8 @@ class Samples:
         questions = {name: question_for(match, player, model,
                                        seat.action if seat else "hold",
                                        seat.answer if seat else None,
-                                       seat.instruction if seat else None)
+                                       seat.instruction if seat else None, squad.defending[team],
+                                       {pid: s.action for pid, s in squad.seats.items()})
                      for name, model in options.items() if model is not None}
 
         async def ask(name, model):

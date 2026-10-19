@@ -429,7 +429,10 @@ def test_no_one_is_offside_from_a_throw_in():
     m.player(7).x, m.player(7).y = 10.0, -pitch.HALF_WIDTH - 0.6
     m.ball.place(10.0, -pitch.HALF_WIDTH)
     m.command(7, KickTo(45.0, 0.0, 15.0))
-    m.step()
+    for _ in range(150):
+        m.step()
+        if m.phase == "play":
+            break
     assert m.phase == "play" and m.offside == set()
 
 

@@ -93,6 +93,7 @@ class Players:
         self.match = match
         self.seats = {pid: Seat(model) for pid, model in (models or {}).items()}
         self.decisions: list[dict] = []  # for the page, drained by the server
+        self.defending = ["zonal", "zonal"]
         self._loops: dict[int, asyncio.Task] | None = None  # while running
 
     def seat(self, player_id: int, model: Model | None) -> None:
@@ -131,7 +132,7 @@ class Players:
             kicked = replaced and p.id in m.recovering
             if kicked and seat.action in actions.KICKS and seat.answers == seat.commanded:
                 seat.action = "hold"
-            seat.command, seat.commanded = actions.command(m, p, seat.action), seat.answers
+            seat.command, seat.commanded = actions.command(m, p, seat.action, self.defending[p.team]), seat.answers
             m.command(p.id, seat.command)
 
     def drain_decisions(self) -> list[dict]:
@@ -159,7 +160,8 @@ class Players:
             if m.paused or m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
-            question = question_for(m, p, seat.model, seat.action, seat.answer, seat.instruction)
+            question = question_for(m, p, seat.model, seat.action, seat.answer, seat.instruction,
+                                    self.defending[p.team], {pid: s.action for pid, s in self.seats.items()})
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
@@ -185,9 +187,10 @@ class Players:
             self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000), action=answer.move, note=note))
 
 
-def question_for(match, player, model, action="hold", answer=None, instruction=None) -> Question:
+def question_for(match, player, model, action="hold", answer=None, instruction=None,
+                 defending="zonal", current_actions=None) -> Question:
     """The same state and image format for live players and off-pitch measurements."""
-    question = actions.question(match, player, action, answer, instruction)
+    question = actions.question(match, player, action, answer, instruction, defending, current_actions)
     if getattr(model, "image", None):
         question = replace(question, image=vision.overhead(match, player), state=question.state +
                            " Image: yellow ring and YOU mark you; names and shirt numbers identify players. "

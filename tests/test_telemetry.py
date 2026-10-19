@@ -88,7 +88,7 @@ def test_lineup_and_later_consultations_get_refreshed_candidate_measurements():
 
         async def lineup(self, situation):
             self.feeds.append(situation.feed)
-            return {p.id: "jev" for p in situation.match.players if p.team == situation.team}
+            return managers.Lineup({p.id: "jev" for p in situation.match.players if p.team == situation.team})
 
         async def advise(self, situation):
             self.feeds.append(situation.feed)
