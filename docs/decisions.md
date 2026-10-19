@@ -1457,3 +1457,35 @@ control: it freezes simulation and scheduling of new model requests. Already
 pending answers wait before application; resuming does not catch up elapsed
 wall time. The browser freezes its presentation clock too. Each browser
 connection continues to own a separate match, so pausing affects that match.
+
+## Live model comparisons and manager tracing
+
+A manager needs evidence about alternatives as well as its current eleven. Each
+LLM team samples every available decision model once before lineup selection and
+before each consultation, using the same current player state for its candidates.
+Image variants also receive that state's labelled overhead image. These bounded,
+off-pitch samples measure response time and validity, never football skill; their
+answers do not move players. Sampling obeys pause and ends with the match.
+
+Player decisions continuously update model-level timing, failures and late-answer
+counts. Each manager sees its own models' measured health, player counts and
+football totals, including former players, alongside the full selectable catalog.
+Opponent internals remain hidden. Football totals have the existing limitations:
+kicks are not completed passes or shots, and goals belong to the team. Samples
+and match outcomes remain separate, with sample counts and recency. Historical
+single-request timings are labelled as estimates, not a performance ranking.
+The lineup brief asks for several complementary models, including an available
+image variant, and later substitutions use football outcomes as well as health.
+No model is declared best without evidence, and substitution rules are unchanged.
+
+Optional Langfuse tracing records each manager/assistant request and answer,
+including system instructions, game feed, schema, exact subscription CLI prompt,
+model, effort, team and match grouping. It does not record authentication material
+or decision-player image payloads. Environment variables select the destination
+and credentials; absent credentials mean no export. Export failures never stop
+play. The isolated OpenTelemetry exporter pattern was studied in
+[Entune](https://github.com/eandualem/entune), `src/entune/app/tracing.py`; its
+adapted exporter carries the MIT notice in `src/decision_pitch/ENTUNE_LICENSE`.
+Only the trace transport is adapted; Entune's settings and storage are not reused.
+Langfuse's [OTLP attribute mapping](https://langfuse.com/integrations/native/opentelemetry)
+defines the generation input/output and model fields.

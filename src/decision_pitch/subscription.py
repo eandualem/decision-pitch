@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import tomllib
 
+from decision_pitch import tracing
 from decision_pitch.managers import ASSISTANTS, LanguageModel
 
 DEFAULT_MODEL = "gpt-6-astra"
@@ -62,6 +63,16 @@ class SubscriptionManager(LanguageModel):
     async def aclose(self) -> None:
         pass
 
+    @staticmethod
+    def prompt(system, feed):
+        return system + "\nReturn only the requested structured answer. Do not use tools.\n\n" + feed
+
+    def trace_input(self, system, feed, schema):
+        return {**super().trace_input(system, feed, schema), "prompt": self.prompt(system, feed),
+                "schema": schema or {"type": "object", "properties": {"text": {"type": "string"}},
+                                     "required": ["text"], "additionalProperties": False}}
+
+    @tracing.manager_request
     async def _ask(self, model: str, system: str, feed: str, schema: dict | None = None):
         with tempfile.TemporaryDirectory(prefix="decision-pitch-manager-") as directory:
             output = Path(directory) / "answer.json"
@@ -80,7 +91,7 @@ class SubscriptionManager(LanguageModel):
                 "-c", f"model_reasoning_effort={self.effort}", "--model", model,
                 "--output-schema", str(shape), "--output-last-message", str(output), "-",
             ]
-            prompt = (system + "\nReturn only the requested structured answer. Do not use tools.\n\n" + feed)
+            prompt = self.prompt(system, feed)
             process = await asyncio.create_subprocess_exec(
                 *command, cwd=directory, env=environment(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,

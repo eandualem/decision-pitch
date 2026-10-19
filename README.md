@@ -123,12 +123,24 @@ uv run decision-pitch --home available --away available \
 ```
 
 Managers receive individual football statistics and model health for their own
-players, and only aggregate opponent performance. Opponent model assignments,
+players, summaries for each model they have fielded, and only aggregate opponent performance. Opponent model assignments,
 individual statistics and instructions are hidden. Possession by pitch third
 helps managers see where their team spends its time. Kicks count all passes,
 shots and clearances, not successful passes. Goals are reported per team;
 individual scoring attribution is not yet reliable. Lineup fallbacks and failed
 consultations are shown in the decision panel.
+
+LLM managers also receive the full available text/image model catalog. Before
+lineup selection and each consultation, each candidate answers one off-pitch
+question about the same current player state; image variants receive a labelled
+pitch image too. These samples report current latency, validity, sample count
+and age. They do not control players or establish football skill. The lineup
+brief asks for a mixed team, including an image variant when available, and
+substitutions weigh football contributions alongside speed and reliability.
+Match telemetry accumulates continuously; the manager sees the latest snapshot
+when consulted. Sampling adds one decision request per candidate per team per
+consultation and up to six seconds before the manager request.
+
 `--assistants 1` or `2` gives each language-model manager assistant models
 (Claude Haiku, or the same subscription model as the OpenAI manager)
 that send it a short note before each
@@ -140,6 +152,23 @@ timeout; failures appear in the decision panel without switching to API billing.
 A model that answers faster acts more often: each player asks its model again
 as soon as its last answer is applied, and keeps carrying out that answer
 while it waits.
+
+### Inspect manager requests in Langfuse
+
+Install tracing support with `uv sync --extra tracing`, then set
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` in `.env`.
+The URL defaults to `https://cloud.langfuse.com`; use your project's region or
+self-hosted address. Start the game with `uv run --extra tracing decision-pitch`
+and your usual model/manager arguments.
+
+When both keys are present, manager and assistant requests export to that
+Langfuse project, grouped by match with a team label. Each generation contains
+the system instructions, full game/telemetry feed, response schema, response,
+model, effort and duration. Subscription requests also include the exact prompt
+sent to the Codex CLI. Failed requests record the exception type, never raw
+authentication errors. Provider keys, login data and decision-player image
+payloads are excluded. Export problems are logged without stopping play.
+Remove the Langfuse keys and restart to turn tracing off.
 
 ## Laws of the game
 

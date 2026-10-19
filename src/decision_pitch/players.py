@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
@@ -75,6 +75,7 @@ class Seat:
     times: deque = field(default_factory=lambda: deque(maxlen=10))  # recent answer times, s
     outcomes: deque = field(default_factory=lambda: deque(maxlen=5))  # recent answers: True if usable
     failures: int = 0
+    late: Counter = field(default_factory=Counter)
 
 
 class Players:
@@ -150,11 +151,7 @@ class Players:
             if m.paused or m.phase == "half_time" or p in m.bench:
                 await asyncio.sleep(0.1)
                 continue
-            question = actions.question(m, p, seat.action, seat.answer, seat.instruction)
-            if getattr(seat.model, "image", None):
-                question = replace(question, image=vision.overhead(m, p), state=question.state +
-                                   " Image: yellow ring and YOU mark you; names and shirt numbers identify players. "
-                                   "Your team attacks right. White dot is the ball; arrows show movement.")
+            question = question_for(m, p, seat.model, seat.action, seat.answer, seat.instruction)
             asked, had_ball = m.t, m.owner == p.id
             start = time.perf_counter()
             try:
@@ -171,11 +168,23 @@ class Players:
                 await asyncio.sleep(0.1)
             seat.answer = latency
             note = _late(m, p, answer.move, asked, had_ball)
+            if note:
+                seat.late[note] += 1
             seat.action = "hold" if note == "already played" else answer.move
             seat.answers += 1
             seat.times.append(seat.answer)
             seat.outcomes.append(True)
             self.decisions.append(_decision(player_id, seat, round(seat.answer * 1000), action=answer.move, note=note))
+
+
+def question_for(match, player, model, action="hold", answer=None, instruction=None) -> Question:
+    """The same state and image format for live players and off-pitch measurements."""
+    question = actions.question(match, player, action, answer, instruction)
+    if getattr(model, "image", None):
+        question = replace(question, image=vision.overhead(match, player), state=question.state +
+                           " Image: yellow ring and YOU mark you; names and shirt numbers identify players. "
+                           "Your team attacks right. White dot is the ball; arrows show movement.")
+    return question
 
 
 def _error(exc: Exception) -> str:

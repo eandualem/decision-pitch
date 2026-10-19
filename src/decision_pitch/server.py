@@ -4,6 +4,7 @@ the match to it over one WebSocket."""
 from __future__ import annotations
 
 import argparse
+import atexit
 import asyncio
 import contextlib
 import json
@@ -20,7 +21,7 @@ from starlette.routing import Mount, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from decision_pitch import managers, pitch, players, subscription
+from decision_pitch import managers, pitch, players, subscription, tracing
 from decision_pitch.arena.apis import MissingKey
 from decision_pitch.arena.models import Model
 from decision_pitch.managers import Manager, Staff
@@ -85,9 +86,11 @@ async def run(match: Match, send, squad: Players | None = None, staff: Staff | N
             due += STEP
             await asyncio.sleep(max(0.0, due - loop.time()))
     finally:
-        asking.cancel()
-        if managing:
-            managing.cancel()
+        tasks = [asking, *([managing] if managing else [])]
+        for task in tasks:
+            task.cancel()
+        # Let manager request spans close before the match's final trace flush.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _detailed(message: dict, match: Match, squad: Players) -> dict:
@@ -154,6 +157,7 @@ def app(
                             await websocket.send_json({"type": "pause", "paused": match.paused})
             finally:
                 playing.cancel()
+                await asyncio.gather(playing, return_exceptions=True)
         finally:
             await staff.aclose()
 
@@ -200,6 +204,8 @@ def main(argv: list[str] | None = None) -> None:
     hire = tuple(_hire(parser, spec, args.assistants, effort) for spec, effort in
                  ((args.home_manager, args.home_effort), (args.away_manager, args.away_effort)))
     options = _models(parser, args.home, args.away)
+    tracing.configure()
+    atexit.register(tracing.close)
     if args.headless:
         match = Match(half_length=args.half_length, seed=args.seed)
         asyncio.run(headless(match, options, hire))

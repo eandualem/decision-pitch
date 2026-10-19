@@ -16,6 +16,9 @@ dependencies = [
 [project.scripts]
 decision-pitch = "decision_pitch.server:main"
 
+[project.optional-dependencies]
+tracing = ["opentelemetry-sdk>=1.30", "opentelemetry-exporter-otlp-proto-common>=1.30"]
+
 [dependency-groups]
 dev = ["httpx2>=2.13", "pytest>=8"]
 
